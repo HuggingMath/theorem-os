@@ -100,7 +100,9 @@ describe('cooperative advisory scheduling checkpoints', () => {
         };
       } },
     });
-    const run = (open: (options: MathAgentOptions) => Promise<MathAgentSession>, maxTurns = 2) => {
+    const run = (open: (options: MathAgentOptions) => Promise<MathAgentSession>, maxTurns = 2,
+      onEvent?: (event: string, details?: Record<string, unknown>) => void,
+      softSlice?: Parameters<typeof runResearchWorkers>[0]['softSlice']) => {
       const completion = runResearchWorkers({
         state, workers, modules: modules(open), access: workerAccess(workers, directory),
         root: directory, buildFile: path.join(directory, 'build.json'), taskText: 'Prove the original targets.',
@@ -108,7 +110,8 @@ describe('cooperative advisory scheduling checkpoints', () => {
         deadline: Infinity, maxTurnMs: Infinity, maxTurns, maxTotalTokens: 0,
         // Checkpoint timing is under test; a goal-progress Lead review would need a Lead model turn.
         goalProgressReviewMs: 24 * 3_600_000,
-        save: () => {}, emit: (event, details) => events.push({ event, details }),
+        softSlice,
+        save: () => {}, emit: (event, details) => { events.push({ event, details }); onEvent?.(event, details); },
       });
       running.push(completion); return completion;
     };
@@ -452,21 +455,35 @@ describe('cooperative advisory scheduling checkpoints', () => {
       expect(vi.getTimerCount()).toBe(0);
     });
 
-  it.each(['ready', 'compacting', 'claimed-elsewhere'] as const)(
+  it.each(['ready', 'compacting', 'claimed-elsewhere', 'target-lost-at-boundary', 'dispatch-mismatch'] as const)(
     'only checkpoints at the request boundary with a saved draft and the same proof (%s)', async outcome => {
       const { state, workers, check, events, controller, run, wake } = fixture(false, undefined, undefined, true);
       const held = heldAdvisoryTurns(2, ['investigate', 'goal_1']);
       const open = async (options: MathAgentOptions): Promise<MathAgentSession> => ({
         ...await held.open(options), usageSource: 'upstream-requests', advisoryNotifications: 'native-history',
       });
-      const completion = run(open, Infinity); void completion.catch(() => {});
+      const goal = state.cooperation!.tasks.find(node => node.task.id === 'goal_1')!;
+      const reassignGoal = () => {
+        goal.task = { ...goal.task, ownerId: 'a-different-worker' };
+        wake();
+      };
+      const completion = run(open, Infinity, event => {
+        if (outcome === 'dispatch-mismatch' && event === 'advisory_yielded_for_typed_work') {
+          // A peer becomes responsible for the goal after the final handoff check and before dispatch.
+          reassignGoal();
+        }
+      });
+      void completion.catch(() => {});
       await held.wait(0, completion);
       const options = held.open.mock.calls[0][0];
       const activity = options.onActivity!;
       const boundary = () => options.requestGate!.checkpoint!();
-      const goal = state.cooperation!.tasks.find(node => node.task.id === 'goal_1')!;
       goal.task = { ...goal.task, status: 'active', ownerId: 'researcher' };
       wake();
+      // A ready proof cannot displace this advisory turn before the default protection window.
+      await vi.advanceTimersByTimeAsync(175_000);
+      expect(held.notify).not.toHaveBeenCalled();
+      expect(boundary()).toBe(false);
       if (outcome === 'compacting') {
         activity({ event: 'item_started', itemType: 'contextCompaction' });
         await vi.advanceTimersByTimeAsync(5_000);
@@ -485,8 +502,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
 
       if (outcome === 'claimed-elsewhere') {
         // The existing handoff is stale by the time the model asks for another request.
-        goal.task = { ...goal.task, ownerId: 'a-different-worker' };
-        wake();
+        reassignGoal();
         expect(boundary()).toBe(false);
         expect(events.some(item => item.event === 'turn_checkpoint')).toBe(false);
         // Even if the model already saw the notice and returns, its incomplete draft is preserved.
@@ -497,11 +513,20 @@ describe('cooperative advisory scheduling checkpoints', () => {
           details: expect.objectContaining({ workerId: 'researcher', successorTaskId: 'goal_1' }) });
       } else {
         expect(boundary()).toBe(true);
+        if (outcome === 'target-lost-at-boundary') reassignGoal();
         held.done[0].resolve('checkpoint');
         await held.wait(1, completion);
-        expect(held.actions[1].task.id).toBe('goal_1');
-        expect(events).toContainEqual({ event: 'advisory_yielded_for_typed_work',
-          details: expect.objectContaining({ workerId: 'researcher', successorTaskId: 'goal_1', reason: 'typed-work-ready' }) });
+        const mismatch = outcome === 'dispatch-mismatch' || outcome === 'target-lost-at-boundary';
+        expect(held.actions[1].task.id).toBe(mismatch ? 'investigate' : 'goal_1');
+        expect(events).toContainEqual({ event: outcome === 'target-lost-at-boundary' ?
+          'proof_handoff_target_changed' : 'advisory_yielded_for_typed_work',
+          details: expect.objectContaining({ workerId: 'researcher', successorTaskId: 'goal_1' }) });
+        if (mismatch) {
+          expect(events).toContainEqual({ event: 'cooperative_preemption_mismatch',
+            details: expect.objectContaining({ workerId: 'researcher', taskId: 'investigate',
+              targetTaskId: 'goal_1', assignedKind: 'research', assignedTaskId: 'investigate',
+              cooldownUntil: Date.now() + 10 * 60_000 }) });
+        } else expect(events.some(item => item.event === 'cooperative_preemption_mismatch')).toBe(false);
       }
       const audit = state.cooperation!.tasks.find(node => node.task.id === 'investigate')!;
       const draft = state.cooperation!.researchDrafts!.investigate;
@@ -912,7 +937,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
     controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
   });
 
-  it.each(['unchanged', 'compaction', 'environment', 'instructions', 'dependency'] as const)(
+  it.each(['unchanged', 'compaction', 'environment', 'instructions', 'dependency', 'route', 'route-id', 'threshold'] as const)(
     'revisits A after B using its sent contract only while current (%s)', async change => {
       const { state, events, controller, run, contextSettings } = fixture(false, undefined, 'peer');
       const first = state.cooperation!.tasks.find(node => node.task.id === 'investigate')!;
@@ -921,6 +946,28 @@ describe('cooperative advisory scheduling checkpoints', () => {
       first.task.dependsOn = [input.task.id];
       const other = { task: { ...first.task, id: 'other-question', dependsOn: [] }, status: 'pending' as const, attempts: 0 };
       state.cooperation!.tasks.push(other, input);
+      if (change === 'route') {
+        other.task.groupId = 'another-route';
+        state.cooperation!.groups!.push({ group: { id: other.task.groupId, objective: 'Try the alternative construction',
+          revision: 0, status: 'active' }, turns: 0 });
+      }
+      if (change === 'threshold') {
+        const next = CooperativeResearch.prototype.next;
+        vi.spyOn(CooperativeResearch.prototype, 'next').mockImplementation(async function (this: CooperativeResearch, worker, budget) {
+          const action = await next.call(this, worker, budget);
+          if (action?.kind === 'task' && action.task.id === other.task.id) state.workers![1].lastInputTokens = 94_000;
+          return action;
+        });
+      }
+      if (change === 'route-id') {
+        const next = CooperativeResearch.prototype.next;
+        vi.spyOn(CooperativeResearch.prototype, 'next').mockImplementation(async function (this: CooperativeResearch, worker, budget) {
+          const action = await next.call(this, worker, budget);
+          if (action?.kind === 'task' && action.task.id === other.task.id)
+            action.assignment.routeId = 'alternative-proof-route';
+          return action;
+        });
+      }
       const held = heldContinuationTurns({ count: 3 }), completion = run(held.open, Infinity);
       void completion.catch(() => {}); await held.wait(0, completion);
       await vi.advanceTimersByTimeAsync(120_000); await held.wait(1, completion);
@@ -935,11 +982,19 @@ describe('cooperative advisory scheduling checkpoints', () => {
       await vi.advanceTimersByTimeAsync(120_000); await held.wait(2, completion);
       expect(held.messages.map(message => message.assignment.kind === 'task' && message.assignment.task.id))
         .toEqual(['investigate', 'other-question', 'investigate']);
-      expect(held.threads).toEqual(Array(3).fill('continuation-thread-1'));
-      expect(held.messages.map(message => message.mode)).toEqual(['full', 'full', change === 'unchanged' ? 'short' : 'full']);
+      const routeChanged = change === 'route' || change === 'route-id';
+      const firstSwitchRotates = routeChanged || change === 'threshold';
+      const secondSwitchRotates = routeChanged || change === 'environment' || change === 'instructions';
+      expect(held.threads).toEqual(['continuation-thread-1', `continuation-thread-${firstSwitchRotates ? 2 : 1}`,
+        `continuation-thread-${1 + Number(firstSwitchRotates) + Number(secondSwitchRotates)}`]);
+      const secondMode = change === 'unchanged' ? 'continuation' : change === 'threshold' ? 'task-switch' : 'full';
+      expect(held.messages.map(message => message.mode))
+        .toEqual(['full', firstSwitchRotates ? 'full' : 'short', secondMode === 'full' ? 'full' : 'short']);
       expect(held.messages[2].feedback).toContain('latest coercion lemma');
-      expect(events.filter(event => event.event === 'context_dispatched').at(-1)?.details?.mode)
-        .toBe(change === 'unchanged' ? 'continuation' : 'full');
+      expect(events.filter(event => event.event === 'context_dispatched').map(event => event.details?.mode))
+        .toEqual(['full', firstSwitchRotates ? 'full' : 'task-switch', secondMode]);
+      const dispatches = events.filter(event => event.event === 'context_dispatched');
+      if (!firstSwitchRotates) expect(dispatches[1].details?.messageBytes).toBeLessThan(Number(dispatches[0].details?.messageBytes) / 2);
       controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
       expect(vi.getTimerCount()).toBe(0);
     });
@@ -1000,7 +1055,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
       await vi.advanceTimersByTimeAsync(120_000); await held.wait(1, completion);
       expect(held.messages.map(message => message.mode)).toEqual(['full', 'full']);
       expect(held.messages[1].sentinel).toContain('full-context-exact-types');
-      expect(held.threads).toEqual(['continuation-thread-1', change === 'task' ? 'continuation-thread-2' : 'continuation-thread-1']);
+      expect(held.threads).toEqual(['continuation-thread-1', change === 'seed' ? 'continuation-thread-1' : 'continuation-thread-2']);
       expect(events.filter(item => item.event === 'context_dispatched').map(item => item.details?.mode)).toEqual(['full', 'full']);
       if (change === 'task') {
         const revised = held.messages[1].assignment;
@@ -1467,7 +1522,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('yields an unfinished Lead plan to original-goal work and leaves the proof writer unlimited', async () => {
+  it('yields an unfinished Lead plan to original-goal work without a planning interrupt on the proof writer', async () => {
     const { state, workers, check, events, controller, run } = fixture(true);
     const leadStarted = deferred(), proofStarted = deferred();
     const leadDone = deferred<string>(), proofDone = deferred<string>();
@@ -1488,7 +1543,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
           return done.promise;
         } };
     });
-    const completion = run(open); void completion.catch(() => {});
+    const completion = run(open, 2, undefined, { softSliceMs: 0 }); void completion.catch(() => {});
     await leadStarted.promise;
     // Ask for executable work early while preserving the long writing slice.
     await vi.advanceTimersByTimeAsync(90_000 - 1);
@@ -1735,7 +1790,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
           onStarted(`proof-context-turn-${turn}`); started[turn].resolve(); return done[turn].promise;
         } };
     });
-    const completion = run(open, Infinity); void completion.catch(() => {});
+    const completion = run(open, Infinity, undefined, { softSliceMs: 0 }); void completion.catch(() => {});
     const wait = (turn: number) => Promise.race([started[turn].promise,
       completion.then(() => { throw new Error('fixture_proof_stopped_before_context_checkpoint:' + turn); })]);
     await wait(0);

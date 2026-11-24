@@ -1,7 +1,7 @@
 import type { MathAgentOptions, MathAgentSession } from '../runtime/agentSession';
 import { randomUUID } from 'node:crypto';
 import type { ModelRequestAdmission, ModelRequestIdentity, ModelRequestStopReason } from '../runtime/modelRequest';
-import type { SolverRunState, SolverWorkerState } from './archive';
+import type { SolverRunState } from './archive';
 import type { CooperativeAction } from './tasks';
 import { attributeTaskUsage, beginRequestUsage, initializeRequestUsageAccounting, modelDispatchAllowed,
   recordThreadUsage, recordTurnUsage, reportedTotalTokens } from './usageBudget';
@@ -27,7 +27,8 @@ export class ResearchUsage {
   stopReason?: ModelRequestStopReason;
 
   constructor(private input: {
-    state: SolverRunState; research: SolverRunState | SolverWorkerState;
+    state: SolverRunState; research: Pick<SolverRunState, 'turns' | 'lastInputTokens' | 'usageBeforeThread' | 'usage' |
+      'usageAccounting' | 'requestUsageAccounting'>;
     maxTotalTokens: number; signal: AbortSignal; remainingMs: () => number;
     changed: () => void; emit: (event: string, details: Record<string, unknown>) => void;
   }) {}

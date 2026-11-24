@@ -19,7 +19,7 @@ export function projectWebNativeTeam(state: SolverRunState, runDirectory: string
   committed: (archive: string, commit: string) => { files: Record<string, string>; digest: string },
 ): WebNativeTeam | undefined {
   const team = state.agentTeam;
-  if (team?.transport !== 'native-agent-control') return;
+  if (!team || (team.transport !== 'native-agent-control' && state.researchDelegation?.mode !== 'team')) return;
   const root = path.join(path.dirname(state.worktree), 'agent-team');
   const contained = root !== runDirectory && isMathPathWithin(runDirectory, root);
   const proofs = path.join(root, 'proofs'), archive = path.join(proofs, 'sources.git');
@@ -185,6 +185,7 @@ export function projectWebNativeTeam(state: SolverRunState, runDirectory: string
   for (const reference of (team.researchArtifacts ?? []).slice(-16)) finding('research:' + reference.id);
   for (const entry of mail.filter(entry => entry.originTaskId).slice(-24)) finding('message:' + entry.id);
   return { schema: 'theorem-os.web-native-team.v1', runId: state.runId, maxAgents: inspection.maxAgents,
+    transport: team.transport ?? 'host-tools',
     memberCount: overview.totals.workers, taskCount: overview.totals.tasks, taskOmissions: overview.totals.tasks - tasks.length,
     tasks, findings: [...findings.values()], deliveries: published, adoptions };
 }

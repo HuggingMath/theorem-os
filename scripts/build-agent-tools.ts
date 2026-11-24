@@ -16,6 +16,7 @@ const agentToolCommands = {
   declarations: 'readDeclarations.ts',
   hub: 'huggingMath.ts',
   'research-observe': 'researchObserve.ts', 'proof-search': 'proofSearch.ts',
+  'plan-validate': 'planValidate.ts', 'plan-apply': 'planApply.ts',
   'check-finite': 'checkFinite.ts', 'kernel-certificate': 'kernelCertificate.ts', continuation: 'readContinuation.ts',
 } as const;
 fs.rmSync(output, { recursive: true, force: true });

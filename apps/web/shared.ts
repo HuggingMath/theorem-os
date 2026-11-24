@@ -77,7 +77,10 @@ export type WebRunInput = {
   /** Omitted on older runs: retain the existing research engine. */
   researchMode?: WebResearchMode;
   skillLoading?: WebSkillLoading;
-  /** Native Codex capacity includes Lead. The host still runs one worker. */
+  /** Optional bounded scouting stage before ordinary proof dispatch. */
+  portfolioExploration?: boolean;
+  portfolioSeconds?: number;
+  /** AgentResearchTeam capacity includes Lead. The host starts one Lead with native tools and can fall back to host tools. */
   nativeTeamCapacity?: number;
   /** Advisory Skill profile IDs requested before starting; actual assignments belong to Lead. */
   nativeTeamPreferredProfiles?: string[];
@@ -164,6 +167,8 @@ export type WebRun = {
   explanationLanguage?: WebExplanationLanguage;
   researchMode?: WebResearchMode;
   skillLoading?: WebSkillLoading;
+  portfolioExploration?: boolean;
+  portfolioSeconds?: number;
   researchSkill?: { name: string; digest: string; loading: WebSkillLoading };
   nativeTeamCapacity?: number;
   nativeTeamPreferredProfiles?: string[];
@@ -255,6 +260,8 @@ export type WebProofOutlineDeclaration = {
 export type WebProofOutline = { references: 'recorded' | 'unrecorded'; declarations: WebProofOutlineDeclaration[]; omitted: number };
 /** Catalog payloads are opaque on the Web transport; worker/service consumers validate the full knowledge schema. */
 export type WorkerInput = { id: string; input: WebRunInput; provider: WebWorkerProvider; knowledgeCatalog?: unknown;
+  /** The attached runner can resolve source references in observation frames. */
+  observationSourceRefs?: true;
   researchConfiguration?: import('./researchAssetTypes').FrozenResearchConfiguration;
   /** Validated server-side artifact; never supplied directly by the browser. */
   formalization?: unknown;

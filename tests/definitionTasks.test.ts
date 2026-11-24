@@ -94,11 +94,11 @@ describe('definition tasks', () => {
       maxOptionalContextBytes: 0, frozenContexts: { 'Submission.lean': 'theorem main : True := by sorry' } };
     const worker = buildResearchContext(problem, state, { ...access, assignment: { kind: 'task', task: tasks[0],
       assignment: { taskId: tasks[0].id, taskDigest: taskVersion(tasks[0]), workerId: 'worker', seedCommit: 'fixed-commit' } } });
-    expect(worker.instructions).toContain('This task defines Submission.coprimePair: save one def of exactly the requested type with a complete body');
-    expect(worker.instructions).not.toContain('This is a lemma task for');
+    expect(worker.instructions).toContain('Define the declaration named in the current assignment: save one def of exactly the requested type with a complete body');
+    expect(worker.instructions).not.toContain('Prove the lemma named');
     const lemma = buildResearchContext(problem, state, { ...access, assignment: { kind: 'task', task: tasks[1],
       assignment: { taskId: tasks[1].id, taskDigest: taskVersion(tasks[1]), workerId: 'worker', seedCommit: 'fixed-commit' } } });
-    expect(lemma.instructions).toContain('This is a lemma task for Submission.coprimePair_symm.');
+    expect(lemma.instructions).toContain('Prove the lemma named in the current assignment.');
     const lead = buildResearchContext(problem, state, { ...access, assignment: { kind: 'lead', seedCommit: 'fixed-commit' } });
     expect(lead.instructions).toContain('A new concept is a lemma task with declaration:"definition" and its Lean type');
     expect(lead.instructions).toContain('Consumers wait for its checked body.');

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { Writable } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createWebWorkerBridge, freezeWebKnowledge, handleWebWorkerCommand, writeWebActiveRun } from '../apps/web/workerBridge';
 import { writeSolverRunState } from '../src/solver/archive';
@@ -12,12 +13,79 @@ import type { WorkerInput, WorkerMessage } from '../apps/web/shared';
 import { webWorkerFixture } from './helpers/webWorkerBridge';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { webGuidanceSchema } from '../apps/web/collaborationValidation';
+import { parseWorkerMessage } from '../apps/web/runner';
+import { WebStorage } from '../apps/web/storage';
+import type { WebObservation } from '../apps/web/collaboration';
+import { webProofMessageSink } from '../apps/web/proofJournal';
 
 const roots: string[] = [];
 const fixture = () => { const value = webWorkerFixture(); roots.push(value.directory); return value; };
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 
 describe('isolated Web worker bridge', () => {
+  it('streams unchanged megabyte sources by reference and serves complete current and legacy records', async () => {
+    const f = fixture(), dependency = 'Bridge.lean';
+    const source = f.source + '\n/- ' + 'a'.repeat(640_000) + ' -/\n';
+    const dependencySource = '/- ' + 'b'.repeat(520_000) + ' -/\n';
+    fs.writeFileSync(path.join(f.project, 'Submission.lean'), source);
+    fs.writeFileSync(path.join(f.project, dependency), dependencySource);
+    f.state.problem.ownedFiles = ['Submission.lean', dependency];
+    f.state.cooperation!.canonicalCommit = f.commit();
+    f.state.cooperation!.tasks = f.state.cooperation!.tasks.slice(1);
+    f.state.cooperation!.history = [];
+    f.save();
+
+    const webRunId = 'web-fixture', owner = 'offline-owner';
+    const root = path.join(f.directory, 'storage'), storage = new WebStorage(root);
+    const journal = path.join(f.directory, 'journal'); fs.mkdirSync(journal);
+    let line = '';
+    const sink = webProofMessageSink(new Writable({
+      write(chunk: Buffer, _encoding, done) { line = chunk.toString('utf8'); done(); },
+    }), '', { directory: journal, webRunId });
+    const stream = { runId: webRunId, sources: new Map<string, string>() };
+    const observations: WebObservation[] = [];
+    let inlineBytes = 0, wireBytes = 0;
+    const options = { webRunId, directory: f.directory, output: f.output };
+    const bridge = createWebWorkerBridge({ ...options, onMessage(message, frame) {
+      if (message.type !== 'observation') return;
+      sink(message, frame);
+      inlineBytes += Buffer.byteLength(JSON.stringify(message));
+      wireBytes += Buffer.byteLength(line);
+      if (observations.length) expect(frame?.sourceBlobs).toEqual({});
+      const decoded = parseWorkerMessage(line, stream);
+      expect(decoded).toEqual(message);
+      observations.push((decoded as Extract<WorkerMessage, { type: 'observation' }>).observation);
+    } });
+    for (let index = 0; index < 24; index++) {
+      f.state.turns++; f.save();
+      await bridge.capture();
+    }
+    expect(observations).toHaveLength(24);
+    expect(wireBytes / inlineBytes).toBeLessThan(0.10);
+    expect(observations.at(-1)!.sources).toMatchObject([{ source, dependencySources: [{ file: dependency, source: dependencySource }] }]);
+    const backup = JSON.parse(fs.readFileSync(path.join(journal, 'observation.json'), 'utf8')).messages[0];
+    expect(parseWorkerMessage(JSON.stringify(backup))).toEqual({ type: 'observation', observation: observations.at(-1) });
+    const directory = ['owners', mathDigest(owner), 'runs', webRunId];
+    storage.saveRecord([...directory, 'observations', '1.json'], observations[0], true);
+    for (const observation of observations) storage.saveObservation(owner, observation);
+
+    const reopened = new WebStorage(root);
+    expect(reopened.listRecords([...directory, 'source-blobs'])).toHaveLength(2);
+    expect(reopened.getObservation(owner, webRunId, 1)).toEqual(observations[0]);
+    expect(reopened.getObservation(owner, webRunId)).toEqual(observations.at(-1));
+    expect(reopened.listObservationsAfter(owner, webRunId, 22, 2)).toEqual(observations.slice(-2));
+    expect(reopened.getTaskSource(owner, webRunId, f.goal.id)).toEqual(observations.at(-1)!.sources[0]);
+
+    await createWebWorkerBridge({ ...options, onMessage(message, frame) {
+      if (message.type !== 'observation') return;
+      const line = JSON.stringify(frame);
+      expect(parseWorkerMessage(line)).toEqual(message);
+      expect(parseWorkerMessage(JSON.stringify({ ...frame, sourceBlobs: {} }))).toBeUndefined();
+      const digest = Object.keys(frame!.sourceBlobs)[0]!;
+      expect(parseWorkerMessage(JSON.stringify({ ...frame, sourceBlobs: { ...frame!.sourceBlobs, [digest]: 'wrong text' } }))).toBeUndefined();
+    } }).capture({ force: true });
+  }, 30_000);
+
   it('binds current and historical source/checks to one real checkpoint, with distinct Web/solver ids', async () => {
     const f = fixture(), messages: WorkerMessage[] = [];
     fs.writeFileSync(path.join(f.project, 'Submission.lean'), 'mutable source must never become checked source');

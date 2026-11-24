@@ -30,7 +30,7 @@ export function createCooperativeFixture({ workspace, source, message, instructi
     fs.writeFileSync(source, original.replace(before, after));
     notes({ summary: `Offline exact proof for ${taskId}.`, fixture: { task: contract.input,
       guidanceReceived: receivedGuidance ?? null, editedPlanObserved: edited(), independentModelCall: false } });
-    const file = instructions.match(/append JSON to (DELIVERIES-[a-f0-9]{64}\.jsonl)/u)?.[1];
+    const file = message.match(/Current delivery log: (DELIVERIES-[a-f0-9]{64}\.jsonl)/u)?.[1];
     if (!file) throw new Error('web_fixture_missing_proof_delivery_protocol');
     fs.appendFileSync(path.join(workspace, file), JSON.stringify({ kind: 'ready', summary: `Saved ${taskId} for independent host checking.` }) + '\n');
     complete();

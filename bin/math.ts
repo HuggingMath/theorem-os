@@ -24,6 +24,8 @@ const commands: Readonly<Record<string, string>> = {
   'check-lean': 'scripts/mathematics/checkLean.ts',
   'proof-search': 'scripts/mathematics/proofSearch.ts',
   'research-observe': 'scripts/mathematics/researchObserve.ts',
+  'plan-validate': 'scripts/mathematics/planValidate.ts',
+  'plan-apply': 'scripts/mathematics/planApply.ts',
   'check-finite': 'scripts/mathematics/checkFinite.ts',
   'kernel-certificate': 'scripts/mathematics/kernelCertificate.ts',
   'library-pack': 'scripts/mathematics/libraryPack.ts',
@@ -52,7 +54,7 @@ if (!command || ['help', '--help', '-h'].includes(command)) {
   doctor               Check local tools, login and sandbox permissions
   example              Replay or solve a small Lean tutorial without Mathlib
   component            Create and check a replaceable search component
-  run                  Run or resume an isolated mathematics proof
+  run                  Run or resume an isolated mathematics proof (optional --portfolio-exploration)
   batch                Run prepared problems concurrently in separate processes
   bootstrap-imo        Prepare an IMO2026 proof workspace
   bootstrap-lean-eval   Prepare a public Lean-Eval workspace
@@ -65,6 +67,8 @@ if (!command || ['help', '--help', '-h'].includes(command)) {
   check-lean           Check changed Lean files with bounded diagnostics
   proof-search         Explore bounded tactic branches and retain resumable proof states
   research-observe     Validate and publish one research finding with retained Lean probes
+  plan-validate        Check a cooperative Lead plan and report field-level issues
+  plan-apply           Save a validated cooperative Lead plan for host intake
   check-finite         Replay finite Boolean constraints and return witnesses
   kernel-certificate   Generate chunked decide +kernel certificate modules
   library-pack         Extract checked run modules or backport upstream files as a frozen library

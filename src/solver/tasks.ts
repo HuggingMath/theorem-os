@@ -10,6 +10,8 @@ import type { CapacityExploration } from './capacityExploration';
 import type { ResearchBasis, ResearchRecord } from './researchRecords';
 import { expandTaskFamilies, type TaskFamily } from './taskFamilies';
 import type { researchSourceKinds } from './researchReferences';
+import { planError, PlanValidationError } from './planDiagnostics';
+export { planError } from './planDiagnostics';
 
 export type CooperativeTask = Readonly<{ id: string; kind: 'research' | 'sketch' | 'lemma' | 'goal'; objective: string;
   dependsOn: readonly string[]; revision: number; proofPath?: string; theoremName?: string; type?: string;
@@ -195,16 +197,15 @@ export function parseWaitsOn(value: unknown, deferred: boolean, task: (id: strin
 const validId = (value: unknown) => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,64}$/u.test(value);
 /** Blueprint prose travels with every plan copy, so it stays short; full sources belong in references. */
 export const MAX_INFORMAL_PROOF_CHARS = 2000, MAX_CITATIONS = 8, MAX_CITATION_CHARS = 300;
-/** Name the rejected plan element so a Lead can repair it without reading the validator. */
-export const planError = (code: string, detail: Record<string, unknown>, hint = '') =>
-  new Error(`${code}: ${JSON.stringify(detail)}${hint ? '. ' + hint : ''}`);
 const optionalFields = (value: any, keys: readonly string[]) =>
   Object.fromEntries(keys.filter(key => value[key] !== undefined).map(key => [key, value[key]]));
 /** A null field means "unset", as it does in a revision upsert; Leads write `"ownerId": null` for an unowned task. */
 const withoutNulls = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value)
   ? Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== null)) : value;
 
-export function parseCooperationPlan(problem: SolverProblem, value: any): { tasks: CooperativeTask[]; groups: RouteGroup[]; proofRoutes?: ProofRoute[] } {
+export type CooperationPlanProblem = Pick<SolverProblem, 'ownedFiles' | 'frozenFiles' | 'targets' | 'declarations'>;
+
+export function parseCooperationPlan(problem: CooperationPlanProblem, value: any): { tasks: CooperativeTask[]; groups: RouteGroup[]; proofRoutes?: ProofRoute[] } {
   if (value?.tasks && typeof value.tasks === 'object' && !Array.isArray(value.tasks))
     throw planError('math_plan_invalid', { field: 'tasks' },
       'tasks must be the complete array of task objects; a revision omits tasks and puts baseVersion, upsert and remove at the top level');
@@ -212,8 +213,10 @@ export function parseCooperationPlan(problem: SolverProblem, value: any): { task
     throw planError('math_plan_invalid', { field: 'tasks' },
       'include the complete tasks array, or use a revision with baseVersion and upsert/remove; ' +
       'when only answering decisions, use {"baseVersion":"CURRENT_PLAN_VERSION","upsert":[]} plus the required decisions in the same JSON object');
-  if (!value || !Array.isArray(value.tasks) || value.tasks.length < 1)
-    throw new Error('math_plan_invalid');
+  if (value && !Array.isArray(value.tasks))
+    throw planError('math_plan_invalid', { field: 'tasks' }, 'Supply the complete array of task objects.');
+  if (!value || value.tasks.length < 1)
+    throw new PlanValidationError('math_plan_invalid', '', [{ path: 'tasks', message: 'Supply a nonempty array of task objects.' }]);
   // Leads routinely serialize an empty explicit list; it carries the same meaning as omitting it.
   const rawGroups = !Array.isArray(value.groups) || !value.groups.length
     ? [{ id: 'main', objective: 'Prove the original problem' }] : value.groups.map(withoutNulls);
@@ -274,8 +277,10 @@ export function parseCooperationPlan(problem: SolverProblem, value: any): { task
         'Use a declared group id and sharing "group" or "problem".');
     if (!isAdvisoryTask(task) && (!problem.ownedFiles.includes(task.proofPath) ||
         !isSimpleLeanName(task.theoremName)))
-      throw new Error('math_plan_invalid_proof_target: ' + JSON.stringify({ taskId: task.id,
-        proofPath: task.proofPath, theoremName: task.theoremName }) + '. Use an owned proofPath and an ordinary qualified Lean name.');
+      throw planError('math_plan_invalid_proof_target', { taskId: task.id,
+        proofPath: task.proofPath, theoremName: task.theoremName,
+        field: !problem.ownedFiles.includes(task.proofPath) ? 'proofPath' : 'theoremName' },
+        'Use an owned proofPath and an ordinary qualified Lean name.');
     if (!isAdvisoryTask(task) && Object.hasOwn(problem.frozenFiles ?? {}, task.proofPath))
       throw planError('math_plan_frozen_proof_path', { taskId, proofPath: task.proofPath },
         'Submission/Library modules are frozen host libraries; put the task in another owned file that imports the module.');
@@ -283,7 +288,8 @@ export function parseCooperationPlan(problem: SolverProblem, value: any): { task
       throw planError('math_plan_changed_original_target', { taskId, proofPath: task.proofPath, theoremName: task.theoremName },
         'A goal task must name an original target exactly; use a lemma task for a helper statement.');
     if (task.kind === 'lemma' && typeof task.type === 'string' && task.type.trim() === 'FULL_CLOSED_LEAN_TYPE')
-      throw new Error('math_plan_placeholder_helper_type: supply the actual closed Lean type, or use an untyped research/sketch task for advisory findings.');
+      throw planError('math_plan_placeholder_helper_type', { taskId, field: 'type' },
+        'Supply the actual closed Lean type, or use an untyped research/sketch task for advisory findings.');
     if (task.kind === 'lemma' && (typeof task.type !== 'string' || !task.type.trim()))
       throw planError('math_plan_invalid_helper_type', { taskId, field: 'type' }, 'Supply the closed Lean type of the helper.');
     if (task.kind === 'lemma') {

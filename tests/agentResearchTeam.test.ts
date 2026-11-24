@@ -273,9 +273,9 @@ describe('Agent-led sustained collaboration with real Git and Lean', () => {
     expect(fast.options.hiddenRoots).toContain(f.state.worktree);
     expect(fast.options.tools!.definitions.map(item => item.name)).toContain('theoremos_team');
     expect(fast.options.tools!.definitions.find(item => item.name === 'theoremos_team')!.inputSchema)
-      .toMatchObject({ properties: { operation: { enum: expect.arrayContaining([
-        'message', 'poll', 'wait', 'inspect', 'inspect-research', 'history', 'yield', 'submit']) } } });
-    expect((fast.options.tools!.definitions[0]!.inputSchema.properties as Record<string, { enum?: string[] }>).operation!.enum).toHaveLength(9);
+      .toMatchObject({ properties: { operation: { enum: [
+        'progress', 'yield', 'history', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'submit',
+        'submit_helpers', 'route_summary'] } } });
     expect(fast.options.skills![0]!.digest).toBe(f.state.researchSkill!.digest);
     const help = fs.readFileSync(path.join(fastWorker.worktree, RESEARCH_TOOL_HELP_FILE), 'utf8');
     expect(fast.options.instructions).toContain(path.join(fastWorker.worktree, RESEARCH_TOOL_HELP_FILE));
@@ -992,9 +992,9 @@ describe('Agent-led sustained collaboration with real Git and Lean', () => {
   it('rejects child scheduling and adoption, altered call replay, and delivery by the Lead', async () => {
     const f = fixture();
     expect(f.team.tools('lead').definitions.find(item => item.name === 'theoremos_team')!.inputSchema)
-      .toMatchObject({ properties: { operation: { enum: expect.arrayContaining([
-        'spawn', 'assign', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'publish', 'cancel', 'budget', 'resume', 'history', 'coordinate']) } } });
-    expect((f.team.tools('lead').definitions[0]!.inputSchema.properties as Record<string, { enum?: string[] }>).operation!.enum).toHaveLength(17);
+      .toMatchObject({ properties: { operation: { enum: [
+        'spawn', 'assign', 'amend', 'finish', 'coordinate', 'budget', 'resume', 'history', 'publish', 'cancel',
+        'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'retire_route', 'route_summary'] } } });
     const spawn = { operation: 'spawn', agentId: 'child', message: 'Study independently.' };
     await f.call(spawn, 'lead', 'one-handle');
     const child = await f.session('child');

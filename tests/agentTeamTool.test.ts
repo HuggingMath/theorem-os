@@ -88,7 +88,7 @@ describe('operation-specific team tool contracts', () => {
     expect(unlimited.properties.operation.enum).not.toContain('budget');
     expect(unlimited.properties).not.toHaveProperty('budget');
     expect(unlimited.properties).not.toHaveProperty('leadReserve');
-    for (const option of unlimited.oneOf) expect(option.properties).not.toHaveProperty('budget');
+    expect(unlimited).not.toHaveProperty('oneOf');
     const finite = agentTeamToolDefinition('lead', true);
     expect(finite.inputSchema).not.toHaveProperty('oneOf');
     expect(finite.inputSchema.properties).toHaveProperty('budget');

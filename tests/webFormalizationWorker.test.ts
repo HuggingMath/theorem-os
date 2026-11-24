@@ -86,11 +86,17 @@ describe('formalization worker input and protocol', () => {
     expect(formalizationWorkerInputSchema.parse(request)).toEqual(request);
     const prepared = webFormalizationPreparation(request, '/private/profile', '/private/manifest.json');
     expect(prepared).toMatchObject({ problemId: request.id, statement: request.original, model: request.model,
-      effort: request.effort, reviewMode: 'direct', execution: 'model', contextProtocol: LEAN_STATEMENT_CONTEXT_PROTOCOL,
+      effort: request.effort, reviewMode: 'direct', execution: 'model', contextProtocol: LEAN_STATEMENT_CONTEXT_PROTOCOL, outputDelivery: 'file',
       maxRunSeconds: 0, maxTotalTokens: 0, maxTurnSeconds: 0, maxCompileSeconds: 0, maxRounds: 0 });
     expect(prepared).not.toHaveProperty('workflow'); expect(prepared).not.toHaveProperty('fidelityPolicy');
     expect(JSON.stringify(prepared)).not.toContain(request.apiKey);
     expect(formalizationWorkerInputSchema.safeParse({ ...request, reviewMode: 'unchecked' }).success).toBe(false);
+  });
+
+  it('retains explicit native schema delivery', () => {
+    const request = { ...input(), reviewMode: 'direct' as const, outputDelivery: 'native-schema' as const };
+    expect(webFormalizationPreparation(formalizationWorkerInputSchema.parse(request), '/private/profile', '/private/manifest.json')
+      .outputDelivery).toBe('native-schema');
   });
 
   it('passes unlimited execution, generation and planning budgets to the core formalizer', () => {

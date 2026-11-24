@@ -40,6 +40,7 @@ const formalizationWorkerInputObject = z.object({
   reviewers: z.literal(webFormalizationLimits.reviewers),
   contextProtocol: z.literal(LEAN_STATEMENT_CONTEXT_PROTOCOL).optional(),
   reviewMode: z.literal('direct').optional(),
+  outputDelivery: z.enum(['native-schema', 'file']).optional(),
 }).strict();
 const providerConfiguration = (input: { provider: { id: string; baseUrl: string }; model: string }, context: z.RefinementCtx) => {
   let url: URL;
@@ -81,6 +82,7 @@ export function webFormalizationPreparation(input: WorkerFormalizationInput, pro
     ...author, ...(input.reviewMode === 'direct' ? { reviewMode: 'direct' as const } :
       { workflow, fidelityPolicy: 'task-preserving-v2' as const }), buildManifestRef,
     contextProtocol: input.contextProtocol ?? LEAN_STATEMENT_CONTEXT_PROTOCOL,
+    outputDelivery: input.outputDelivery ?? 'file',
     maxRounds: input.maxRounds, maxRunSeconds: input.maxRunSeconds, maxTurnSeconds: 0, maxCompileSeconds: 0,
     maxTotalTokens: input.maxTotalTokens };
 }

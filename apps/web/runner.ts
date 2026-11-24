@@ -26,8 +26,10 @@ import { mathConstructionImports } from '../../src/math/mathConstructionSources'
 import { formalizationAuditResultSchema } from '../../src/math/formalizationAudit';
 import { webFormalizationPhases, webFormalizationReason, type WorkerFormalizationInput,
   type WorkerFormalizationMessage, type WorkerFormalizationAuditMessage } from './formalizationTypes';
-import { readMathText } from '../../src/math/mathRuntimeIo';
+import { mathDigest, readMathText } from '../../src/math/mathRuntimeIo';
 import { webProofJournalDirectory, webProofJournalFiles } from './proofJournal';
+import { webWorkerDisconnectGraceMs, webWorkerHeartbeatMs, webWorkerShutdownMs } from './workerDisconnect';
+import { hydrateObservation, type CompactWebObservation } from './observationSources';
 
 export type WebRunner = {
   readiness(): Promise<{ ready: boolean; message: string; nativeTeam?: boolean; nativeTeamPreferences?: boolean; nativeTeamExpertCards?: boolean }>;
@@ -64,6 +66,7 @@ export function isWebObservation(value: unknown): value is WebObservation {
       !object(value.coverage) || value.declarations !== undefined && !webDeclarationArtifactsSchema.safeParse(value.declarations).success) return false;
   const team = value.inspection.nativeTeam;
   if (team !== undefined && (!object(team) || team.schema !== 'theorem-os.web-native-team.v1' || team.runId !== value.solverRunId ||
+      team.transport !== undefined && team.transport !== 'native-agent-control' && team.transport !== 'host-tools' ||
       !Array.isArray(team.tasks) || !Array.isArray(team.findings) || !Array.isArray(team.deliveries) || !Array.isArray(team.adoptions))) return false;
   const configuration = value.inspection.configuration;
   if (object(configuration)) {
@@ -74,7 +77,9 @@ export function isWebObservation(value: unknown): value is WebObservation {
       loading: z.enum(['native', 'file']) }).strict().safeParse(configuration.researchSkill).success) return false;
   }
   return value.sources.every(source => object(source) && source.scope === 'owned-file' &&
-    ['taskId', 'taskVersion', 'commit', 'sourceDigest', 'environmentDigest', 'file', 'source'].every(field => typeof source[field] === 'string')) &&
+    ['taskId', 'taskVersion', 'commit', 'sourceDigest', 'environmentDigest', 'file', 'source'].every(field => typeof source[field] === 'string') &&
+    (source.dependencySources === undefined || Array.isArray(source.dependencySources) &&
+      source.dependencySources.every(entry => object(entry) && typeof entry.file === 'string' && typeof entry.source === 'string'))) &&
     value.checks.every(check => object(check) && object(check.record) &&
       ['id', 'taskId', 'taskVersion', 'commit', 'sourceDigest', 'environmentDigest'].every(field => typeof check[field] === 'string'));
 }
@@ -94,11 +99,35 @@ const workerMessageSchema = z.discriminatedUnion('type', [
     proof: z.string().max(128 * 1024), report: z.record(z.unknown()) }).strict() }).strict(),
 ]);
 
-export function parseWorkerMessage(line: string): WorkerMessage | undefined {
+export function parseWorkerMessage(line: string, stream?: { runId: string; sources: Map<string, string> }): WorkerMessage | undefined {
   try {
     const value: unknown = JSON.parse(line);
-    if (object(value) && value.type === 'observation' && Object.keys(value).length === 2 && isWebObservation(value.observation))
-      return { type: 'observation', observation: value.observation };
+    if (object(value) && value.type === 'observation') {
+      if (Object.keys(value).length === 2 && isWebObservation(value.observation))
+        return { type: 'observation', observation: value.observation };
+      if (Object.keys(value).length !== 3 || !object(value.observation) || !object(value.sourceBlobs) ||
+        stream && value.observation.webRunId !== stream.runId) return;
+      const current = new Map<string, string>();
+      let bytes = 0;
+      const observation = hydrateObservation(value.observation as CompactWebObservation, digest => {
+        let source = current.get(digest);
+        if (source === undefined) {
+          const supplied = value.sourceBlobs as Record<string, unknown>;
+          if (Object.hasOwn(supplied, digest)) {
+            const text = supplied[digest];
+            if (typeof text !== 'string' || mathDigest(text) !== digest) throw new Error('web_observation_invalid_source_blob');
+            source = text;
+          } else source = stream?.sources.get(digest);
+          if (source !== undefined) current.set(digest, source);
+        }
+        if (source !== undefined) bytes += Buffer.byteLength(source);
+        if (bytes > 15 * 1024 * 1024) throw new Error('web_observation_too_large');
+        return source;
+      });
+      if (!isWebObservation(observation)) return;
+      if (stream) stream.sources = current;
+      return { type: 'observation', observation };
+    }
     if (object(value) && value.type === 'catalog' && Object.keys(value).length === 2)
       return { type: 'catalog', catalog: validateTheoremKnowledge(value.catalog) };
     if (object(value) && value.type === 'action')
@@ -167,7 +196,7 @@ export function parseFormalizationMessage(line: string): WorkerFormalizationMess
 }
 
 export class DockerWebRunner implements WebRunner {
-  private cached?: { at: number; result: Awaited<ReturnType<WebRunner['readiness']>> };
+  private cached?: { at: number; result: Awaited<ReturnType<WebRunner['readiness']>>; workerControl: boolean };
   private active = new Set<string>();
   constructor(private readonly config: Pick<WebConfig, 'workerImage'>) {}
 
@@ -304,14 +333,14 @@ export class DockerWebRunner implements WebRunner {
 
   async readiness() {
     if (this.cached && Date.now() - this.cached.at < 10_000) return this.cached.result;
-    const metadata = await execute('docker', ['image', 'inspect', '--format', '{{index .Config.Labels "org.theoremos.native-agent-control"}}|{{index .Config.Labels "org.theoremos.team-profile-preferences"}}|{{index .Config.Labels "org.theoremos.team-expert-cards"}}',
+    const metadata = await execute('docker', ['image', 'inspect', '--format', '{{index .Config.Labels "org.theoremos.native-agent-control"}}|{{index .Config.Labels "org.theoremos.team-profile-preferences"}}|{{index .Config.Labels "org.theoremos.team-expert-cards"}}|{{index .Config.Labels "org.theoremos.worker-control"}}',
       this.config.workerImage], { timeout: 5_000, maxBuffer: 4096 }).catch(() => undefined);
     const ready = Boolean(metadata);
-    const [team, preferences, expertCards] = metadata?.stdout.trim().split('|') ?? [];
+    const [team, preferences, expertCards, workerControl] = metadata?.stdout.trim().split('|') ?? [];
     const result = { ready, nativeTeam: team === 'v1', nativeTeamPreferences: team === 'v1' && preferences === 'v1',
       nativeTeamExpertCards: team === 'v1' && expertCards === 'v1',
       message: ready ? '运行环境就绪' : '运行镜像尚未就绪，请先构建 theorem-os-worker 镜像。' };
-    this.cached = { at: Date.now(), result };
+    this.cached = { at: Date.now(), result, workerControl: workerControl === 'v1' };
     return result;
   }
 
@@ -321,6 +350,10 @@ export class DockerWebRunner implements WebRunner {
     const environment = input.input.environment ?? 'standard';
     const mathlib = environment === 'mathlib';
     const memory = mathlib ? '8g' : '4g';
+    const workerControl = this.cached?.workerControl === true;
+    let cleanup: Promise<void> | undefined;
+    const remove = () => cleanup ??= execute('docker', ['rm', '--force', '--volumes', name], { timeout: 15_000 })
+      .then(() => {}, () => { cleanup = undefined; });
     const args = ['create', '--interactive', '--pull=never', '--name', name,
       '--add-host=host.docker.internal:host-gateway',
       '--log-driver=none', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges',
@@ -332,6 +365,7 @@ export class DockerWebRunner implements WebRunner {
       '--ulimit', 'nofile=1024:1024',
       '--mount', `type=volume,destination=${webProofJournalDirectory}`,
       '--env', `THEOREMOS_WORKER_JOURNAL=${webProofJournalDirectory}`,
+      ...(workerControl ? ['--env', 'THEOREMOS_WORKER_CONTROL=1'] : []),
       ...(mathlib ? ['--device=/dev/fuse:/dev/fuse:rw', '--mount', 'type=volume,destination=/var/tmp']
         : ['--tmpfs', '/var/tmp:rw,nosuid,nodev,size=536870912,uid=10001,gid=10001,mode=0700']),
       this.config.workerImage, environment];
@@ -339,11 +373,11 @@ export class DockerWebRunner implements WebRunner {
     try {
       await execute('docker', args, { timeout: 30_000, maxBuffer: 8_192 });
     } catch {
-      await execute('docker', ['rm', '--force', '--volumes', name], { timeout: 15_000 }).catch(() => {});
+      await remove();
       throw new Error('无法创建隔离运行环境，请检查 Docker 与 worker 镜像。');
     }
     if (signal.aborted) {
-      await execute('docker', ['rm', '--force', '--volumes', name], { timeout: 15_000 }).catch(() => {});
+      await remove();
       signal.throwIfAborted();
     }
     try { await new Promise<void>((resolve, reject) => {
@@ -352,9 +386,12 @@ export class DockerWebRunner implements WebRunner {
       let buffer = '', finished = false, receivedResult = false;
       let workerError: Error | undefined;
       let observedSequence = 0, libraryRound = 0, artifactAt = '';
+      const observationStream = { runId: input.id, sources: new Map<string, string>() };
       let recovery: AbortController | undefined;
       let stopping: Promise<void> | undefined;
+      let heartbeat: ReturnType<typeof setInterval> | undefined;
       const stop = () => stopping ??= (async () => {
+        clearInterval(heartbeat);
         recovery?.abort();
         // Capture the actual saved checkpoint and source evidence before deleting the container.
         try {
@@ -362,12 +399,8 @@ export class DockerWebRunner implements WebRunner {
           if (captured.observation) onMessage({ type: 'observation', observation: captured.observation });
           if (captured.catalog) onMessage({ type: 'catalog', catalog: captured.catalog });
         } catch { /* A run cancelled during bootstrap may not have a checkpoint yet. */ }
-        await new Promise<void>(done => {
-        const cleanup = spawn('docker', ['rm', '--force', '--volumes', name], { stdio: 'ignore' });
-        const timer = setTimeout(() => { cleanup.kill('SIGKILL'); child.kill('SIGKILL'); done(); }, 15_000);
-        const complete = () => { clearTimeout(timer); child.kill('SIGTERM'); done(); };
-        cleanup.once('error', complete); cleanup.once('close', complete);
-        });
+        await remove();
+        child.kill('SIGKILL');
       })();
       const abort = () => { void stop(); };
       const watchdog = new ExecutionDeadline(input.input.maxRunSeconds === 0 ? Number.POSITIVE_INFINITY
@@ -375,7 +408,7 @@ export class DockerWebRunner implements WebRunner {
       signal.addEventListener('abort', abort, { once: true });
       const finish = async (error?: Error) => {
         if (finished) return;
-        finished = true; watchdog.stop(); signal.removeEventListener('abort', abort);
+        finished = true; clearInterval(heartbeat); watchdog.stop(); signal.removeEventListener('abort', abort);
         if (error || signal.aborted) await stop();
         await stopping;
         if (error) reject(error); else resolve();
@@ -409,13 +442,14 @@ export class DockerWebRunner implements WebRunner {
           const newline = buffer.indexOf('\n');
           if (newline < 0) break;
           const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
-          const message = parseWorkerMessage(line);
+          const message = parseWorkerMessage(line, observationStream);
           if (message) forward(message);
         }
       });
       child.stdin.on('error', () => {});
       child.once('error', () => { void finish(new Error('无法启动隔离运行环境。')); });
       child.once('close', () => {
+        clearInterval(heartbeat);
         if (finished) return;
         if (signal.aborted || receivedResult) { void finish(); return; }
         if (workerError) { void finish(workerError); return; }
@@ -426,7 +460,8 @@ export class DockerWebRunner implements WebRunner {
         void (async () => {
           try {
             // Losing Docker's attach process says nothing about the solver's lifetime.
-            await execute('docker', ['wait', name], { signal: recoverySignal, maxBuffer: 8_192 });
+            await execute('docker', ['wait', name], { signal: recoverySignal, maxBuffer: 8_192,
+              timeout: webWorkerDisconnectGraceMs + webWorkerShutdownMs + 10_000 });
             for (const message of await readProofJournal(name, input.id, recoverySignal)) {
               if (signal.aborted || stopping) break;
               forward(message);
@@ -436,11 +471,17 @@ export class DockerWebRunner implements WebRunner {
         })();
       });
       // Credentials travel over the private input pipe, never Docker args, env or logs.
-      child.stdin.end(JSON.stringify(input) + '\n');
+      const request = JSON.stringify({ ...input, observationSourceRefs: true }) + '\n';
+      if (workerControl) {
+        child.stdin.write(request);
+        heartbeat = setInterval(() => {
+          if (child.stdin.writable && !child.stdin.writableNeedDrain) child.stdin.write('\n');
+        }, webWorkerHeartbeatMs);
+      } else child.stdin.end(request);
       if (signal.aborted) abort();
     }); } finally {
       this.active.delete(input.id);
-      await execute('docker', ['rm', '--force', '--volumes', name], { timeout: 15_000 }).catch(() => {});
+      await remove();
     }
   }
 

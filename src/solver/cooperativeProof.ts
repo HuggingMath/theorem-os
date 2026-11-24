@@ -338,7 +338,8 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
       ?.qualifiedName ?? dependency.theoremName!).replace(/^_root_\./u, ''), type: dependency.type!,
   }));
   const project = (task: CooperativeTask, retainedGoals: readonly string[], conditions: readonly CooperativeTask[] = [],
-    observe?: (hints: readonly ProjectionDependencyHint[], context: readonly ProjectionDeclaration[]) => void): Map<string, string> => {
+    observe?: (hints: readonly ProjectionDependencyHint[], context: readonly ProjectionDeclaration[],
+      closure: readonly ProjectionDeclaration[]) => void): Map<string, string> => {
     assertTaskTypeContract(task);
     conditions.forEach(assertTaskTypeContract);
     const inputs = conditionalInputs(conditions);
@@ -699,7 +700,7 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
         }
         pendingContext.push(...syntaxDependencies!.get(id) ?? []);
       }
-      observe(hints, context);
+      observe(hints, context, syntaxConsumers.filter(item => item.name && unique.has(item.id)).map(describe));
       // Hint callers consume only observations. Building and compacting acceptance sources here
       // repeats every owned-file edit for each transitive original input, then discards the result.
       return sources;
@@ -784,12 +785,13 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     }
     return options.compact ? compactTaskSources(problem, sources, task, retainedGoals, options.preserved) : sources;
   };
-  const observations = new Map<string, { hints: readonly ProjectionDependencyHint[]; context: readonly ProjectionDeclaration[] }>();
+  const observations = new Map<string, { hints: readonly ProjectionDependencyHint[]; context: readonly ProjectionDeclaration[];
+    closure: readonly ProjectionDeclaration[] }>();
   const observe = (task: CooperativeTask, retainedGoals: readonly string[], conditions: readonly CooperativeTask[]) => {
     const key = canonicalMathJson({ task, retainedGoals, conditions });
     let value = observations.get(key);
     if (!value) {
-      project(task, retainedGoals, conditions, (hints, context) => { value = { hints, context }; });
+      project(task, retainedGoals, conditions, (hints, context, closure) => { value = { hints, context, closure }; });
       observations.set(key, value!);
     }
     return value!;
@@ -804,6 +806,10 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     /** Possible source context only. The host must freshly accept each input before retaining it. */
     possibleContextGoals(task: CooperativeTask, retainedGoals: readonly string[], conditions: readonly CooperativeTask[] = []): readonly ProjectionDeclaration[] {
       return structuredClone(observe(task, retainedGoals, conditions).context);
+    },
+    /** Source-based selection for a standalone helper. Independent proof checking is still required. */
+    helperClosure(task: CooperativeTask): readonly ProjectionDeclaration[] {
+      return structuredClone(observe(task, [], []).closure);
     },
     expectedType(task: CooperativeTask, conditions: readonly CooperativeTask[]): string | undefined {
       return task.kind === 'lemma' ? conditions.length

@@ -1,6 +1,7 @@
 import type { CooperativeTask, RouteGroup } from './tasks';
 import type { ProofRoute } from './proofRoutes';
 import { canonicalMathJson } from '../math/mathRuntimeIo';
+import { invalidPlanField, PlanValidationError } from './planDiagnostics';
 
 /** The accepted Lead graph a revision is written against. */
 export type PlanPatchBase = { version: string; tasks: readonly CooperativeTask[]; groups: readonly RouteGroup[];
@@ -17,15 +18,17 @@ export function liftNestedPlanPatch(value: unknown): unknown {
   if (!record(value) || !record(value.tasks) || (value.tasks.upsert === undefined && value.tasks.remove === undefined)) return value;
   const { tasks: nested, ...rest } = value;
   const clash = Object.keys(nested).find(key => rest[key] !== undefined && rest[key] !== nested[key]);
-  if (clash) throw new Error(`math_plan_patch_invalid: ${clash} appears both at the top level and inside tasks; ` +
+  if (clash) throw invalidPlanField('math_plan_patch_invalid', `tasks.${clash}`, `${clash} appears both at the top level and inside tasks; ` +
     'put baseVersion, upsert and remove at the top level and omit tasks.');
   return { ...rest, ...nested };
 }
 
 /** A revision names only changed tasks; a complete `tasks` list remains the full-graph form. */
 export function isPlanPatch(value: unknown): value is Record<string, unknown> {
-  if (!record(value) || (value.upsert === undefined && value.remove === undefined)) return false;
-  if (value.tasks !== undefined) throw new Error('math_plan_patch_invalid: use either a complete tasks list or upsert/remove, not both.');
+  if (!record(value) || (value.upsert === undefined && value.remove === undefined &&
+      (value.retireRoutes === undefined || value.tasks !== undefined))) return false;
+  if (value.tasks !== undefined) throw invalidPlanField('math_plan_patch_invalid', 'tasks',
+    'use either a complete tasks list or upsert/remove, not both.');
   return true;
 }
 
@@ -37,25 +40,39 @@ export function isPlanPatch(value: unknown): value is Record<string, unknown> {
  */
 export function expandPlanPatch(value: Record<string, unknown>, base: PlanPatchBase | undefined,
   options: { acceptedBaseVersions?: readonly string[]; rebased?: boolean } = {}): Record<string, unknown> {
-  if (!base || !base.tasks.length) throw new Error('math_plan_patch_without_base: publish a complete tasks list for the first plan.');
+  if (!base || !base.tasks.length) throw invalidPlanField('math_plan_patch_without_base', 'baseVersion',
+    'Publish a complete tasks list for the first plan.');
   const { upsert = [], remove = [] } = value as { upsert?: unknown; remove?: unknown };
-  if (typeof value.baseVersion !== 'string' || !Array.isArray(upsert) || !Array.isArray(remove) ||
-      upsert.some(task => !record(task) || typeof task.id !== 'string') || remove.some(id => typeof id !== 'string'))
-    throw new Error('math_plan_patch_invalid: use {"baseVersion":"...","upsert":[{"id":"...",...}],"remove":["id"]}.');
+  if (typeof value.baseVersion !== 'string') throw invalidPlanField('math_plan_patch_invalid', 'baseVersion',
+    'Set baseVersion to the current accepted plan version.');
+  if (!Array.isArray(upsert)) throw invalidPlanField('math_plan_patch_invalid', 'upsert', 'Supply an array of task objects.');
+  if (!Array.isArray(remove)) throw invalidPlanField('math_plan_patch_invalid', 'remove', 'Supply an array of task IDs.');
+  const invalidUpsert = upsert.findIndex(task => !record(task) || typeof task.id !== 'string');
+  if (invalidUpsert >= 0) throw invalidPlanField('math_plan_patch_invalid', `upsert[${invalidUpsert}].id`, 'Supply a task ID.');
+  const invalidRemove = remove.findIndex(id => typeof id !== 'string');
+  if (invalidRemove >= 0) throw invalidPlanField('math_plan_patch_invalid', `remove[${invalidRemove}]`, 'Supply a task ID.');
   const accepted = options.acceptedBaseVersions ?? [base.version];
   if (!accepted.includes(value.baseVersion))
-    throw new Error(`math_plan_patch_version_conflict: baseVersion ${value.baseVersion} is not the accepted plan ${base.version}; ` +
+    throw invalidPlanField('math_plan_patch_version_conflict', 'baseVersion',
+      `baseVersion ${value.baseVersion} is not the accepted plan ${base.version}; ` +
       'rewrite this patch against the current accepted graph.');
   const upserts = upsert as Record<string, unknown>[], removals = remove as string[];
   const upsertIds = upserts.map(task => task.id as string);
-  if (new Set(upsertIds).size !== upsertIds.length || new Set(removals).size !== removals.length)
-    throw new Error('math_plan_patch_duplicate_task');
-  const both = removals.find(id => upsertIds.includes(id));
-  if (both) throw new Error(`math_plan_patch_conflicting_task: ${both} is both upserted and removed.`);
+  const changedIds = new Set(upsertIds);
+  const duplicateUpsert = changedIds.size < upsertIds.length ? upsertIds.findIndex((id, index) => upsertIds.indexOf(id) !== index) : -1;
+  const duplicateRemoval = new Set(removals).size < removals.length ? removals.findIndex((id, index) => removals.indexOf(id) !== index) : -1;
+  if (duplicateUpsert >= 0 || duplicateRemoval >= 0) throw new PlanValidationError('math_plan_patch_duplicate_task', '', [{
+    path: duplicateUpsert >= 0 ? `upsert[${duplicateUpsert}].id` : `remove[${duplicateRemoval}]`,
+    message: 'List each task ID only once.',
+  }]);
+  const both = removals.findIndex(id => changedIds.has(id));
+  if (both >= 0) throw invalidPlanField('math_plan_patch_conflicting_task', `remove[${both}]`,
+    `${removals[both]} is both upserted and removed.`);
   const current = new Map(base.tasks.map(task => [task.id, task]));
   // A rebased patch was already applied by this dispatch's own publication.
-  const unknown = removals.find(id => !current.has(id));
-  if (unknown && !options.rebased) throw new Error(`math_plan_patch_unknown_task: ${unknown} is not in the accepted graph.`);
+  const unknown = removals.findIndex(id => !current.has(id));
+  if (unknown >= 0 && !options.rebased) throw invalidPlanField('math_plan_patch_unknown_task', `remove[${unknown}]`,
+    `${removals[unknown]} is not in the accepted graph.`);
   const removed = new Set(removals);
   const changed = new Map(upserts.map(patch => {
     const previous = current.get(patch.id as string);
@@ -77,9 +94,12 @@ export function expandPlanPatch(value: Record<string, unknown>, base: PlanPatchB
   const tasks: unknown[] = [...base.tasks.filter(task => !removed.has(task.id)).map(task => changed.get(task.id) ?? task),
     ...upserts.filter(patch => !current.has(patch.id as string)).map(patch => changed.get(patch.id as string)!)];
   const ids = new Set(tasks.map(task => (task as { id: string }).id));
-  for (const task of tasks) for (const id of (task as { dependsOn?: unknown }).dependsOn as unknown[] ?? [])
-    if (typeof id === 'string' && removed.has(id) && !ids.has(id))
+  for (const task of tasks) {
+    const dependencies = (task as { dependsOn?: unknown }).dependsOn;
+    if (!Array.isArray(dependencies)) continue; // The ordinary graph parser reports the type error.
+    for (const id of dependencies) if (typeof id === 'string' && removed.has(id) && !ids.has(id))
       throw new Error(`math_plan_patch_dangling_dependency: ${(task as { id: string }).id} still depends on removed ${id}.`);
+  }
   const replace = <T>(key: 'groups' | 'proofRoutes', fallback: T) => value[key] === undefined ? fallback : value[key] ?? [];
   return { tasks, groups: replace('groups', base.groups), proofRoutes: replace('proofRoutes', base.proofRoutes ?? []) };
 }

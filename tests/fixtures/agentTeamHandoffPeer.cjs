@@ -47,8 +47,8 @@ function complete(stage, text, status = 'completed') {
 
 function checkRole(method, params) {
   const expected = actor === 'lead'
-    ? ['spawn', 'assign', 'amend', 'finish', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'publish', 'cancel', 'budget', 'resume', 'history', 'coordinate']
-    : ['message', 'poll', 'wait', 'inspect', 'inspect-research', 'submit', 'yield', 'history', 'progress'];
+    ? ['spawn', 'assign', 'amend', 'finish', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'publish', 'cancel', 'budget', 'resume', 'history', 'coordinate', 'retire_route', 'route_summary']
+    : ['message', 'poll', 'wait', 'inspect', 'inspect-research', 'submit', 'submit_helpers', 'yield', 'history', 'progress', 'route_summary'];
   assert(params.config['features.multi_agent'] === false && params.config['features.multi_agent_v2'] === false,
     'native-unmanaged-delegation-enabled');
   if (method === 'thread/start') {

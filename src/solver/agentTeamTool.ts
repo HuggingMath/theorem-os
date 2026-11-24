@@ -2,16 +2,19 @@ import { z } from 'zod';
 import type { MathAgentToolDefinition } from '../runtime/agentSession';
 import { agentTeamAllowanceSchema, agentTeamReserveSchema, agentTeamWorkKindSchema, agentTeamKnowledgeUseSchema } from './agentTeamState';
 import { declarationSubmissionSchema } from './declarationArtifacts';
+import { portfolioRouteIdSchema, routeRetirementSchema } from './routeControl';
 
 type Json = Record<string, any>;
 export type AgentTeamTransport = 'host-tools' | 'native-agent-control';
-const nativeOperations = new Set(['finish', 'history', 'inspect', 'inspect-research', 'adopt', 'yield', 'submit']);
+// Codex 0.171 drops the entire parameters object above this branch count.
+const MAX_CODEX_ONEOF_BRANCHES = 16;
+const nativeOperations = new Set(['finish', 'history', 'inspect', 'inspect-research', 'adopt', 'yield', 'submit', 'submit_helpers', 'retire_route', 'route_summary']);
 
 const text = z.string().trim().min(1).max(16000);
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/u);
 export const agentTeamRequestSchema = z.discriminatedUnion('operation', [
-  z.object({ operation: z.literal('spawn'), agentId: id, message: text, workKind: agentTeamWorkKindSchema.optional(), budget: agentTeamAllowanceSchema.optional() }).strict(),
-  z.object({ operation: z.literal('assign'), agentId: id, message: text, workKind: agentTeamWorkKindSchema.optional(), budget: agentTeamAllowanceSchema.optional() }).strict(),
+  z.object({ operation: z.literal('spawn'), agentId: id, message: text, routeId: portfolioRouteIdSchema.optional(), workKind: agentTeamWorkKindSchema.optional(), budget: agentTeamAllowanceSchema.optional() }).strict(),
+  z.object({ operation: z.literal('assign'), agentId: id, message: text, routeId: portfolioRouteIdSchema.optional(), workKind: agentTeamWorkKindSchema.optional(), budget: agentTeamAllowanceSchema.optional() }).strict(),
   z.object({ operation: z.literal('amend'), agentId: id, taskId: z.string().min(1), message: text, reason: text,
     workKind: agentTeamWorkKindSchema.optional() }).strict(),
   z.object({ operation: z.literal('finish'), summary: text }).strict(),
@@ -38,11 +41,15 @@ export const agentTeamRequestSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('inspect-research'), artifactId: z.string().regex(/^[a-f0-9]{64}$/u),
     offset: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(16000).optional() }).strict(),
   z.object({ operation: z.literal('submit'), summary: text, objectiveRevision: z.number().int().positive().optional(), declarations: declarationSubmissionSchema.shape.declarations }).strict(),
+  z.object({ operation: z.literal('submit_helpers'), summary: text, objectiveRevision: z.number().int().positive().optional(), declarations: declarationSubmissionSchema.shape.declarations }).strict(),
   z.object({ operation: z.literal('adopt'), deliveryId: z.string().regex(/^[a-f0-9]{64}$/u), targetId: id.optional() }).strict(),
   z.object({ operation: z.literal('stop'), agentId: id }).strict(),
+  routeRetirementSchema.extend({ operation: z.literal('retire_route') }),
+  z.object({ operation: z.literal('route_summary'), routeId: portfolioRouteIdSchema.optional(),
+    includeRetired: z.boolean().optional() }).strict(),
 ]);
 
-export const agentTeamMemberOperations = new Set(['message', 'poll', 'wait', 'inspect', 'inspect-research', 'history', 'yield', 'submit', 'progress']);
+export const agentTeamMemberOperations = new Set(['message', 'poll', 'wait', 'inspect', 'inspect-research', 'history', 'yield', 'submit', 'submit_helpers', 'progress', 'route_summary']);
 
 export function agentTeamMessageRouteFeedback(actor: string, recipient: string) {
   if (recipient !== actor) return;
@@ -54,7 +61,7 @@ export function agentTeamMessageRouteFeedback(actor: string, recipient: string) 
 
 function optionsFor(actor: string, budgetControlsEnabled: boolean, transport: AgentTeamTransport = 'host-tools') {
   return agentTeamRequestSchema.options.filter(option => (transport !== 'native-agent-control' || nativeOperations.has(option.shape.operation.value)) && (actor === 'lead'
-    ? !['submit', 'yield', 'progress'].includes(option.shape.operation.value) && (budgetControlsEnabled || option.shape.operation.value !== 'budget')
+    ? !['submit', 'submit_helpers', 'yield', 'progress'].includes(option.shape.operation.value) && (budgetControlsEnabled || option.shape.operation.value !== 'budget')
     : agentTeamMemberOperations.has(option.shape.operation.value)));
 }
 
@@ -81,6 +88,7 @@ function fieldSchema(value: z.ZodTypeAny): Json {
     if (value.maxValue !== null) schema.maximum = value.maxValue;
     return schema;
   }
+  if (value instanceof z.ZodBoolean) return { type: 'boolean' };
   if (value instanceof z.ZodLiteral) return { type: 'string', enum: [value.value] };
   if (value instanceof z.ZodEnum) return { type: 'string', enum: value.options };
   if (value instanceof z.ZodArray) return { type: 'array', items: fieldSchema(value.element),
@@ -133,6 +141,9 @@ export function agentTeamArgumentFeedback(actor: string, budgetControlsEnabled: 
 export function agentTeamToolDefinition(actor: string, budgetControlsEnabled: boolean,
   transport: AgentTeamTransport = 'host-tools'): MathAgentToolDefinition {
   const lead = actor === 'lead', native = transport === 'native-agent-control', contracts = operationContracts(actor, budgetControlsEnabled, transport);
+  // Finite host Lead allowances also require a flat wire schema. All operations
+  // retain their separate advertised contracts and strict host validation.
+  const flat = (lead && budgetControlsEnabled && !native) || contracts.length > MAX_CODEX_ONEOF_BRANCHES;
   const properties: Json = {};
   for (const { schema } of contracts) Object.assign(properties, schema.properties);
   properties.operation = { type: 'string', enum: contracts.map(item => item.operation) };
@@ -152,12 +163,13 @@ export function agentTeamToolDefinition(actor: string, budgetControlsEnabled: bo
     'Only the host publishes checked proof evidence; original proof acceptance remains independent. ' +
     (native ? 'Inspection and adoption retain peer-result provenance. ' :
       'WorkKind describes the deliverable: research, proof, independent-reconstruction, review or assembly. Inspection/adoption exposure is recorded and carried with later deliveries; this records reuse, not a guarantee of mathematical independence. ') +
-    (lead ? (native ? '' : 'For spawn/assign, select assignment profiles from the pinned Skill for the gap. ') :
+    (lead ? 'Use retire_route to record a refutation and cancel all unfinished work tagged with that route. ' +
+      (native ? 'For native spawn_agent or followup_task, tag the assignment with Route: ROUTE_ID on its first line. ' :
+        'For spawn/assign, use routeId to tag the route and select assignment profiles from the pinned Skill for the gap. ') :
+      'Use submit_helpers at a milestone to nominate standalone helpers, even while the assigned proof is open. Save and return for independent checking, then resume the same assignment. The host makes accepted signatures available to peers and applies the helpers before their next turn. ' +
       (native ? '' : 'To report to Lead use agentId: "lead"; for peer discussion use the peer ID. ') + 'Submit omits agentId because the caller and task are already bound; each declaration supplies file, name and complete closed type. For a new auxiliary def or abbrev, also set kind to "definition"; submit theorems about it as separate declarations. ') +
-    // Native Codex preserves these descriptions. Its provider conversion drops
-    // the entire finite-budget schema when the nested allowances are in oneOf;
-    // keep that wire schema flat and enforce the exact branches on the host.
+    'Use route_summary for a compact view of route assignments, checked helpers and recent deliveries. ' +
     'Supply only the fields for the selected operation:\n' + contracts.map(item => contractText(item.operation, item.schema)).join('\n'),
     inputSchema: { type: 'object', properties, required: ['operation'], additionalProperties: false,
-      ...(lead && budgetControlsEnabled && !native ? {} : { oneOf: contracts.map(item => item.schema) }) } };
+      ...(flat ? {} : { oneOf: contracts.map(item => item.schema) }) } };
 }

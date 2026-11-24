@@ -5,7 +5,7 @@ import { mathToolGuide } from '../math/mathTools';
 import { assertMathAgentSkillsCurrent, type MathAgentSkill } from '../runtime/agentSkills';
 import type { MathAgentOptions } from '../runtime/agentSession';
 import type { SolverRunState } from './archive';
-import { compileContextSections, type ContextSection } from './contextCompiler';
+import { compileContextSections, portfolioContextSections, type ContextSection } from './contextCompiler';
 import { continuationContextSection, readContinuationSnapshot } from './continuationInput';
 import { DECLARATION_INDEX_FILE } from './declarationIndex';
 import { solverProofFeedback } from './feedback';
@@ -84,7 +84,8 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
     'Optional description and premises describe scope, not additional proof authority. The host verifies each actual declaration and complete type independently. ' +
     'Other incomplete goals may remain; a helper that depends on them or on new axioms is rejected. ' +
     'The request is consumed after the turn, and its host feedback is saved at .scratch/declaration-feedback.json. ' +
-    'It never claims the original problem is solved. No task graph, role acknowledgment or fabricated receipt is required.';
+    'It never claims the original problem is solved. No task graph, role acknowledgment or fabricated receipt is required. ' +
+    'When the host requests a soft milestone handoff, submit available standalone helpers, record progress and the exact obstruction in fewer than 20 lines in RESEARCH.md, then return.';
   help.section('delivery', teamWorker ? agentTeamWorkerDeliveryHelp() : team ?
     'Member delivery contract, supplied by the host: ' + agentTeamWorkerDeliveryHelp() + '\n\n' +
     'The following declaration-submission file is only for your own Lead worktree; do not assign it to a member. ' + ownDelivery : ownDelivery, '');
@@ -115,9 +116,9 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
     'Only these paths may contain submitted Lean source; add helpers inside them instead of creating another Lean file. ' +
     (team ? 'Every member has a separate worktree. Identical relative filenames belong to different copies; Lead does not own the member\'s copy. ' : '') +
     `Public research notes: ${path.join(access.worktree, 'RESEARCH.md')}. Temporary experiments and requests belong in .scratch/tmp or the documented .scratch paths.\n` +
-    'For original declarations, keep kinds, names, types, hypotheses, imports, options and scopes fixed; edit only permitted proof/definition bodies. ' +
+    'For original declarations, keep kinds, names, types, hypotheses, options and scopes fixed. Edit only permitted proof/definition bodies. ' +
     'You may add independent helper declarations inside the editable owned Lean files; the original-declaration restriction does not prohibit these additions. ' +
-    'Preserve trusted files and frozen definitions. New imports must be permitted by the frozen source policy. ' +
+    'Preserve trusted files, frozen definitions and all existing imports. In a Mathlib project, you may add import Mathlib or any pinned Mathlib.* import in editable files without creating import cycles. ' +
     'Accepted proofs cannot use sorry, admit, native_decide, unsafe or new axioms. Independent helpers may be submitted while other goals remain unfinished. ' +
     'Do not read external candidate solutions. Do not edit the pinned skill, host help, configuration or receipts. ' +
     'A message, local diagnostic or historical receipt is never acceptance. The host freezes sources after writer shutdown and checks every original target. ' +
@@ -136,7 +137,7 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
       statement: problem.contract.informalStatement, formalStatement: problem.contract.formalStatement,
       assumptions: problem.contract.assumptions, targets: problem.targets,
       baselineCommit: problem.baseCommit, ownedFiles: problem.ownedFiles, frozenFiles: Object.keys(problem.frozenFiles ?? {}) }) };
-  const mandatory: ContextSection[] = [];
+  const mandatory: ContextSection[] = portfolioContextSections(state);
   const feedback = [access.sourceFeedback, !teamWorker && state.check && !state.check.passed
     ? solverProofFeedback(state.check, access.previousCheck, access.previousFailures) : undefined].filter(Boolean).join('\n\n');
   if (feedback) mandatory.push({ id: 'host-feedback', kind: 'feedback', text: feedback });

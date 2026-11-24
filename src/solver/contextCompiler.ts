@@ -11,9 +11,11 @@ import { contextTaskConsumers } from './taskConsumers';
 import { mathematicalGapContextText } from './mathematicalGaps';
 import { nextCheckContextText } from './nextChecks';
 import { goalProgressTaskContext } from './goalProgress';
-import { leadPlanPublicationFeedback } from './cooperationShared';
+import { leadPlanPublicationFeedback, LEAD_PLAN_REPAIR_INSTRUCTION } from './cooperationShared';
 import { contextCheckpointRejectionFeedback } from './contextCheckpoint';
 import { researchDecisionMatches, type ResearchDecision } from './researchDecisions';
+import type { SolverRunState } from './archive';
+import { portfolioPhase2Guidance } from './portfolioExploration';
 
 export const DEFAULT_TASK_CONTEXT_BYTES = 512 * 1024;
 export const DEFAULT_OPTIONAL_TASK_CONTEXT_BYTES = 64 * 1024;
@@ -46,6 +48,8 @@ export type TaskContextInput = Readonly<{
   maxOptionalContextBytes?: number;
   mandatory?: readonly ContextSection[];
   optional?: readonly ContextSection[];
+  /** The same thread already has this frozen problem; still send the new task's exact interfaces. */
+  taskSwitch?: boolean;
 }>;
 export class TaskContextError extends Error {
   constructor(readonly code: 'math_context_missing_required' | 'math_context_stale_required' |
@@ -62,6 +66,40 @@ const stale = (id: string): never => { throw new TaskContextError('math_context_
 const present = (value: unknown): value is string => typeof value === 'string' && !!value.trim();
 const localName = (name: string) => name.split('.').at(-1);
 const sourcePath = (problem: SolverProblem, file: string) => path.posix.join(problem.projectRelative.replaceAll('\\', '/'), file);
+const ARCHIVE_INDEX_THRESHOLD = 48;
+const compactArchive = (cooperation?: CooperationState) => Boolean(cooperation && (
+  cooperation.tasks.length + (cooperation.history?.length ?? 0) > ARCHIVE_INDEX_THRESHOLD ||
+  (cooperation.deliveries?.length ?? 0) > ARCHIVE_INDEX_THRESHOLD));
+const oneLine = (text: string) => {
+  const summary = text.trim().replace(/\s+/gu, ' ');
+  return summary.length > 120 ? summary.slice(0, 119) + '…' : summary;
+};
+
+export function deliveryIndexRow(record: DeliveryRecord, proofPath?: string) {
+  return { id: record.id, kind: record.kind, status: record.status, taskId: record.taskId,
+    summary: oneLine(record.summary), commit: record.commit, findingDigest: record.findingDigest,
+    file: record.commit ? (record.kind === 'proof' ? proofPath : undefined) ?? 'RESEARCH.md' : 'COOPERATION.json' };
+}
+
+export function landedHelperSection(cooperation?: CooperationState) {
+  const helpers = cooperation?.landedHelpers;
+  if (!helpers?.length) return;
+  return section('landed-helpers', 'sources',
+    'Latest verified standalone helper signatures. Look up older entries in COOPERATION.json landedHelpers. ' +
+      'Read the exact Lean type at the recorded commit before use.', helpers.slice(-4));
+}
+
+export function portfolioContextSections(state: Pick<SolverRunState, 'portfolioExploration' | 'cooperation'>): ContextSection[] {
+  const sections: ContextSection[] = [];
+  const guidance = portfolioPhase2Guidance(state.portfolioExploration);
+  if (guidance) sections.push({ id: 'portfolio-gate', kind: 'routes', text: guidance });
+  const retired = state.cooperation?.retiredRoutes?.filter(route => route.source === 'lead');
+  if (retired?.length) sections.push(section('retired-routes', 'routes',
+    'Recent route retirements. Read COOPERATION.json retiredRoutes for the full list. Use a distinct route ID and explain any new evidence before revisiting the inference.',
+    retired.slice(-8).map(({ routeId, reason, evidenceRefs }) => ({ routeId,
+      reason: reason.slice(0, 300), evidenceRefs: evidenceRefs?.slice(0, 2) }))));
+  return sections;
+}
 
 /**
  * Preserve source-level variables, scopes, instances and fixed definitions; never copy an existing proof body.
@@ -102,7 +140,7 @@ export function frozenSourceContext(problem: SolverProblem, file: string, source
 function originalProblemSection(input: TaskContextInput): ContextSection {
   const { problem } = input, statement = problem.contract.formalStatement, bytes = Buffer.byteLength(statement);
   const title = `${input.taskText}\n\nOriginal problem:`, digest = mathDigest(statement);
-  const file = bytes > COMPACT_CONTEXT_SOURCE_BYTES && present(problem.baseCommit)
+  const file = bytes > (compactArchive(input.cooperation) ? 4 * 1024 : COMPACT_CONTEXT_SOURCE_BYTES) && present(problem.baseCommit)
     ? Object.keys(problem.trustedFiles ?? {}).sort().find(file => problem.trustedFiles[file] === digest) : undefined;
   if (!file) return section('original-problem', 'problem', title, statement);
   return section('original-problem', 'problem', title, { commit: problem.baseCommit, path: sourcePath(problem, file), bytes, sha256: digest,
@@ -294,9 +332,15 @@ function taskRecordReference(node: TaskRecord) {
     theoremName: node.task.theoremName, proofPath: node.task.proofPath };
 }
 
-function checkedHelperReference(input: TaskContextInput, node: TaskRecord) {
+function compactTaskReference(node: TaskRecord) {
+  return { id: node.task.id, kind: node.task.kind, status: node.status, summary: oneLine(node.task.objective),
+    file: node.task.proofPath };
+}
+
+function checkedHelperReference(input: TaskContextInput, node: TaskRecord, compact?: boolean) {
   const proof = evidence(node, input.environmentDigest)!;
-  return { ...taskRecordReference(node), sharing: node.task.sharing ?? 'problem',
+  return { ...(compact ? compactTaskReference(node) : taskRecordReference(node)), theoremName: node.task.theoremName,
+    sharing: node.task.sharing ?? 'problem',
     source: { commit: proof.commit, path: sourcePath(input.problem, node.task.proofPath!), sourceDigest: proof.sourceDigest },
     evidence: 'recorded-not-replayed' };
 }
@@ -313,6 +357,10 @@ function sourceReferences(input: TaskContextInput) {
     retrieval: 'Read full proofs and namespace/section/instance context with git show COMMIT:PATH in this isolated worktree. Source references identify immutable content; they grant no proof acceptance.',
     files: files.map(file => {
       const context = input.frozenContexts![file], declarations = problem.declarations[file] ?? [];
+      if ((input.taskSwitch || compactArchive(input.cooperation)) && Buffer.byteLength(context) > 4 * 1024) {
+        return { commit: problem.baseCommit, path: sourcePath(problem, file), contextDigest: problem.sourceStructure?.[file],
+          imports: problem.sourceImports?.[file], declarationCount: declarations.length, contextByReference: true };
+      }
       return { commit: problem.baseCommit, path: sourcePath(problem, file),
         contextDigest: problem.sourceStructure?.[file], imports: problem.sourceImports?.[file],
         // Large sources already retain every exact header in context. Repeating the
@@ -337,13 +385,15 @@ function frozenDeclarationOrder(input: TaskContextInput) {
     .filter(([file]) => !Object.hasOwn(input.problem.frozenFiles ?? {}, file))
     .map(([file, declarations]) => {
       const names = declarations.map(declaration => declaration.name), context = input.frozenContexts?.[file];
-      return [file, context && Buffer.byteLength(context) > COMPACT_CONTEXT_SOURCE_BYTES ? {
+      const byReference = context && Buffer.byteLength(context) >
+        (input.taskSwitch || compactArchive(input.cooperation) ? 4 * 1024 : COMPACT_CONTEXT_SOURCE_BYTES);
+      return [file, byReference ? {
         encoding: 'frozen-declaration-order-v1', commit: input.problem.baseCommit, path: sourcePath(input.problem, file),
         declarationCount: names.length, orderDigest: mathDigest(canonicalMathJson(names)),
         retrieval: 'Read the complete frozen file with git show COMMIT:PATH for its exact declaration order. ' +
           'The ordered array of declaration names as written (including dotted names and repeated local names) must match ' +
           'declarationCount and SHA-256(canonicalMathJson(names)) = orderDigest. ' +
-          'Missing or mismatched source is unavailable. The frozen-sources context keeps the declaration headers inline; ' +
+          'Missing or mismatched source is unavailable. ' +
           'this reference replaces only the duplicate name list and grants no proof acceptance.',
       } : names];
     }));
@@ -424,7 +474,7 @@ export function leadResearchInputSection(input: Pick<TaskContextInput, 'cooperat
 export function leadPlanRejectionSection(input: Pick<TaskContextInput, 'action' | 'cooperation' | 'problem'>) {
   if (input.action?.kind !== 'lead' || !input.cooperation?.error) return;
   return section('plan-rejection', 'feedback',
-    'Host rejected the proposed plan. Repair this error while preserving every exact original target:', {
+    'Host rejected the proposed plan. Repair this error while preserving every exact original target. ' + LEAD_PLAN_REPAIR_INSTRUCTION, {
       error: input.cooperation.error, rejection: input.cooperation.planRejection,
       originalTargets: input.problem.targets.map(({ proofPath, theoremName }) => ({ proofPath, theoremName })),
     });
@@ -464,6 +514,13 @@ function optionalDeliveries(input: TaskContextInput, required: ReadonlySet<strin
   const sections = selected.flatMap(record => {
     // Interfaces and receipts live in mandatory sections. A delivery summary is advisory prose.
     const current = record.taskId ? byId.get(record.taskId) : undefined;
+    if ((compactArchive(input.cooperation) || input.taskSwitch) && !(record.taskId && required.has(record.taskId))) {
+      omitted.push({ id: `delivery:${record.id}:details`, kind: 'delivery', reason: 'advisory-details-by-reference' });
+      const file = current?.task.proofPath && sourcePath(input.problem, current.task.proofPath);
+      return [{ ...section(`delivery:${record.id}`, 'delivery',
+        'Delivery index (advisory; retrieve the saved source or the record in COOPERATION.json before using it):',
+        deliveryIndexRow(record, file)), priority: priority(record) * 10 + 2 }];
+    }
     // Keep a shared mathematical finding independently selectable from its delivery metadata.
     const sharedFinding = deliveryMatchesFinding(record, current);
     const ownFinding = sharedFinding ? undefined : deliveryFinding(record);
@@ -501,7 +558,8 @@ function optionalDeliveries(input: TaskContextInput, required: ReadonlySet<strin
 export function compileTaskContext(input: TaskContextInput): { message: string; manifest: ContextManifest } {
   const { problem, action } = input;
   const maxBytes = input.maxContextBytes ?? DEFAULT_TASK_CONTEXT_BYTES;
-  const maxOptionalBytes = input.maxOptionalContextBytes ?? DEFAULT_OPTIONAL_TASK_CONTEXT_BYTES;
+  const compact = compactArchive(input.cooperation) || input.taskSwitch;
+  const maxOptionalBytes = input.maxOptionalContextBytes ?? (compact ? 8 * 1024 : DEFAULT_OPTIONAL_TASK_CONTEXT_BYTES);
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new TaskContextError('math_context_invalid_budget', 'maxContextBytes');
   if (!Number.isSafeInteger(maxOptionalBytes) || maxOptionalBytes < 0)
     throw new TaskContextError('math_context_invalid_budget', 'maxOptionalContextBytes');
@@ -527,14 +585,20 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
     integratedCommit: node.integratedCheck ? null : undefined, checkedSourceDigest: node.integratedCheck ? null : undefined,
     ...(node.task.kind === 'goal' ? { exactFrozenHeader: frozenHeader(problem, node) } : {}),
     evidence: references.encode(sharedEvidence(evidence(node, input.environmentDigest))), source: proofSources(problem, node) }));
-  const mandatory: ContextSection[] = [
+  const mandatory: ContextSection[] = input.taskSwitch ? [] : [
     originalProblemSection(input),
     section('original-assumptions', 'problem', 'Frozen assumptions and problem identity:', { problemReceiptDigest: problem.receiptDigest,
       statementHash: problem.contract.statementHash, leanStatementHash: problem.contract.leanStatementHash,
       informalStatement: problem.contract.informalStatement, assumptions: problem.contract.assumptions }),
     section('frozen-sources', 'sources', 'Frozen source context and immutable retrieval references:', sourceReferences(input)),
   ];
+  if (input.taskSwitch) mandatory.push({ id: 'same-route-task-switch', kind: 'continuation',
+    text: 'Switch to the assignment below. This thread already has the frozen problem and source rules. The new contract replaces the previous assignment. Read current COOPERATION.json and RESEARCH.md for scoped work and saved evidence.' });
   if (action) mandatory.push(section('assignment', 'assignment', 'Cooperative assignment:', action));
+  if (action?.kind === 'task') mandatory.push({ id: 'task-delivery-log', kind: 'assignment',
+    text: 'Current delivery log: ' + assignmentDeliveryFile(action.assignment) });
+  const helpers = landedHelperSection(input.cooperation);
+  if (helpers) mandatory.push(helpers);
   if (consumers.length) mandatory.push(section('consumer-interfaces', 'interfaces',
     'Planned consumer interfaces (read-only mathematical purpose; not premises, proof evidence or permission to edit consumers):',
     consumers.map(consumer => ({ ...consumer.task, taskDigest: consumer.taskDigest,
@@ -569,7 +633,7 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
     if (deferred.length) {
       mandatory.push(section('task-record-reference-encoding', 'sources',
         'Digest-bound task record retrieval (required before using an indexed task):', {
-          retrieval: 'Read worktree-root COOPERATION.json tasks[] and match record.task.id to row.id. Require taskVersion(record.task) = row.taskDigest ' +
+          retrieval: 'Read worktree-root COOPERATION.json tasks[] and match record.task.id to row.id. If shown, require taskVersion(record.task) = row.taskDigest ' +
             'and SHA-256(canonicalMathJson(record)) = row.recordDigest; canonicalMathJson sorts object keys recursively and omits undefined object fields. ' +
             'Missing or mismatched records are unavailable. Retrieve exact Lean types, premises, conditions, feedback and evidence before reasoning from ' +
             'an indexed task or replacing the full plan. Every visible task remains discoverable, including running and blocked work. ' +
@@ -579,11 +643,11 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
       const helpers = deferred.filter(closedLeadHelper), others = deferred.filter(node => !closedLeadHelper(node));
       if (helpers.length) mandatory.push(section('checked-helper-catalog', 'sources',
         'Checked helpers outside the current open-task closure (retrieve before using; recorded, not replayed):', {
-          helpers: helpers.map(node => checkedHelperReference(input, node)),
+          helpers: helpers.map(node => checkedHelperReference(input, node, compact)),
         }));
       if (others.length) mandatory.push(section('task-record-index', 'sources',
         'Other visible task records outside the current goal and requested-input closure (retrieve exact interfaces before use):', {
-          tasks: others.map(taskRecordReference),
+          tasks: others.map(node => compact ? compactTaskReference(node) : taskRecordReference(node)),
         }));
     }
     if (action?.kind === 'lead') {
@@ -646,8 +710,8 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
           'row.evidence.verification.targetCommit. Only null has this meaning; absent fields remain absent, and every distinct explicit value is retained.',
       }));
   }
-  mandatory.push(section('declaration-order', 'sources', 'Frozen declaration order by file:', frozenDeclarationOrder(input)),
-  section('original-targets', 'problem', 'Original targets:', problem.targets));
+  if (!input.taskSwitch) mandatory.push(section('declaration-order', 'sources', 'Frozen declaration order by file:', frozenDeclarationOrder(input)),
+    section('original-targets', 'problem', 'Original targets:', problem.targets));
   mandatory.push(...(input.mandatory ?? []));
   const { sections: deliveries, findingSources } = optionalDeliveries(input, required, byId, omitted);
   const active = action?.kind === 'task' ? action.task : undefined;
@@ -695,14 +759,20 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
   optional.push(...deliveries);
   for (const node of [...(input.cooperation?.tasks ?? [])].sort((a, b) =>
     rank(a.task.id, taskGroup(a.task)) - rank(b.task.id, taskGroup(b.task)))) {
+    // Deferred Lead records already have a compact index entry and a live retrieval path.
+    if (compact && deferredIds.has(node.task.id)) continue;
     const priority = rank(node.task.id, taskGroup(node.task)) * 10;
-    if (node.feedback && node.task.id !== active?.id) optional.push({ ...section(`feedback:${node.task.id}`, 'feedback', `Host feedback for ${node.task.id}:`, node.feedback), priority: priority + 3 });
+    if (node.feedback && node.task.id !== active?.id) optional.push({ ...section(`feedback:${node.task.id}`, 'feedback', `Host feedback for ${node.task.id}:`,
+      compact ? oneLine(node.feedback) + ' (full feedback in COOPERATION.json tasks)' : node.feedback), priority: priority + 3 });
     if (present(node.finding)) optional.push({ ...section(`finding:${node.task.id}`, 'finding', `Advisory finding for ${node.task.id}:`, {
-      taskId: node.task.id, taskDigest: taskVersion(node.task), finding: node.finding,
+      taskId: node.task.id, taskDigest: taskVersion(node.task),
+      ...(compact && !required.has(node.task.id) ? { summary: oneLine(node.finding), reference: 'COOPERATION.json tasks' } : { finding: node.finding }),
       savedSource: findingSources.get(node.task.id),
     }), priority: priority + 1 });
     if (!required.has(node.task.id) && !consumerIds.has(node.task.id) && !deferredIds.has(node.task.id)) optional.push({ ...section(`interface:${node.task.id}`, 'interfaces', 'Other visible task (advisory planning context):',
-      { ...node.task, taskDigest: taskVersion(node.task), status: node.task.status ?? 'active', executionStatus: node.status }), priority: priority + 8 });
+      compact ? { id: node.task.id, kind: node.task.kind, summary: oneLine(node.task.objective),
+        file: node.task.proofPath, status: node.status, reference: 'COOPERATION.json tasks' }
+        : { ...node.task, taskDigest: taskVersion(node.task), status: node.task.status ?? 'active', executionStatus: node.status }), priority: priority + 8 });
   }
   for (const route of input.cooperation?.proofRoutes ?? []) {
     if (route.id === selectedRoute?.id) continue;
@@ -717,9 +787,11 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
     }
     const proof = entry.integratedCheck ?? entry.proof;
     optional.push({ ...section(id, 'history', 'Earlier route finding (historical and advisory; not a current premise):', {
-      taskId: entry.task.id, taskDigest: taskVersion(entry.task), objective: entry.task.objective,
-      producer: entry.producer, finding: entry.finding, commit: proof?.commit, sourceDigest: proof?.sourceDigest,
-      evidenceRefs: proof?.verification.results.map(result => result.receiptId),
+      taskId: entry.task.id, taskDigest: taskVersion(entry.task),
+      ...(compact ? { kind: entry.task.kind, status: 'historical', summary: oneLine(entry.finding ?? entry.task.objective) } : {
+        objective: entry.task.objective, producer: entry.producer, finding: entry.finding, sourceDigest: proof?.sourceDigest,
+        evidenceRefs: proof?.verification.results.map(result => result.receiptId) }),
+      commit: proof?.commit,
       source: proof && entry.task.proofPath ? { commit: proof.commit, path: sourcePath(problem, entry.task.proofPath) } : undefined,
       evidence: 'historical-not-current' }), priority: rank(entry.task.id, taskGroup(entry.task)) * 10 + 5 });
   }

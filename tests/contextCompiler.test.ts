@@ -296,7 +296,7 @@ it('keeps a goal worker on its assigned proof when unrelated seed goals are unfi
   const state = { environmentDigest: 'environment', cooperation: { tasks: [node(task)] } } as SolverRunState;
   const context = buildResearchContext(problem, state, { root: '/runtime', worktree: '/proof', environment: {},
     taskText: 'Prove the original target', retrievalRoot: '/library', assignment: assign(task), frozenContexts: input([]).frozenContexts });
-  expect(context.instructions).toContain('This assignment proves only Original.target');
+  expect(context.instructions).toContain('Prove only the original declaration named in the current assignment.');
   expect(context.instructions).toContain('including existing sorry placeholders');
   expect(context.instructions).toContain('do not prove or rewrite them to make the whole file pass');
   expect(context.instructions).toContain('checks the full candidate after integration');

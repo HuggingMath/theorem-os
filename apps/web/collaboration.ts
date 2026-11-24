@@ -102,6 +102,7 @@ export type WebNativeTeamTask = { id: string; memberId: string; objective: strin
   reassignment?: { ref: string; revision: number } };
 export type WebNativeTeam = {
   schema: 'theorem-os.web-native-team.v1'; runId: string;
+  transport?: 'native-agent-control' | 'host-tools';
   maxAgents: number; memberCount: number; taskCount: number; taskOmissions: number;
   tasks: WebNativeTeamTask[]; findings: WebTeamFinding[]; deliveries: WebTeamDelivery[]; adoptions: WebTeamAdoption[];
 };

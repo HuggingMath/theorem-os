@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { writeMathTextDurable } from '../../src/math/mathRuntimeIo';
 import type { WorkerMessage } from './shared';
+import type { WorkerObservationFrame } from './observationSources';
 
 export const webProofJournalDirectory = '/var/theoremos-proof';
 export const webProofJournalFiles = ['transitions.json', 'observation.json', 'artifact.json', 'terminal.json'] as const;
@@ -15,8 +16,10 @@ export function webProofMessageSink(output: NodeJS.WritableStream, apiKey: strin
   };
   const transitions: Extract<WorkerMessage, { type: 'library_restart' }>[] = [];
   let disconnected = false;
-  output.on('error', () => { disconnected = true; });
-  return (message: WorkerMessage) => {
+  const disconnect = () => { disconnected = true; };
+  output.on('error', disconnect);
+  output.on('close', disconnect);
+  return (message: WorkerMessage, frame?: WorkerObservationFrame) => {
     if (journal) {
       let file: typeof webProofJournalFiles[number] | undefined;
       switch (message.type) {
@@ -35,6 +38,6 @@ export function webProofMessageSink(output: NodeJS.WritableStream, apiKey: strin
         } catch { /* A failed backup write must not suppress the live result. */ }
       }
     }
-    if (!disconnected) output.write(redact(message) + '\n');
+    if (!disconnected) output.write(redact(frame ?? message) + '\n');
   };
 }

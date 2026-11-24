@@ -278,9 +278,9 @@ describe('native AgentControl mathematical-team host routing', () => {
       expect(operations).not.toContain(operation);
       expect(agentTeamOperationAllowed('lead', false, 'native-agent-control', operation)).toBe(false);
     }
-    expect(operations).toEqual(['finish', 'history', 'inspect', 'inspect-research', 'adopt']);
+    expect(operations).toEqual(['finish', 'history', 'inspect', 'inspect-research', 'adopt', 'retire_route', 'route_summary']);
     const memberTool = agentTeamToolDefinition('analyst', false, 'native-agent-control');
-    expect((memberTool.inputSchema.properties as Json).operation.enum).toEqual(['yield', 'history', 'inspect', 'inspect-research', 'submit']);
+    expect((memberTool.inputSchema.properties as Json).operation.enum).toEqual(['yield', 'history', 'inspect', 'inspect-research', 'submit', 'submit_helpers', 'route_summary']);
     expect(agentTeamInstructions({ id: 'lead', role: 'lead' }, 4, 'native-agent-control')).toContain('native collaboration tools');
     expect(agentTeamInstructions({ id: 'lead', role: 'lead' }, 4, 'native-agent-control')).not.toContain('Built-in spawn/fork is disabled');
     expect(agentTeamInstructions({ id: 'lead', role: 'lead' }, 4)).toContain('Built-in spawn/fork is disabled');

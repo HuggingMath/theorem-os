@@ -28,6 +28,7 @@ import { webAgentLibraryAccess } from './frozenLibrary';
 import { runWebLibraryResearch } from './libraryResearch';
 import { webResearchArguments } from './researchMode';
 import { webProofMessageSink } from './proofJournal';
+import { createWebHostDisconnectWatchdog, webWorkerShutdownMs } from './workerDisconnect';
 import { bindWebWorkerProfile, pinWebWorkerSession, prepareWebNativeProfile, webHarnessEnvironment,
   webHarnessExecutable, webHarnessModel, webProviderHarness } from './harness';
 
@@ -252,19 +253,39 @@ export function webSolverModules(request: WorkerInput,
       } } };
 }
 
-async function main() {
+async function main(watchdog: ReturnType<typeof createWebHostDisconnectWatchdog>, controlledStdin: boolean) {
   let bytes = 0;
   const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    bytes += chunk.length;
+  // Legacy callers send a single JSON document to EOF. The runner can keep stdin
+  // open on compatible images, framing the request with a newline and then sending heartbeats.
+  const stdin = process.stdin[Symbol.asyncIterator]();
+  if (controlledStdin) watchdog.heartbeat();
+  for (;;) {
+    const { value, done } = await stdin.next();
+    if (done) break;
+    const chunk = Buffer.from(value);
+    const newline = controlledStdin ? chunk.indexOf(10) : -1;
+    const input = newline === -1 ? chunk : chunk.subarray(0, newline);
+    bytes += input.length;
     if (bytes > 16 * 1024 * 1024) throw new Error('运行输入过大。');
-    chunks.push(chunk);
+    chunks.push(input);
+    if (newline !== -1) {
+      watchdog.heartbeat();
+      void (async () => {
+        try {
+          while (!(await stdin.next()).done) watchdog.heartbeat();
+        } catch { /* A broken stdin pipe also ends the control stream. */ }
+        finally { watchdog.disconnect(); }
+      })();
+      break;
+    }
   }
   const request = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))) as WorkerInput;
   const key = request.input.apiKey;
   const journalDirectory = process.env.THEOREMOS_WORKER_JOURNAL && fs.realpathSync(process.env.THEOREMOS_WORKER_JOURNAL);
-  const send = webProofMessageSink(process.stdout, key, journalDirectory
+  const write = webProofMessageSink(process.stdout, key, journalDirectory
     ? { directory: journalDirectory, webRunId: request.id } : undefined);
+  const send: typeof write = (message, frame) => write(message, request.observationSourceRefs === true ? frame : undefined);
   const workspaceRoot = process.env.THEOREMOS_WORKER_ROOT || '/work';
   const directory = fs.mkdtempSync(path.join(workspaceRoot, 'run-'));
   let output = path.join(directory, 'result.json');
@@ -333,6 +354,7 @@ async function main() {
       { tools, hiddenRoots: [root, buildState, ...(journalDirectory ? [journalDirectory] : [])] });
     const completed = await runWebLibraryResearch({ directory, request, seed: receipt, output, continuationFile,
       libraryCatalog: webAgentLibraryAccess(environment.id), run: async round => {
+      watchdog.signal.throwIfAborted();
       output = round.output;
       solverRunId = undefined;
       writeWebActiveRun({ webRunId: request.id, directory, output }, path.join(workspaceRoot, 'active-run.json'));
@@ -363,7 +385,7 @@ async function main() {
       ...(round.limits.maxTotalTokens ? ['--max-total-tokens', String(round.limits.maxTotalTokens)] : []),
       '--prepare-timeout-seconds', String(round.limits.maxRunSeconds === 0 ? 0 : webPreparationSeconds[environment.id === 'mathlib' ? 'mathlib' : 'standard']),
       ...(round.limits.maxRunSeconds === 0 ? ['--proof-timeout-seconds', '0'] : []),
-      '--evaluator-timeout-seconds', round.limits.maxRunSeconds === 0 ? '0' : '120'], root, modules);
+      '--evaluator-timeout-seconds', round.limits.maxRunSeconds === 0 ? '0' : '120'], root, modules, watchdog.signal);
       sampleArtifact();
       await capturePending;
       await capture(true);
@@ -374,7 +396,9 @@ async function main() {
     const report = Object.fromEntries(['schema', 'runId', 'problemId', 'status', 'solution_commit',
       'solver_ready_receipt_valid', 'completion_signal_valid', 'evaluator', 'turns', 'solveWallMs', 'solveExecutionMs', 'solveWaitingMs', 'usage',
       'winningWorker', 'workers', 'teamContributions', 'reason', 'tokenBudget', 'libraryResearch', 'libraryUsage'].filter(field => Object.hasOwn(raw, field)).map(field => [field, raw[field]]));
-    const failure = classifyWebResult(raw);
+    const disconnected = watchdog.signal.aborted && raw.status !== 'evaluated_passed';
+    if (disconnected) report.reason = 'math_host_disconnected';
+    const failure = disconnected ? { kind: 'network', reason: 'math_host_disconnected' } : classifyWebResult(raw);
     if (failure) report.failure = failure;
     const stopReason = webIncompleteReason(raw, request.input);
     if (stopReason) report.stopReason = stopReason;
@@ -396,9 +420,12 @@ async function main() {
       winningWorker: raw.winningWorker, state, artifact: latestArtifact });
     send({ type: 'result', result: { status: String(raw.status || 'runtime_error'), proof, report } });
   } catch (error) {
+    clearInterval(artifactTimer);
+    clearInterval(observationTimer);
     await capturePending;
     await capture(true);
-    send({ type: 'error', message: '运行未能完成。请检查 Lean 原题、模型服务配置与隔离环境。', failure: classifyWebError(error) });
+    send({ type: 'error', message: '运行未能完成。请检查 Lean 原题、模型服务配置与隔离环境。',
+      failure: watchdog.signal.aborted ? { kind: 'network', reason: 'math_host_disconnected' } : classifyWebError(error) });
     process.exitCode = 1;
   } finally {
     clearInterval(artifactTimer);
@@ -409,8 +436,22 @@ async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch(() => {
+  const controlledStdin = process.env.THEOREMOS_WORKER_CONTROL === '1';
+  const graceMs = Number(process.env.THEOREMOS_WORKER_DISCONNECT_GRACE_MS);
+  let forceExit: ReturnType<typeof setTimeout> | undefined;
+  const watchdog = createWebHostDisconnectWatchdog(process.stdout, {
+    ...(Number.isSafeInteger(graceMs) && graceMs > 0 && graceMs <= 2_147_483_647 ? { graceMs } : {}),
+    // The normal abort unwinds the solver and records the latest evidence first.
+    onAbort: () => { forceExit = setTimeout(() => process.exit(1), webWorkerShutdownMs); },
+  });
+  main(watchdog, controlledStdin).catch(() => {
     process.stdout.write(JSON.stringify({ type: 'error', message: '运行输入无效或环境无法初始化。' }) + '\n');
     process.exitCode = 1;
+  }).finally(() => {
+    watchdog.stop();
+    clearTimeout(forceExit);
+    if (controlledStdin) process.stdin.destroy();
+    // Journal writes finished above. A stale attach pipe must not keep the worker alive.
+    if (watchdog.signal.aborted) process.exit(process.exitCode);
   });
 }

@@ -121,7 +121,8 @@ it('updates only the Lead inbox on plan rejection and clears it when a repaired 
   try {
     await deliver({ tasks: [] });
     expect(state.cooperation!.error).toBe('math_plan_invalid');
-    expect(state.cooperation!.planRejection).toBeDefined();
+    expect(state.cooperation!.planRejection).toMatchObject({ issues: [{ path: 'tasks',
+      message: 'Supply a nonempty array of task objects.' }] });
     expect(inbox(lead.worktree)).toMatchObject({ error: state.cooperation!.error, planRejection: state.cooperation!.planRejection });
     expect(inbox(peer.worktree)).not.toHaveProperty('error');
     expect(inbox(peer.worktree)).not.toHaveProperty('planRejection');

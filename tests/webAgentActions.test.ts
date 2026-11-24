@@ -423,17 +423,20 @@ describe('Agent actions as the run owner sees them', () => {
       expect(sent).toHaveLength(1);
       expect(sent[0]).toMatchObject({ workerId: 'engineer', itemId: '1:r', phase: 'started', status: 'running',
         kind: 'reasoning', textSource: 'summary', text: 'Inspect ./Submission.lean with key [REDACTED]' });
-      for (let index = 0; index < 100; index++) update(`Public revision ${index}`);
+      for (let index = 0; index < 100; index++) update(`${'推理'.repeat(1_500)} Public revision ${index}`);
       expect(sent).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(999); expect(sent).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(3_999); expect(sent).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(1); expect(sent).toHaveLength(2);
-      expect(sent.at(-1)!.text).toBe('Public revision 99');
+      expect(sent.at(-1)!.text).toMatch(/^…[推理]+ Public revision 99$/u);
+      expect(sent.at(-1)!.textClipped).toBe(true);
+      expect(Buffer.byteLength(sent.at(-1)!.text!)).toBeLessThanOrEqual(2_048);
       update('A pending old snapshot');
-      observer.onItem!('completed', { id: 'r', type: 'reasoning', summary: ['Authoritative final summary'], content: ['raw final'] });
+      const final = 'Authoritative final summary. ' + '推理'.repeat(1_500);
+      observer.onItem!('completed', { id: 'r', type: 'reasoning', summary: [final], content: ['raw final'] });
       update('A late snapshot');
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(4_000);
       expect(sent).toHaveLength(3);
-      expect(sent.at(-1)).toMatchObject({ itemId: '1:r', phase: 'completed', status: 'done', text: 'Authoritative final summary', textSource: 'summary' });
+      expect(sent.at(-1)).toMatchObject({ itemId: '1:r', phase: 'completed', status: 'done', text: final, textSource: 'summary' });
       expect(sent.every(isWebAgentActionBody)).toBe(true);
       expect(JSON.stringify(sent)).not.toMatch(/raw|sk-agent-actions|\/opt\/|\/work\//);
     } finally { await session?.close(); vi.useRealTimers(); }
@@ -458,7 +461,7 @@ describe('Agent actions as the run owner sees them', () => {
       observer.onItemUpdate!({ id: 'cancelled', type: 'reasoning', summary: ['First public snapshot'] });
       observer.onItemUpdate!({ id: 'cancelled', type: 'reasoning', summary: ['Pending public snapshot'] });
       const count = sent.length;
-      await session.interrupt(); await vi.advanceTimersByTimeAsync(1_000);
+      await session.interrupt(); await vi.advanceTimersByTimeAsync(4_000);
       observer.onItemUpdate!({ id: 'cancelled', type: 'reasoning', summary: ['Late after cancellation'] });
       expect(sent).toHaveLength(count);
     } finally { await session?.close(); vi.useRealTimers(); }

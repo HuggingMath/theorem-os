@@ -23,6 +23,7 @@ export type AgentTeamProofDelivery = Readonly<Identity & {
   seedCommit: string; commit: string; sourceDigest: string;
   declarations: DeclarationSubmission['declarations']; artifacts: readonly DeclarationArtifact[];
   changes: readonly DeclarationChange[]; imports: readonly { file: string; module: string }[];
+  inferredHelperTypes?: string[];
   provenance?: AgentTeamProofProvenance;
 }>;
 export type AgentTeamProofAdoption = Readonly<Identity & {
@@ -60,6 +61,7 @@ const deliverySchema = z.object({ schema: z.literal('theorem-os.agent-team-proof
   changes: z.array(z.object({ file: z.string(), name: z.string(), before: z.string().optional(), after: z.string(),
     beforeName: z.string().optional(), afterName: z.string().optional(), tail: z.string().optional() }).strict()),
   imports: z.array(z.object({ file: z.string(), module: z.string() }).strict()),
+  inferredHelperTypes: z.array(z.string()).optional(),
   provenance: provenanceSchema.optional(),
 }).strict();
 const adoptionSchema = z.object({ schema: z.literal('theorem-os.agent-team-proof-adoption.v1'), id: hash,
@@ -78,6 +80,10 @@ function validateDelivery(value: unknown, state: DeclarationArtifactIdentity): A
   const parsed = deliverySchema.parse(value), artifacts = parsed.artifacts.map(validateDeclarationArtifact);
   const delivery = { ...parsed, artifacts } as AgentTeamProofDelivery;
   if (recordId(delivery) !== delivery.id || !sameIdentity(delivery, state)) return fail('delivery_identity_changed');
+  if (delivery.inferredHelperTypes?.some(key => !delivery.declarations.some(declaration =>
+    key === declaration.file + '\0' + declaration.name && !state.problem.declarations[declaration.file]?.some(original =>
+      original.name === declaration.name || original.name === declaration.name.split('.').at(-1)))))
+    return fail('delivery_evidence_changed');
   if (artifacts.length !== delivery.declarations.length || artifacts.some((artifact, index) =>
     !sameIdentity(artifact, state) || artifact.proof.commit !== delivery.commit ||
     artifact.proof.sourceDigest !== delivery.sourceDigest ||
@@ -249,7 +255,7 @@ async function checkTeamDeclarationArtifacts(input: Parameters<typeof checkDecla
 /** Called only after the child writer has stopped. No mutable child files become proof evidence. */
 export async function checkAgentTeamProofDelivery(input: CheckInput & {
   agentId: string; worktree: string; seedCommit: string; declarations: DeclarationSubmission['declarations'];
-  provenance?: AgentTeamProofProvenance; failureCache?: TeamFailureCache;
+  provenance?: AgentTeamProofProvenance; failureCache?: TeamFailureCache; inferredHelperTypes?: string[];
 }): Promise<AgentTeamProofDelivery> {
   const declarations = teamDeclarations.parse(input.declarations);
   const agentId = deliverySchema.shape.agentId.parse(input.agentId);
@@ -268,13 +274,15 @@ export async function checkAgentTeamProofDelivery(input: CheckInput & {
   };
   const environment = input.failureCache && environmentKey();
   const key = environment && mathDigest(canonicalMathJson({ ...identityOf(input.state), environment, declarations,
+    inferredHelperTypes: input.inferredHelperTypes,
     // The project trees include trusted local imports, but exclude the worker's top-level research notes.
     project: git(input.worktree, ['rev-parse', commit + ':' + problem.projectRelative]),
     seed: git(input.worktree, ['rev-parse', input.seedCommit + ':' + problem.projectRelative]),
     timeoutMs: Number.isFinite(input.timeoutMs) ? input.timeoutMs : null }));
   const previous = key && input.failureCache?.get(key);
   if (previous) throw new ReusedTeamCheckFailure({ commit: previous.commit, agentId: previous.agentId }, previous.error);
-  const artifacts = await checkTeamDeclarationArtifacts({ ...input, commit, declarations, assertWriterStopped: stable }).catch(error => {
+  const artifacts = await checkTeamDeclarationArtifacts({ ...input, commit, declarations,
+    inferredExpectedTypes: new Set(input.inferredHelperTypes), assertWriterStopped: stable }).catch(error => {
     if (key && input.failureCache && error instanceof DeclarationArtifactCheckError && hasDeterministicLeanFailure(error.verification)) {
       stable();
       if (canonicalMathJson(environmentKey() ?? null) === canonicalMathJson(environment)) {
@@ -288,6 +296,7 @@ export async function checkAgentTeamProofDelivery(input: CheckInput & {
   const record: AgentTeamProofDelivery = { schema: 'theorem-os.agent-team-proof-delivery.v1', id: '',
     ...identityOf(input.state), agentId, sourceWorktree: input.worktree, seedCommit: input.seedCommit, commit,
     sourceDigest: ownedSourceDigest(problem, input.worktree, commit), declarations, artifacts, ...patch,
+    ...(input.inferredHelperTypes?.length ? { inferredHelperTypes: input.inferredHelperTypes } : {}),
     ...(input.provenance === undefined ? {} : { provenance: provenanceSchema.parse(input.provenance) }) };
   const delivery = { ...record, id: recordId(record) };
   validateDelivery(delivery, input.state);
@@ -333,7 +342,8 @@ async function resumeAdoption(input: IntegrationInput, delivery: AgentTeamProofD
       if (fs.existsSync(packages)) bindLeanPackages(path.join(checkout, problem.projectRelative), packages);
       const checkoutStable = frozenSource(input, checkout, adoption.commit);
       await checkTeamDeclarationArtifacts({ ...input, worktree: checkout, commit: adoption.commit,
-        declarations: delivery.declarations, assertWriterStopped: () => { stable(); checkoutStable(); } });
+        declarations: delivery.declarations, inferredExpectedTypes: new Set(delivery.inferredHelperTypes),
+        assertWriterStopped: () => { stable(); checkoutStable(); } });
       stable(); checkoutStable();
     }
   });
@@ -368,7 +378,7 @@ export async function integrateAgentTeamProofDelivery(input: IntegrationInput): 
       const commit = commitSolverSources(problem, checkout), checkoutStable = frozenSource(input, checkout, commit);
       const assertStopped = () => { stable(); checkoutStable(); };
       const artifacts = await checkTeamDeclarationArtifacts({ ...input, worktree: checkout, commit,
-        declarations: delivery.declarations, assertWriterStopped: assertStopped });
+        declarations: delivery.declarations, inferredExpectedTypes: new Set(delivery.inferredHelperTypes), assertWriterStopped: assertStopped });
       assertStopped();
       const record: AgentTeamProofAdoption = { schema: 'theorem-os.agent-team-proof-adoption.v1', id: '',
         ...identityOf(input.state), deliveryId: delivery.id, beforeCommit: input.expectedCommit, commit,

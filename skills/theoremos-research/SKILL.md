@@ -28,6 +28,7 @@ Use these references when the work calls for them:
 - [Literature](references/literature.md): when a proof idea or missing result may be found in external sources.
 - [Lean work](references/lean.md): when finding, testing or delivering formal declarations.
 - [Continuation](references/continuation.md): when starting from saved work or preparing durable research artifacts.
+- [Portfolio exploration](references/portfolio.md) describes bounded route scouting and falsification before proof work.
 - [Cooperation](references/cooperation.md): when the host uses its cooperative task-graph workflow; read the shared rules and relevant assignment, review or feedback section.
 - [HuggingMath](references/huggingmath.md): when asked to export a completed result or transfer it into private Hub drafts.
 - [Parallel work](references/parallel-work.md): when `theoremos_team` is exposed or an independent investigation can usefully run alongside the current task.

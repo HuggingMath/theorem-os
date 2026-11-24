@@ -200,7 +200,12 @@ class CodexRpc {
           this.pending.delete(message.id);
           clearTimeout(call.timer);
           const code = typeof error?.code === 'number' && Number.isSafeInteger(error.code) ? error.code : 'invalid_code';
-          if (error) call.reject(new Error(`math_codex_rpc_failed:${code}:${call.method}`,
+          const startup = call.method === 'thread/start' || call.method === 'initialize' ||
+            call.method.startsWith('theoremos/agentControl/');
+          const authFailure = startup && (code === 401 || code === 403 || typeof error?.message === 'string' &&
+            /\b(?:authentication|unauthorized|forbidden|api[ _-]?key|credential(?:s)?|login required)\b/iu.test(error.message));
+          if (authFailure) call.reject(new Error('math_codex_authentication_failed'));
+          else if (error) call.reject(new Error(`math_codex_rpc_failed:${code}:${call.method}`,
             call.method.startsWith('theoremos/agentControl/') ? { cause: error } : undefined));
           else call.resolve(result!);
         }
@@ -1202,5 +1207,11 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         return rpc.confirmStopped();
       },
     };
-  } catch (error) { await closeSession(); options.signal?.throwIfAborted(); throw error; }
+  } catch (error) {
+    await closeSession();
+    options.signal?.throwIfAborted();
+    if (nativeControl && processLaunch && await rpc.confirmStopped().then(receipt => receipt.status !== 'stopped'))
+      throw new Error('math_codex_startup_shutdown_unconfirmed');
+    throw error;
+  }
 }

@@ -1,5 +1,5 @@
 import { publicWebProvider, webProviderHarness, webHarnessResearchError } from './harness';
-import { nativeTeamCapacitySchema, nativeTeamPreferencesSchema, webDefaultSkillLoading } from './researchMode';
+import { nativeTeamCapacitySchema, nativeTeamPreferencesSchema, webDefaultSkillLoading, webPortfolioSecondsSchema } from './researchMode';
 import { webTeamProfiles } from './nativeTeamProfiles';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import fs from 'node:fs';
@@ -70,6 +70,8 @@ const inputSchema = z.object({
   explanationLanguage: z.enum(['zh', 'en']).optional(),
   researchMode: z.enum(['legacy', 'skill']).optional(),
   skillLoading: z.enum(['native', 'file']).optional(),
+  portfolioExploration: z.boolean().optional(),
+  portfolioSeconds: webPortfolioSecondsSchema.optional(),
   nativeTeamCapacity: nativeTeamCapacitySchema.optional(),
   nativeTeamPreferredProfiles: nativeTeamPreferencesSchema.optional(),
   planApproval: z.boolean().optional(),

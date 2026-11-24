@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { SolverWorkerState } from './archive';
 import type { HarnessProcessIdentity } from '../runtime/harnessProcess';
 import { agentTeamProfileEvidenceSchema } from './agentTeamProfiles';
+import { portfolioRouteIdSchema, retiredRouteSchema } from './routeControl';
 
 const identifier = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/u);
 export const writerProcessSchema = z.object({ schema: z.literal('theorem-os.harness-process-identity.v1'),
@@ -26,6 +27,7 @@ export const teamSpawnHistory = z.enum(['fresh', 'parent-history', 'unknown']);
 const exposure = z.object({ deliveryId: z.string(), agentId: identifier, taskId: z.string(), commit: z.string(),
   kind: teamExposureKind, at: z.string() }).strict();
 const task = z.object({ id: z.string(), message: z.string(), seedCommit: z.string().optional(),
+  routeId: portfolioRouteIdSchema.optional(),
   objectiveRevision: z.number().int().positive().optional(), workKind: agentTeamWorkKindSchema.optional(),
   profileEvidence: agentTeamProfileEvidenceSchema.optional(),
   objectiveHistory: z.array(z.object({ revision: z.number().int().positive(), message: z.string(),
@@ -42,6 +44,7 @@ const task = z.object({ id: z.string(), message: z.string(), seedCommit: z.strin
   pausedAt: z.number().optional(), lastStartedAt: z.number().optional(),
   startedAt: z.number().optional(), finishedAt: z.number().optional(),
   declarations: z.array(declaration).optional(), summary: z.string().optional(), deliveryId: z.string().optional(),
+  helperSubmission: z.array(declaration).min(1).max(32).optional(),
   nomination: z.object({ objectiveRevision: z.number().int().positive(),
     objectiveDigest: z.string().regex(/^[a-f0-9]{64}$/u), workKind: agentTeamWorkKindSchema.optional() }).strict().optional(),
   failedCheck: z.object({ declaration, seedCommit: z.string(), commit: z.string(), sourceDigest: z.string(),
@@ -55,6 +58,11 @@ const task = z.object({ id: z.string(), message: z.string(), seedCommit: z.strin
   cancelRequested: z.object({ at: z.number(), reason: z.string().optional(), replacementTaskId: z.string().optional() }).strict().optional(),
   error: z.string().optional() }).strict();
 export const agentTeamStateSchema = z.object({ schema: z.literal('theorem-os.agent-team.v1'),
+  canonicalCommit: z.string().regex(/^[a-f0-9]{40,64}$/u).optional(),
+  retiredRoutes: z.array(retiredRouteSchema).optional(),
+  landedHelpers: z.array(z.object({ qualifiedName: z.string(), file: z.string(), type: z.string(),
+    commit: z.string().regex(/^[a-f0-9]{40,64}$/u), kind: z.literal('definition').optional(),
+    landedAt: z.number().int().nonnegative().optional() }).strict()).optional(),
   /** Absent retains the historical dynamic-tool team on resume. */
   transport: z.enum(['host-tools', 'native-agent-control']).optional(),
   nativeControl: z.object({ sessionId: z.string(), rootThreadId: z.string(),
@@ -112,12 +120,14 @@ export const agentTeamStateSchema = z.object({ schema: z.literal('theorem-os.age
     writerStopUnconfirmed: z.object({ at: z.number(), reason: z.string() }).strict().optional(),
   }).passthrough()),
   events: z.array(z.object({ sequence: z.number().int().positive(), from: z.string(), to: z.string(),
-    kind: z.enum(['message', 'completed', 'delivery', 'failed', 'interrupted', 'adopted', 'research-updated', 'cancelled', 'paused', 'resumed', 'budget-updated', 'amended', 'progress']),
+    kind: z.enum(['message', 'completed', 'delivery', 'failed', 'interrupted', 'adopted', 'research-updated', 'cancelled', 'paused', 'resumed', 'budget-updated', 'amended', 'progress', 'helpers', 'route-retired']),
     at: z.number(), text: z.string(), taskId: z.string().optional(), deliveryId: z.string().optional(),
     sourceTaskId: z.string().optional(), relatedTaskId: z.string().optional(), dispatchResearchRevision: z.number().int().positive().optional(),
     researchArtifactId: z.string().optional(), researchRevision: z.number().int().positive().optional(),
     objectiveRevision: z.number().int().positive().optional(), progressId: z.string().optional() }).strict()),
-  deliveries: z.array(z.object({ id: z.string(), agentId: identifier, taskId: z.string(), path: z.string() }).strict()),
+  deliveries: z.array(z.object({ id: z.string(), agentId: identifier, taskId: z.string(), path: z.string(),
+    kind: z.literal('helpers').optional(), declarationCount: z.number().int().nonnegative().optional(),
+    summary: z.string().max(200).optional() }).strict()),
   adoptions: z.array(z.object({ id: z.string(), deliveryId: z.string(), targetId: z.string(),
     status: z.enum(['queued', 'integrating', 'completed', 'failed']), expectedCommit: z.string().optional(),
     commit: z.string().optional(), receiptId: z.string().regex(/^[a-f0-9]{64}$/u).optional(), error: z.string().optional() }).strict()),

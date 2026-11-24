@@ -18,6 +18,7 @@ import type { WebCheckReceipt, WebCommand, WebCommandResult, WebObservation, Web
 import type { WorkerMessage } from './shared';
 import { projectWebDeclarationArtifacts } from './declarationArtifacts';
 import { projectWebNativeTeam } from './nativeTeamObservation';
+import { compactObservation, type WorkerObservationFrame } from './observationSources';
 
 export const webActiveRunFile = '/work/active-run.json';
 const activeRunSchema = z.object({ schema: z.literal('theorem-os.web-active-run.v1'),
@@ -187,12 +188,14 @@ export function createWebWorkerBridge(options: {
   webRunId: string; output: string; directory: string; apiKey?: string;
   /** The host authorizes one transition; directory stays fixed while output points at the new round. */
   libraryRestart?: LibraryRestart;
-  onMessage?(message: WorkerMessage): void;
+  onMessage?(message: WorkerMessage, frame?: WorkerObservationFrame): void;
 }) {
   const directory = fs.realpathSync(options.directory), metaFile = path.join(directory, 'web-bridge.json');
   if (!childOf(directory, path.resolve(options.output))) throw new Error('web_bridge_output_outside_run');
   if (options.libraryRestart && (!Number.isSafeInteger(options.libraryRestart.round) || options.libraryRestart.round < 1 ||
       !options.libraryRestart.previousSolverRunId)) throw new Error('web_bridge_run_identity_changed');
+  // Each new bridge starts with a self-contained frame. Retain only the previous frame's digests.
+  let emittedSources = new Set<string>();
   async function capture(input: { includeCatalog?: boolean; force?: boolean } = {}) {
     const messages: WorkerMessage[] = [];
     const result = await withMathRuntimeLease({ lockPath: path.join(directory, 'web-bridge.lock'), flockExecutable: '/usr/bin/flock' }, async lease => {
@@ -264,12 +267,24 @@ export function createWebWorkerBridge(options: {
       if (input.includeCatalog && !catalog && fs.existsSync(catalogFile)) {
         catalog = validateTheoremKnowledge(JSON.parse(readMathText(catalogFile, maxMessageBytes)));
       }
-      lease.assertHeld(); writeMathJsonDurable(metaFile, meta);
+      lease.assertHeld();
+      if (!previous || canonicalMathJson(previous) !== canonicalMathJson(meta)) writeMathJsonDurable(metaFile, meta);
       if (changed || input.force) messages.push({ type: 'observation', observation });
       if (catalog) messages.push({ type: 'catalog', catalog });
       return { observation, ...(catalog ? { catalog } : {}) };
     });
-    for (const message of messages) options.onMessage?.(message);
+    for (const message of messages) {
+      if (!options.onMessage) break;
+      if (message.type !== 'observation') { options.onMessage(message); continue; }
+      const current = new Set<string>();
+      const sourceBlobs: Record<string, string> = {};
+      const observation = compactObservation(message.observation, (digest, source) => {
+        current.add(digest);
+        if (!emittedSources.has(digest)) sourceBlobs[digest] = source;
+      });
+      options.onMessage(message, { type: 'observation', observation, sourceBlobs });
+      emittedSources = current;
+    }
     return result;
   }
   return { capture };

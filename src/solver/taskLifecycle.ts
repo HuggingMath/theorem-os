@@ -31,6 +31,8 @@ const RULES = {
   invalidated: { from: ['integrated', 'conditional', 'delivered'], to: ['blocked'] },
   /** Host advisory capacity expired with its frozen inputs. */
   expired: { from: ['pending', 'running', 'blocked', 'completed'], to: ['blocked'] },
+  /** A retired route stops every unintegrated obligation on that branch. */
+  'route-retired': { from: ['pending', 'running', 'blocked', 'completed', 'conditional', 'delivered'], to: ['blocked'] },
   /** Offline reconstruction (continuation seeding, snapshot recovery) rebuilds statuses from checked evidence. */
   reconstructed: { from: ['pending', 'running', 'blocked', 'conditional', 'delivered', 'integrated', 'completed'],
     to: ['pending', 'blocked', 'conditional', 'integrated', 'completed'] },

@@ -1,5 +1,6 @@
 import { maskLeanCommentsAndStrings } from '../math/leanSyntax';
 import type { CooperativeTask } from './tasks';
+import { invalidPlanField } from './planDiagnostics';
 
 type TypedTask = Pick<CooperativeTask, 'id' | 'kind' | 'type'>;
 
@@ -26,6 +27,6 @@ export function assertPlanTaskTypeContracts(tasks: readonly CooperativeTask[], p
     const before = previous.get(task.id);
     if (before?.kind === task.kind && before.type === task.type) continue;
     const reason = taskTypeContractError(task);
-    if (reason) throw new Error('math_plan_invalid_helper_type: ' + reason);
+    if (reason) throw invalidPlanField('math_plan_invalid_helper_type', `tasks[${task.id}].type`, reason);
   }
 }

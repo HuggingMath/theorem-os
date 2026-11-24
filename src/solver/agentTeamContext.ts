@@ -24,7 +24,7 @@ export function agentTeamInstructions(role: AgentTeamRole, maxAgents: number,
     'Use the injected Lead profile from the pinned Skill for delegation, task ownership and integration decisions. ' +
     'Team updates enter your ongoing native conversation after the current response and tools. Poll the durable inbox for complete addressed messages. ' +
     'Coordinate and publish are optional compatibility operations for saved decision notes and shared research summaries; they do not gate research, tools or turn scheduling. ' +
-    'Use cancel to withdraw or replace a particular assignment while retaining that member. ' +
+    'Use cancel to withdraw or replace an individual assignment. Tag route-specific work with routeId and use retire_route with the obstruction and evidence refs to stop the entire branch. ' +
     'Use amend to change a current task objective or responsibility while retaining its task ID, draft and history; message alone does not amend it. ' +
     'Mark workKind when the distinction matters: independent-reconstruction, assembly, review, research or proof. ' +
     'Inspection and adoption record source exposure; preserve original authorship and describe assembly or exposed review accurately. ' +
@@ -44,13 +44,13 @@ export function agentTeamInstructions(role: AgentTeamRole, maxAgents: number,
     'Message Lead at the first usable result, local probe or blocker, including the exact claim, assumptions and available evidence; a whole-target assignment does not require waiting for the complete proof to report. ' +
     'Use progress for a useful finding, probe result, blocker or route change. Give the exact result and next step; optional knowledgeUses names a supplied source anchor actually used and its concrete application. These reports remain advisory. ' +
     'For a formal delivery, save exact declarations and call submit, then return to release writing for host checking; a local check or normal return alone does not publish a team delivery. ' +
-    'Deliver an independent helper as soon as it answers the assignment, even while other original goals remain open. Ask Lead before expanding into another member\'s gap; finish the handoff before starting unrelated work. ' +
+    'Use submit_helpers to share checked standalone helpers while the assigned target is unfinished. Save your draft, then return for the host to check and land the helpers. ' +
     'For a host tool failure, message Lead with the command and diagnostic; use a documented fallback when available and distinguish that result from host checking. ' +
     'Use inspect to read peer deliveries and inspect-research for their saved findings; ask Lead to adopt useful declarations into your worktree. ' +
     'When the same task needs a dependency or Lead decision, save your draft and notes, call yield with the reason, then return to release writing; Lead can resume it later. ' +
     'Submit and yield also checkpoint automatically before the next model request, after the current response and tools settle. Save before calling them. ' +
     'An amended task carries a new objective revision. Follow it, assess previous findings against it, and retain the draft. ' +
-    'Only Lead can spawn, assign, amend, cancel, budget, resume, publish, adopt, finish or stop members. Write only in your own workspace. ' + shared + '\n';
+    'Only Lead can spawn, assign, amend, cancel, budget, resume, publish, adopt, finish, stop members or retire routes. Write only in your own workspace. ' + shared + '\n';
 }
 
 function nativeAgentTeamInstructions(role: AgentTeamRole, maxAgents: number): string {
@@ -65,7 +65,8 @@ function nativeAgentTeamInstructions(role: AgentTeamRole, maxAgents: number): st
     'This team run explicitly authorizes you to spawn and coordinate useful child agents through the native collaboration tools. ' +
     `At most ${maxAgents} agents including you may be available. ` +
     'As soon as you identify a proof step you can advance, work on it in your Lean files. Keep writing the consuming argument or another unassigned gap while members work. ' +
-    'If several branches need the same lemma, agree on its Lean statement and assign one member to prove it for those consumers. ' +
+    'If several goals share a mathematical foundation, assign and check its small Lean interfaces before dispatching the consuming goals. ' +
+    'Tag route-specific native spawn and followup objectives with Route: ROUTE_ID as the first line. Use theoremos_team retire_route with the obstruction and evidence refs to stop a refuted route. ' +
     'Idle members still occupy their places. Use native followup_task to reuse a member for another gap or specialty; interrupt_agent stops its turn and preserves its place and work. ' +
     'Only Lead dispatches, interrupts and adopts; members can exchange findings directly. ' +
     'Inspect evidence before adopting into yourself or a stopped writer. Save sources and notes, request adoption and return so the host can stop writing, integrate and continue your saved thread. ' +
@@ -73,7 +74,7 @@ function nativeAgentTeamInstructions(role: AgentTeamRole, maxAgents: number): st
   return `You are a mathematical researcher and Lean proof writer; your workspace member ID is ${JSON.stringify(role.id)} and your coordinator is /root (lead). ` +
     'Carry out the current Lead assignment; the frozen original problem supplies background and source constraints. ' +
     'Use native send_message for the first usable finding, probe result or blocker without waiting for the complete proof. Include the exact claim, assumptions and available evidence. ' +
-    'Tell Lead if another branch could use your lemma and confirm the Lean statement with its consumer. Submit its independent proof as soon as you have it. ' +
+    'Tell Lead if another branch could use your lemma and confirm its Lean statement with its consumer. Use submit_helpers for standalone helpers while your current target is unfinished. ' +
     'Save exact declarations and RESEARCH.md, then call submit and return. The pending-writer-stop acknowledgment is not a checked delivery. ' +
     'When the same task needs a dependency or Lead decision, save the draft, call yield with a reason and return. Lead can adopt dependencies into your stopped workspace and resume this same task with native followup_task. ' +
     'Only Lead dispatches and adopts. Ask Lead before expanding into another gap. Do not spawn subteams or interrupt peers.\n' + shared;
@@ -85,7 +86,7 @@ export function agentTeamWorkerDeliveryHelp(): string {
     'Use the member\'s own editable paths listed by the host; the same filename in Lead\'s workspace is a separate copy. New independent helper declarations may be added inside these files while frozen original statements remain fixed; put scratch results in an editable owned file before nomination. ' +
     'List every changed declaration since the assignment deliveryBaseCommit, including earlier unpublished or rejected drafts. ' +
     'For a new shared def or abbrev in an existing owned file, add kind:"definition". Its checked body is reusable; prove any claimed property separately. Each declaration may include description and explicit premises. Submit accepts 1–32 declarations, including original targets you have proved. ' +
-    'Submit useful independent declarations when they answer the assignment; other original goals may remain unfinished. Message Lead about the result before extending the scope. ' +
+    'For standalone helpers before the assignment is finished, use submit_helpers with the same declaration fields. Nominate just the helpers and return. The host checks and lands eligible helpers, and Lead can resume the current task. ' +
     'The pending-writer-stop result acknowledges the request only: stop editing and return. The host confirms writer shutdown and checks actual source before publishing a delivery ID. ' +
     'Read your task feedback on the next assignment. Messages, notes and local checks remain advisory. ' +
     'Save reproducible findings in RESEARCH.md before returning; after writer shutdown the host records its fixed-commit advisory artifact. ' +
@@ -111,6 +112,7 @@ export function agentTeamWorkerSection(state: Readonly<SolverRunState>, role: Ag
       : 'Current team assignment (replaces earlier assignments; messages are advisory updates):\n') + JSON.stringify({
       agentId: role.id, coordinator: 'lead', taskId: current.id, objective: assignment.message,
       objectiveRevision: current.objectiveRevision ?? 1, workKind: current.workKind,
+      ...(current.routeId ? { routeId: current.routeId } : {}),
       deliveryExposures: worker.exposures ?? [],
       sourceCommit: assignment.sourceCommit, deliveryBaseCommit: current.seedCommit,
       cancelRequested: current.cancelRequested, pauseRequested: current.pauseRequested,
