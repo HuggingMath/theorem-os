@@ -1,9 +1,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { once } from 'node:events';
+import { Writable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { readWebConfig, webDefaults } from '../apps/web/config';
 import { DockerWebRunner, parseWorkerMessage, webPrivateImagePaths } from '../apps/web/runner';
+import { webProofMessageSink } from '../apps/web/proofJournal';
 import type { WorkerExplanationInput, WorkerExplanationMessage, WorkerInput, WorkerMessage } from '../apps/web/shared';
 
 function candidateCheckDocker(reply: { severity?: string; wrongMarker?: boolean; plain?: boolean; exitCode: number }) {
@@ -44,6 +47,89 @@ main().catch(error => { if (error?.fixtureExit) process.exitCode = error.code; e
 }
 
 describe('Docker web runner', () => {
+  it('reads the candidate and terminal receipt after Docker attach exits while the worker is still alive', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-docker-detached-proof-'));
+    const journal = path.join(root, 'journal'), callsPath = path.join(root, 'calls.jsonl');
+    fs.mkdirSync(journal);
+    fs.writeFileSync(path.join(root, 'docker'), `#!${process.execPath}
+const fs = require('node:fs'), path = require('node:path'), root = __dirname, args = process.argv.slice(2);
+fs.appendFileSync(path.join(root, 'calls.jsonl'), JSON.stringify(args) + '\\n');
+async function main() {
+  if (args[0] === 'start') {
+    for await (const _chunk of process.stdin) {}
+    process.exitCode = 137;
+  } else if (args[0] === 'wait') {
+    while (!fs.existsSync(path.join(root, 'journal', 'terminal.json'))) await new Promise(resolve => setTimeout(resolve, 10));
+    process.stdout.write('0\\n');
+  } else if (args[0] === 'cp') fs.cpSync(path.join(root, 'journal'), args[2], { recursive: true });
+  else if (args[0] !== 'create' && args[0] !== 'rm') process.exitCode = 1;
+}
+main().catch(() => process.exit(1));
+`, { mode: 0o700 });
+    const controller = new AbortController(), config = readWebConfig({}), messages: WorkerMessage[] = [];
+    const request: WorkerInput = {
+      id: 'detached-proof-fixture', provider: config.providers[0], input: {
+        ...webDefaults, providerId: config.providers[0].id, apiKey: 'sk-offline-fixture',
+        source: 'theorem goal : True := by sorry', task: 'Offline fixture', maxRunSeconds: 0,
+      },
+    };
+    const sink = webProofMessageSink(new Writable({ write(_chunk, _encoding, done) { done(); } }), request.input.apiKey,
+      { directory: journal, webRunId: request.id });
+    const artifact = { type: 'artifact', artifact: { source: 'theorem goal : True := by trivial',
+      status: 'candidate', workerId: 'solver', capturedAt: '2026-11-24T03:00:00.000Z' } } as const;
+    const terminal = { type: 'result', result: { status: 'evaluated_passed', proof: artifact.artifact.source,
+      report: { evaluator: { status: 'passed' } } } } as const;
+    vi.stubEnv('PATH', root);
+    const run = new DockerWebRunner(config).run(request, message => messages.push(message), controller.signal);
+    try {
+      sink(artifact);
+      await vi.waitFor(() => expect(fs.readFileSync(callsPath, 'utf8')).toContain('["wait",'));
+      expect(fs.readFileSync(callsPath, 'utf8')).not.toContain('["rm",');
+      sink(terminal);
+      await run;
+      expect(messages).toEqual([artifact, terminal]);
+      const calls = fs.readFileSync(callsPath, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]);
+      expect(calls.map(args => args[0])).toEqual(['create', 'start', 'wait', 'cp', 'rm']);
+      expect(calls[0]).toContain('type=volume,destination=/var/theoremos-proof');
+      expect(calls[0]).toContain('THEOREMOS_WORKER_JOURNAL=/var/theoremos-proof');
+    } finally {
+      controller.abort(); await run.catch(() => {});
+      vi.unstubAllEnvs(); fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('saves a redacted terminal file after its live output pipe breaks', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-proof-output-'));
+    const output = new Writable({ write(_chunk, _encoding, done) { done(Object.assign(new Error('broken pipe'), { code: 'EPIPE' })); } });
+    const apiKey = 'sk-offline-"secret"';
+    const sink = webProofMessageSink(output, apiKey, { directory, webRunId: 'journal-fixture' });
+    try {
+      const detached = once(output, 'error');
+      sink({ type: 'progress', event: 'ready', message: 'Ready' });
+      await detached;
+      sink({ type: 'result', result: { status: 'incomplete', proof: '', report: { fixture: apiKey } } });
+      const saved = fs.readFileSync(path.join(directory, 'terminal.json'), 'utf8');
+      expect(JSON.parse(saved)).toMatchObject({ webRunId: 'journal-fixture',
+        messages: [{ type: 'result', result: { report: { fixture: '[REDACTED]' } } }] });
+      expect(saved).not.toContain('secret');
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it('delivers Lean acceptance over stdout when its journal cannot be written', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-proof-output-'));
+    const file = path.join(directory, 'blocked');
+    fs.writeFileSync(file, '');
+    const received: string[] = [];
+    const output = new Writable({ write(chunk, _encoding, done) { received.push(String(chunk)); done(); } });
+    const sink = webProofMessageSink(output, 'sk-offline-secret', { directory: file, webRunId: 'journal-fixture' });
+    try {
+      sink({ type: 'result', result: { status: 'evaluated_passed', proof: 'theorem goal : True := by trivial',
+        report: { fixture: 'sk-offline-secret' } } });
+      expect(received.map(line => JSON.parse(line))).toEqual([{ type: 'result',
+        result: { status: 'evaluated_passed', proof: 'theorem goal : True := by trivial', report: { fixture: '[REDACTED]' } } }]);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
   it.each(['standard', 'mathlib'] as const)('keeps an unlimited %s explanation running until the user cancels', async environment => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-docker-explanation-'));
     fs.writeFileSync(path.join(root, 'docker'), `#!${process.execPath}

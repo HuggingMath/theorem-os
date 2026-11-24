@@ -209,7 +209,8 @@ export class WebJobs {
   cancel(owner: string, id: string): WebRun | undefined {
     const job = this.jobs.get(id);
     if (!job || job.owner !== owner) return undefined;
-    if (!terminal(job.run)) {
+    // The worker reports Lean acceptance before the runner finishes Docker cleanup.
+    if (!terminal(job.run) && job.run.result?.status !== 'evaluated_passed') {
       const queued = job.run.status === 'queued';
       job.run.status = 'cancelled'; job.run.phase = 'cancelled'; job.run.finishedAt = new Date().toISOString();
       delete job.run.queue;

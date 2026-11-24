@@ -60,10 +60,13 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       acceptedBaseVersions: [...(base ? [base.version] : []), ...(rebased ? [(action as { planVersion: string }).planVersion] : [])],
       rebased, restoring: !action, ...(rebased ? {} : { goalPath: this.goalPathReview() }) });
   }
-  protected planningInputDigest(omitLeadDrafts = false) {
-    const versions = new Map(this.archive.tasks.map(node => [node.task.id, digest(node.task)]));
+  protected planningInputDigest(scope: 'dispatch' | 'pause' | 'rejection' = 'dispatch') {
+    // Starting or checkpointing the same unresolved task does not give a rejected plan new evidence.
+    const taskStatus = (node: TaskRecord) => scope === 'rejection' && node.status === 'running' ? 'pending' : node.status;
+    const tasks = scope === 'rejection' ? this.archive.tasks.map(node => ({ ...node, status: taskStatus(node) })) : this.archive.tasks;
+    const versions = new Map(tasks.map(node => [node.task.id, digest(node.task)]));
     const deliveries = [...new Set((this.archive.deliveries ?? []).filter(record => record.status !== 'superseded' &&
-      !(omitLeadDrafts && record.producer === this.lead.id && record.kind === 'progress' &&
+      !(scope !== 'dispatch' && record.producer === this.lead.id && record.kind === 'progress' &&
         record.summary.startsWith('Saved Lead draft pending integration:')) &&
       (!record.taskId || versions.get(record.taskId) === record.taskDigest))
       .map(record => canonicalMathJson(deliveryInputFields(record))))].sort();
@@ -71,9 +74,9 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       environmentDigest: this.input.state.environmentDigest, planVersion: this.archive.planVersion,
       sourceDigest: ownedSourceDigest(this.input.state.problem, this.lead.worktree, this.archive.canonicalCommit!),
       liveWorkers: this.input.workers.filter(worker => this.liveWorkers.has(worker.id)).map(({ id, role }) => ({ id, role })),
-      progress: captureObligationSnapshot(this.archive.tasks, { groups: this.archive.groups,
+      progress: captureObligationSnapshot(tasks, { groups: this.archive.groups,
         environmentDigest: this.input.state.environmentDigest, proofRoutes: this.archive.proofRoutes, blockers: this.archive.blockers }).digest,
-      tasks: this.plannedTasks().map(node => ({ id: node.task.id, status: node.status, feedback: node.feedback })),
+      tasks: this.plannedTasks().map(node => ({ id: node.task.id, status: taskStatus(node), feedback: node.feedback })),
       deliveries }));
   }
   protected planningEvidenceDigest() {
@@ -99,7 +102,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     // has since advanced and would otherwise hide the finding that alone can wake the Lead. The immutable
     // content of peer publications is that evidence; a peer saving its notes mid-slice is work this Lead
     // already dispatched and must not re-open the turn on every checkpoint.
-    return mathDigest(canonicalMathJson({ inputDigest: this.planningInputDigest(true),
+    return mathDigest(canonicalMathJson({ inputDigest: this.planningInputDigest('pause'),
       evidenceDigest: this.planningEvidenceDigest(), planVersion: this.planVersion(),
       sourceDigest, notesDigest: mathDigest(notes) }));
   }
@@ -177,18 +180,20 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       return fs.existsSync(file) ? git(this.lead.worktree, ['hash-object', '--', file]) : 'missing';
     }
   }
-  protected rejectPlan(error: unknown, recoveryKind?: 'checkpoint' | 'request-failure' | 'scheduling-checkpoint') {
+  protected rejectPlan(error: unknown, recoveryKind?: 'checkpoint' | 'request-failure' | 'scheduling-checkpoint' | 'restore') {
     const reason = error instanceof Error ? error.message : 'math_plan_invalid';
     // Saving this same rejected draft is bookkeeping, not a new mathematical input for another retry.
-    const proposalDigest = this.proposedPlanDigest(), inputDigest = this.planningInputDigest(true);
+    const proposalDigest = this.proposedPlanDigest(), inputDigest = this.planningInputDigest('rejection');
     const previous = this.archive.planRejection;
     const stalled = previous?.proposalDigest === proposalDigest && previous.inputDigest === inputDigest && previous.error === reason;
+    // Restore can reread the same saved draft without a new Lead submission.
+    if (stalled && recoveryKind === 'restore') return;
     this.archive.error = reason;
     this.archive.planRejection = { proposalDigest, inputDigest, error: reason, stalled };
     // A repeated rejection of the same proposal for the same input answers its wake-ups; it is not new input.
     if (stalled) dropLeadWakes(this.archive.leadWakes!); else this.wakeLead('plan-rejected');
     this.input.emit('plan_rejected', { ...this.archive.planRejection,
-      ...(recoveryKind ? { incomplete: true, recoveryKind } : {}) });
+      ...(recoveryKind && recoveryKind !== 'restore' ? { incomplete: true, recoveryKind } : {}) });
   }
   protected async mergeLeadSources(commit: string, seedCommit: string, canonical = this.archive.canonicalCommit!) {
     const problem = this.input.state.problem;

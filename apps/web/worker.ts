@@ -20,13 +20,14 @@ import { runSolver } from '../../src/solver/run';
 import { readKnowledgeCatalog } from '../../src/solver/theoremKnowledgeStore';
 import { createWebProgressForwarder } from './progress';
 import { withoutCheckMarkers } from './report';
-import { webArtifactMaxBytes, webPreparationSeconds, type WebAgentActionBody, type WebArtifact, type WorkerInput, type WorkerMessage } from './shared';
+import { webArtifactMaxBytes, webPreparationSeconds, type WebAgentActionBody, type WebArtifact, type WorkerInput } from './shared';
 import { createAgentActionStream, sanitizeAgentItem } from './agentActions';
 import { createWebWorkerBridge, freezeWebKnowledge, writeWebActiveRun } from './workerBridge';
 import { webByokModuleIdentity } from './webModuleIdentity';
 import { webAgentLibraryAccess } from './frozenLibrary';
 import { runWebLibraryResearch } from './libraryResearch';
 import { webResearchArguments } from './researchMode';
+import { webProofMessageSink } from './proofJournal';
 import { bindWebWorkerProfile, pinWebWorkerSession, prepareWebNativeProfile, webHarnessEnvironment,
   webHarnessExecutable, webHarnessModel, webProviderHarness } from './harness';
 
@@ -261,8 +262,9 @@ async function main() {
   }
   const request = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))) as WorkerInput;
   const key = request.input.apiKey;
-  const send = (message: WorkerMessage) => process.stdout.write(
-    JSON.stringify(message).replaceAll(JSON.stringify(key).slice(1, -1), '[REDACTED]') + '\n');
+  const journalDirectory = process.env.THEOREMOS_WORKER_JOURNAL && fs.realpathSync(process.env.THEOREMOS_WORKER_JOURNAL);
+  const send = webProofMessageSink(process.stdout, key, journalDirectory
+    ? { directory: journalDirectory, webRunId: request.id } : undefined);
   const workspaceRoot = process.env.THEOREMOS_WORKER_ROOT || '/work';
   const directory = fs.mkdtempSync(path.join(workspaceRoot, 'run-'));
   let output = path.join(directory, 'result.json');
@@ -327,8 +329,8 @@ async function main() {
     const modules = webSolverModules(request, { sink: action => send({ type: 'action', action }), solverRunId: () => solverRunId,
       // The application, its build state (…/builds/<id>/manifest.json) and this run's directory: the other Agents' worktrees,
       // the Codex profile and the solver's state. An Agent's own worktree inside the run directory is shown relative.
-      hidden: [root, buildState, buildFile, directory, path.join(workspaceRoot, 'active-run.json')] },
-      { tools, hiddenRoots: [root, buildState] });
+      hidden: [root, buildState, buildFile, directory, path.join(workspaceRoot, 'active-run.json'), ...(journalDirectory ? [journalDirectory] : [])] },
+      { tools, hiddenRoots: [root, buildState, ...(journalDirectory ? [journalDirectory] : [])] });
     const completed = await runWebLibraryResearch({ directory, request, seed: receipt, output, continuationFile,
       libraryCatalog: webAgentLibraryAccess(environment.id), run: async round => {
       output = round.output;

@@ -157,10 +157,13 @@ describe('live Lead publication correction feedback', () => {
     'supplies the missing event envelope for a bare %s graph or patch', async kind => {
       prepare(kind);
       const action = await start(), before = structuredClone(state.cooperation);
-      const graph = kind === 'initial' ? { tasks: completePlan.tasks, groups: completePlan.groups } : { upsert: [helper] };
+      const graph = kind === 'initial' ? { tasks: completePlan.tasks, groups: completePlan.groups }
+        : { baseVersion: action.planVersion, upsert: [helper] };
       await publish(action, graph);
       expect(rejected()).toHaveLength(1);
-      expect(rejected()[0].details!.reason).toBe(kind === 'initial' ? 'math_initial_plan_invalid' : 'math_plan_publication_invalid');
+      expect(rejected()[0].details!.reason).toBe(kind === 'initial'
+        ? 'math_initial_plan_invalid: kind must be "plan", baseVersion must be the current plan version'
+        : 'math_plan_publication_invalid: kind must be "plan", dispatchNonce must match this Lead dispatch');
       expect(state.cooperation!.tasks).toEqual(before!.tasks);
       expect(state.cooperation!.planPublication).toBeUndefined();
       const message = notify.mock.calls[0][0];
@@ -196,11 +199,12 @@ describe('live Lead publication correction feedback', () => {
     const message = notify.mock.calls[0][0];
     expect(message).toContain('Current response template');
     const template = JSON.parse(message.split('the template itself is not a valid submission):\n')[1].split('\n')[0]);
-    expect(template).toMatchObject({ baseVersion: action.planVersion, upsert: [],
+    expect(template).toMatchObject({ kind: 'plan', dispatchNonce: nonce(action), baseVersion: action.planVersion, upsert: [],
       researchDecisions: [{ deliveryId: 'current-research-finding' }] });
+    expect(template).not.toHaveProperty('file');
     expect(state.cooperation!.researchDecisions).toBeUndefined();
     expect(state.cooperation!.planPublication).toBeUndefined();
-    await publish(action, { ...event(action), researchDecisions: [{ deliveryId: 'current-research-finding',
+    await publish(action, { ...template, upsert: [helper], researchDecisions: [{ deliveryId: 'current-research-finding',
       outcome: 'adopt', taskIds: [helper.id], reason: 'This exact helper closes the consumer obligation.' }] });
     expect(notify).toHaveBeenCalledOnce();
     expect(rejected()).toHaveLength(1);
@@ -209,6 +213,19 @@ describe('live Lead publication correction feedback', () => {
     expect(state.cooperation!.researchDecisions).toContainEqual(expect.objectContaining({
       deliveryId: 'current-research-finding', outcome: 'adopt' }));
     expect(state.cooperation!.tasks.every(node => !node.proof && !node.integratedCheck)).toBe(true);
+  });
+
+  it('names the malformed decision field before allowing another event in the same dispatch', async () => {
+    prepare();
+    const action = await start();
+    await publish(action, { ...event(action), nextCheckDecisions: [{ checkId: 'a'.repeat(64),
+      outcomeDeliveryId: 'a-current-outcome', action: 'pause', reason: 'Review this outcome.' }] });
+    const reason = rejected()[0].details!.reason as string;
+    expect(reason).toContain('math_plan_next_check_decisions_invalid: nextCheckDecisions[0].action:');
+    expectCorrection(notify.mock.calls[0][0], action, reason);
+    expect(state.cooperation!.planPublication).toBeUndefined();
+    await publish(action, event(action));
+    expect(state.cooperation!.planPublication).toMatchObject({ nonce: nonce(action) });
   });
 
   it('retries a failed notice without rereading the rejected event or changing its saved cursor', async () => {

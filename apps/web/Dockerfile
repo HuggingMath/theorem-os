@@ -49,7 +49,8 @@ RUN npm install --global @openai/codex@0.162.0 \
     && sh scripts/install-elan.sh \
     && elan toolchain install leanprover/lean4:v4.33.0 \
     && chmod -R a+rX /opt/elan \
-    && mkdir -p /work && chown 10001:10001 /work
+    && mkdir -p /work && chown 10001:10001 /work \
+    && install -d -o 10001 -g 10001 -m 0700 /var/theoremos-proof
 
 FROM worker-tools AS worker-mathlib
 RUN apt-get -o Acquire::Retries=3 update && apt-get install -y --no-install-recommends \

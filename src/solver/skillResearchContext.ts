@@ -66,7 +66,7 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
   if (access.knowledgeFile) {
     if (!access.knowledgeDigest || access.knowledgeDigest !== state.knowledgeDigest) throw new Error('math_knowledge_identity_changed');
   } else if (state.knowledgeDigest) throw new Error('math_knowledge_identity_missing');
-  const { command, help, leanCheckCommand } = buildResearchToolGuide(problem, access, state.environmentDigest,
+  const { command, help, leanCheckCommand, longCommandSummary } = buildResearchToolGuide(problem, access, state.environmentDigest,
     state.researchDelegation?.mode === 'team' ? state.agentTeam?.transport ?? 'host-tools' : undefined);
   const project = path.join(access.worktree, problem.projectRelative);
   const team = state.researchDelegation?.mode === 'team';
@@ -129,7 +129,7 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
       'Each investigator is archived before its result returns; the host stops the entire session tree on delivery. All provider requests share your total allowance.\n'
       : 'Native child delegation is disabled in this run.\n') +
     (leanCheckCommand ? `Lean check for an editable file (run from any directory):\n${leanCheckCommand}\n` : '') +
-    toolSummary + help.instruction(access.worktree) + mathematicsRuntimeInstruction(access.environment.DEEPSCIENTIST_MATH_ENV_FILE);
+    toolSummary + longCommandSummary + help.instruction(access.worktree) + mathematicsRuntimeInstruction(access.environment.DEEPSCIENTIST_MATH_ENV_FILE);
   const originalProblem: ContextSection = { id: 'original-problem', kind: 'problem',
     text: (teamWorker ? 'Frozen original problem (background for your current Lead assignment):\n' : '') + access.taskText + '\n\n' +
     JSON.stringify({ problemReceiptDigest: problem.receiptDigest, environmentDigest: state.environmentDigest,

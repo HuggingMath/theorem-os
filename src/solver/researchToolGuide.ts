@@ -7,6 +7,12 @@ import { ResearchToolHelpBuilder } from './researchToolHelp';
 
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
+export const longCommandGuidance =
+  'For a long calculation, record the inputs, print progress and save completed batches in .scratch/tmp. Use unbuffered output for Python (python3 -u). ' +
+  'With native exec_command, keep the session ID returned after a short yield_time_ms. Poll with write_stdin and empty chars. ' +
+  'Send Ctrl-C (U+0003) to that session before abandoning or replacing the calculation, then check that it has exited. ' +
+  'Keep progress on disk and note how to resume in RESEARCH.md when needed. If the shell cannot poll, run one resumable batch at a time.';
+
 /** Shared optional tool reference; callers retain their own mandatory delivery contracts. */
 export function buildResearchToolGuide(problem: Pick<SolverProblem, 'receiptDigest' | 'projectRelative' | 'targets' | 'ownedFiles' | 'frozenFiles'>,
   access: Pick<ContextAccess, 'root' | 'tools' | 'worktree' | 'retrievalRoot' | 'corpusFile' |
@@ -19,6 +25,16 @@ export function buildResearchToolGuide(problem: Pick<SolverProblem, 'receiptDige
   const leanCheckCommand = file && `${command} check-lean --worktree ${quote(access.worktree)} --file ${quote(file)} --timeout-seconds 0`;
   const report = teamTransport === 'native-agent-control' ? 'native send_message' :
     teamTransport === 'host-tools' ? 'theoremos_team ' + (access.teamRole?.role === 'worker' ? 'progress' : 'message') : undefined;
+  const longCommandSummary = help.section('long-commands', longCommandGuidance + '\n\n' +
+    'Start a foreground calculation and get control back while it runs.\n' +
+    'exec_command ' + JSON.stringify({ cmd: 'python3 -u .scratch/tmp/experiment.py', workdir: access.worktree,
+      login: false, yield_time_ms: 1000, max_output_tokens: 1000 }) + '\n' +
+    'Replace the example session ID with the one returned by exec_command.\n' +
+    'write_stdin ' + JSON.stringify({ session_id: 12345, chars: '', yield_time_ms: 5000, max_output_tokens: 1000 }) + '\n' +
+    'To interrupt just this command, send Ctrl-C.\n' +
+    'write_stdin ' + JSON.stringify({ session_id: 12345, chars: '\u0003', yield_time_ms: 1000, max_output_tokens: 1000 }) + '\n' +
+    'Before a handoff, collect finished outputs and settle any commands you are leaving. After a session restart, continue from completed batches.',
+    'Use a pollable session and saved progress for a long calculation.');
   help.section('lean', (file && leanCheckCommand ? `${leanCheckCommand}\n` +
     `Edit ${quote(path.join(problem.projectRelative, file))} from the worktree root; pass ${quote(file)} to --file. ` +
     (teamTransport ? 'To test a peer result, append --candidate followed by its actual message:, research: or delivery: reference to this single-file check. ' : '') : '') +
@@ -67,5 +83,5 @@ export function buildResearchToolGuide(problem: Pick<SolverProblem, 'receiptDige
   help.section('other-tools', `${command} --help lists available commands. Read COMMAND --help before using an unfamiliar interface. ` +
     'Use native web search when actually exposed. Finite checks, proof-search and kernel-certificate do not call a model or accept the original problem. ' +
     'Their exact input formats are available from their existing --help commands.', '');
-  return { command, help, leanCheckCommand };
+  return { command, help, leanCheckCommand, longCommandSummary };
 }

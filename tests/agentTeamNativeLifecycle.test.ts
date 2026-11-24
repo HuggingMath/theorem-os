@@ -437,6 +437,10 @@ describe('native AgentControl preserves the mathematical team lifecycle', () => 
     expect(worker.writerStopUnconfirmed).toBeUndefined();
     expect(f.state.agentTeam!.deliveries).toHaveLength(1);
     expect(worker.tasks[1].deliveryId).toBe(f.state.agentTeam!.deliveries[0].id);
+    expect(f.state.agentTeam!.events.find(event => event.kind === 'delivery')).toMatchObject({
+      deliveryId: worker.tasks[1].deliveryId,
+      text: expect.stringContaining('Lean checked NativeTeam.reusable.'),
+    });
     expect(f.state.phase).toBe('running');
   }, 70_000);
 

@@ -2,6 +2,9 @@ import type { WorkerFormalizationAuditInput } from './formalizationAuditTypes';
 import { spawn } from 'node:child_process';
 import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import type { WebConfig } from './config';
@@ -23,6 +26,8 @@ import { mathConstructionImports } from '../../src/math/mathConstructionSources'
 import { formalizationAuditResultSchema } from '../../src/math/formalizationAudit';
 import { webFormalizationPhases, webFormalizationReason, type WorkerFormalizationInput,
   type WorkerFormalizationMessage, type WorkerFormalizationAuditMessage } from './formalizationTypes';
+import { readMathText } from '../../src/math/mathRuntimeIo';
+import { webProofJournalDirectory, webProofJournalFiles } from './proofJournal';
 
 export type WebRunner = {
   readiness(): Promise<{ ready: boolean; message: string; nativeTeam?: boolean; nativeTeamPreferences?: boolean; nativeTeamExpertCards?: boolean }>;
@@ -101,6 +106,30 @@ export function parseWorkerMessage(line: string): WorkerMessage | undefined {
     const message = workerMessageSchema.safeParse(value);
     return message.success ? message.data as WorkerMessage : undefined;
   } catch { return undefined; }
+}
+
+/** Docker can copy a volume from a stopped container. Read before removing the worker. */
+async function readProofJournal(container: string, webRunId: string, signal: AbortSignal): Promise<WorkerMessage[]> {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-proof-journal-'));
+  const journal = path.join(directory, 'journal');
+  try {
+    await execute('docker', ['cp', `${container}:${webProofJournalDirectory}`, journal],
+      { signal, timeout: 15_000, maxBuffer: 8_192 });
+    const events: WorkerMessage[] = [];
+    for (const file of webProofJournalFiles) {
+      try {
+        const packet: unknown = JSON.parse(readMathText(path.join(journal, file), 16 * 1024 * 1024 + 4096));
+        if (!object(packet) || packet.webRunId !== webRunId || !Array.isArray(packet.messages)) continue;
+        for (const raw of packet.messages) {
+          const message = parseWorkerMessage(JSON.stringify(raw));
+          if (message) events.push(message);
+        }
+      } catch { /* Missing or interrupted checkpoint writes do not invalidate an available terminal receipt. */ }
+    }
+    return events;
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 const count = z.number().int().nonnegative().max(1e12);
@@ -301,7 +330,10 @@ export class DockerWebRunner implements WebRunner {
       '--tmpfs', '/work:rw,nosuid,nodev,size=536870912,uid=10001,gid=10001,mode=0700',
       '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=134217728,mode=1777',
       '--ulimit', 'nofile=1024:1024',
-      ...(mathlib ? ['--device=/dev/fuse:/dev/fuse:rw', '--mount', 'type=volume,destination=/var/tmp'] : []),
+      '--mount', `type=volume,destination=${webProofJournalDirectory}`,
+      '--env', `THEOREMOS_WORKER_JOURNAL=${webProofJournalDirectory}`,
+      ...(mathlib ? ['--device=/dev/fuse:/dev/fuse:rw', '--mount', 'type=volume,destination=/var/tmp']
+        : ['--tmpfs', '/var/tmp:rw,nosuid,nodev,size=536870912,uid=10001,gid=10001,mode=0700']),
       this.config.workerImage, environment];
     // Create first so cancellation always has a known container to remove.
     try {
@@ -318,8 +350,12 @@ export class DockerWebRunner implements WebRunner {
       const child = spawn('docker', ['start', '--attach', '--interactive', name], { stdio: ['pipe', 'pipe', 'ignore'] });
       this.active.add(input.id);
       let buffer = '', finished = false, receivedResult = false;
+      let workerError: Error | undefined;
+      let observedSequence = 0, libraryRound = 0, artifactAt = '';
+      let recovery: AbortController | undefined;
       let stopping: Promise<void> | undefined;
       const stop = () => stopping ??= (async () => {
+        recovery?.abort();
         // Capture the actual saved checkpoint and source evidence before deleting the container.
         try {
           const captured = await this.command(input.id, { type: 'capture' });
@@ -344,6 +380,27 @@ export class DockerWebRunner implements WebRunner {
         await stopping;
         if (error) reject(error); else resolve();
       };
+      const forward = (message: WorkerMessage) => {
+        if (input.input.planApproval && message.type === 'progress') {
+          if (message.event === 'plan_approval_wait_started') watchdog.setWaiting(true);
+          else if (message.event === 'plan_approval_wait_ended') watchdog.setWaiting(false);
+        }
+        if (message.type === 'result') receivedResult = true;
+        if (message.type === 'error') workerError = new Error(message.message);
+        if (message.type === 'library_restart') {
+          if (message.round <= libraryRound) return;
+          libraryRound = message.round;
+        }
+        if (message.type === 'observation') {
+          if (message.observation.webRunId !== input.id || message.observation.sequence <= observedSequence) return;
+          observedSequence = message.observation.sequence;
+        }
+        if (message.type === 'artifact') {
+          if (message.artifact.capturedAt <= artifactAt) return;
+          artifactAt = message.artifact.capturedAt;
+        }
+        onMessage(message);
+      };
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', chunk => {
         buffer += chunk;
@@ -353,19 +410,31 @@ export class DockerWebRunner implements WebRunner {
           if (newline < 0) break;
           const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
           const message = parseWorkerMessage(line);
-          if (message) {
-            if (input.input.planApproval && message.type === 'progress') {
-              if (message.event === 'plan_approval_wait_started') watchdog.setWaiting(true);
-              else if (message.event === 'plan_approval_wait_ended') watchdog.setWaiting(false);
-            }
-            if (message.type === 'result') receivedResult = true;
-            onMessage(message);
-          }
+          if (message) forward(message);
         }
       });
       child.stdin.on('error', () => {});
       child.once('error', () => { void finish(new Error('无法启动隔离运行环境。')); });
-      child.once('close', () => { void finish(!signal.aborted && !receivedResult ? new Error('运行环境已退出，未返回验收结果。') : undefined); });
+      child.once('close', () => {
+        if (finished) return;
+        if (signal.aborted || receivedResult) { void finish(); return; }
+        if (workerError) { void finish(workerError); return; }
+        const missingResult = new Error('运行环境已退出，未返回验收结果。');
+        if (stopping) { void finish(missingResult); return; }
+        recovery = new AbortController();
+        const recoverySignal = recovery.signal;
+        void (async () => {
+          try {
+            // Losing Docker's attach process says nothing about the solver's lifetime.
+            await execute('docker', ['wait', name], { signal: recoverySignal, maxBuffer: 8_192 });
+            for (const message of await readProofJournal(name, input.id, recoverySignal)) {
+              if (signal.aborted || stopping) break;
+              forward(message);
+            }
+            await finish(signal.aborted || receivedResult ? undefined : workerError ?? missingResult);
+          } catch { await finish(signal.aborted ? undefined : missingResult); }
+        })();
+      });
       // Credentials travel over the private input pipe, never Docker args, env or logs.
       child.stdin.end(JSON.stringify(input) + '\n');
       if (signal.aborted) abort();

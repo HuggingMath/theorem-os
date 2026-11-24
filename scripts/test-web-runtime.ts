@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { WebJobs } from '../apps/web/jobs';
 import { DockerWebRunner } from '../apps/web/runner';
+import { webProofJournalDirectory } from '../apps/web/proofJournal';
 import { webTemplates } from '../apps/web/config';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import { buildTheoremKnowledge } from '../src/solver/theoremKnowledge';
@@ -39,19 +40,22 @@ export function assertWebContainerBoundary(inspectJson: string, apiKey: string, 
   assert.equal(container.HostConfig.Binds?.length || 0, 0, 'Worker containers must not bind any host paths or Docker sockets.');
   assert.ok(!container.Mounts?.some((mount: { Type?: string }) => mount.Type === 'bind'), 'Inspect mounts must not contain host binds.');
   const volumes = container.Mounts?.filter((mount: { Type?: string }) => mount.Type === 'volume') || [];
+  const destinations = environment === 'mathlib' ? [webProofJournalDirectory, '/var/tmp'] : [webProofJournalDirectory];
+  assert.deepEqual(volumes.map((volume: { Destination: string }) => volume.Destination).sort(), destinations.sort(),
+    'Each worker must own the proof journal and only its environment-specific volumes.');
+  for (const volume of volumes) {
+    assert.equal(volume.Driver, 'local');
+    assert.equal(volume.RW, true);
+    assert.match(volume.Name, /^[a-f0-9]{64}$/, 'The worker volume must use a Docker-generated anonymous name.');
+  }
   if (environment === 'mathlib') {
     assert.equal(container.HostConfig.Devices?.length, 1, 'The worker must receive only its FUSE device.');
     assert.equal(container.HostConfig.Devices[0].PathOnHost, '/dev/fuse', 'The worker must not receive unrelated host devices.');
     assert.equal(container.HostConfig.Devices[0].PathInContainer, '/dev/fuse');
     assert.equal(container.HostConfig.Devices[0].CgroupPermissions, 'rw', 'FUSE access must not grant device creation.');
-    assert.equal(volumes.length, 1, 'Each Mathlib worker must own one anonymous verification volume.');
-    assert.equal(volumes[0].Destination, '/var/tmp');
-    assert.equal(volumes[0].Driver, 'local');
-    assert.equal(volumes[0].RW, true);
-    assert.match(volumes[0].Name, /^[a-f0-9]{64}$/, 'The verification volume must have a Docker-generated anonymous name.');
   } else {
     assert.equal(container.HostConfig.Devices?.length || 0, 0, 'Standard-library workers must not receive host devices.');
-    assert.equal(volumes.length, 0, 'Standard-library workers must not receive persistent volumes.');
+    assert.ok(container.HostConfig.Tmpfs?.['/var/tmp'], 'Standard-library checks need a private writable cache directory.');
   }
   assert.ok(container.HostConfig.Tmpfs?.['/work'], 'The isolated work directory must be temporary.');
   assert.ok(container.HostConfig.Tmpfs?.['/tmp'], 'The isolated temporary directory must be temporary.');
@@ -220,7 +224,7 @@ export async function runWebRuntimeSmoke(argv = process.argv.slice(2)) {
           const inspected = await docker(['volume', 'inspect', name]);
           const volume = JSON.parse(inspected.stdout)[0];
           assert.equal(volume.Driver, 'local');
-          assert.ok(!volume.Options || Object.keys(volume.Options).length === 0, 'An anonymous verification volume must not bind a host directory.');
+          assert.ok(!volume.Options || Object.keys(volume.Options).length === 0, 'An anonymous worker volume must not bind a host directory.');
         }
         jobs.cancel(owner, run.id);
         assert.equal(run.status, 'cancelled');

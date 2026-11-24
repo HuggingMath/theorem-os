@@ -1076,7 +1076,11 @@ export class AgentResearchTeam {
       if (!this.archive.deliveries.some(item => item.id === delivery.id)) this.archive.deliveries.push({
         id: delivery.id, agentId: worker.id, taskId: task.id, path: path.join(this.directory, 'proofs/deliveries', delivery.id + '.json') });
       worker.pendingDelivery = undefined; worker.pendingSourceBase = undefined; worker.pendingPeerDeliveries = undefined;
-      this.event(worker.id, 'lead', 'delivery', task.summary ?? 'Checked declarations ready for adoption.',
+      const ready = delivery.declarations.slice(0, 8).map(item => item.name).join(', ');
+      const more = delivery.declarations.length - 8;
+      const checked = 'Lean checked ' + ready + (more > 0 ? ' and ' + more + ' more' : '') +
+        '. Use inspect with this deliveryId for exact types and evidence, then adopt into the workspace that needs the declarations.';
+      this.event(worker.id, 'lead', 'delivery', checked + (task.summary ? '\n' + task.summary : ''),
         { taskId: task.id, deliveryId: delivery.id, researchArtifactId: task.researchArtifactId });
     } catch (error) {
       // Keep infrastructure failures pending; deterministic proof feedback is correctable by another explicit assignment.

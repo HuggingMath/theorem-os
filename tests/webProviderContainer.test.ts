@@ -6,9 +6,10 @@ const fixture = (environment: 'standard' | 'mathlib' = 'standard') => [{ State: 
   Cmd: null as string[] | null, Entrypoint: ['bun', 'apps/web/worker.ts'] },
   HostConfig: { ReadonlyRootfs: true, CapDrop: ['ALL'], Privileged: false, Memory: (environment === 'mathlib' ? 8 : 4) * 1024 ** 3,
     MemorySwap: (environment === 'mathlib' ? 8 : 4) * 1024 ** 3, PidsLimit: 256, NanoCpus: 2e9, SecurityOpt: ['no-new-privileges'],
-    Binds: null, Tmpfs: { '/work': 'rw', '/tmp': 'rw' }, MaskedPaths: [] as string[],
+    Binds: null, Tmpfs: { '/work': 'rw', '/tmp': 'rw', ...(environment === 'standard' ? { '/var/tmp': 'rw' } : {}) }, MaskedPaths: [] as string[],
     ReadonlyPaths: [] as string[], PidMode: '', Devices: environment === 'mathlib' ? [{ PathOnHost: '/dev/fuse', PathInContainer: '/dev/fuse', CgroupPermissions: 'rw' }] : [] },
-  Mounts: (environment === 'mathlib' ? [{ Type: 'volume', Name: 'a'.repeat(64), Driver: 'local', RW: true, Source: '/docker/volumes/fixture', Destination: '/var/tmp' }] : []) as
+  Mounts: [{ Type: 'volume', Name: 'b'.repeat(64), Driver: 'local', RW: true, Source: '/docker/volumes/journal', Destination: '/var/theoremos-proof' },
+    ...(environment === 'mathlib' ? [{ Type: 'volume', Name: 'a'.repeat(64), Driver: 'local', RW: true, Source: '/docker/volumes/fixture', Destination: '/var/tmp' }] : [])] as
     { Type: string; Name?: string; Driver?: string; RW?: boolean; Source: string; Destination: string }[] }];
 
 describe('offline web runtime container inspection assertions', () => {
@@ -54,8 +55,8 @@ describe('offline web runtime container inspection assertions', () => {
     metadata[0].HostConfig.Devices[0].CgroupPermissions = 'rwm';
     expect(() => assertWebContainerBoundary(JSON.stringify(metadata), key, 'mathlib')).toThrow('must not grant device creation');
   });
-  it('returns only the worker anonymous verification volume name for cleanup verification', () => {
-    expect(assertWebContainerBoundary(JSON.stringify(fixture('mathlib')), key, 'mathlib')).toEqual(['a'.repeat(64)]);
+  it('returns both anonymous worker volume names for cleanup verification', () => {
+    expect(assertWebContainerBoundary(JSON.stringify(fixture('mathlib')), key, 'mathlib')).toEqual(['b'.repeat(64), 'a'.repeat(64)]);
     const metadata = fixture('mathlib');
     metadata[0].Mounts[0].Destination = '/var/run/docker.sock';
     expect(() => assertWebContainerBoundary(JSON.stringify(metadata), key, 'mathlib')).toThrow();

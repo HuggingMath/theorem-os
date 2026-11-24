@@ -151,14 +151,19 @@ export function visibleNextChecks(state: State, viewer?: CooperativeTask) {
 export function parseNextCheckDecisions(value: unknown): NextCheckDecision[] | undefined {
   if (!value || typeof value !== 'object' || !Object.hasOwn(value, 'nextCheckDecisions')) return;
   const input = (value as { nextCheckDecisions: unknown }).nextCheckDecisions;
-  if (!Array.isArray(input) || input.length > 32) throw new Error('math_plan_next_check_decisions_invalid');
-  const decisions = input.map(item => {
+  const errorCode = 'math_plan_next_check_decisions_invalid';
+  if (!Array.isArray(input) || input.length > 32) throw new Error(errorCode + ': nextCheckDecisions must be an array of at most 32 decisions');
+  const decisions = input.map((item, index) => {
     const parsed = nextCheckDecisionSchema.safeParse(item);
-    if (!parsed.success) throw new Error('math_plan_next_check_decisions_invalid');
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0]!;
+      const field = `nextCheckDecisions[${index}]` + issue.path.map(key => '.' + String(key)).join('');
+      throw new Error(`${errorCode}: ${field}: ${issue.message}`);
+    }
     return parsed.data;
   });
   if (new Set(decisions.map(item => item.checkId)).size !== decisions.length)
-    throw new Error('math_plan_next_check_decisions_invalid');
+    throw new Error(errorCode + ': each checkId must appear once in nextCheckDecisions');
   return decisions;
 }
 

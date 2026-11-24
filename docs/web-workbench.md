@@ -543,7 +543,7 @@ bun scripts/test-web-runtime.ts
 
 在 Linux 服务器按上述命令构建或拉取 GHCR 镜像并运行，再用 Nginx / Caddy 将 HTTPS 域名反向代理至 `127.0.0.1:8787`。设置 `THEOREMOS_WEB_PUBLIC_URL=https://research.example.com`，保留原始 Host 请求头。服务设置 Secure / HttpOnly / SameSite Cookie，并检查请求来源与 CSRF token。不要在反向代理中记录请求体；其中包含访客 Key。
 
-Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删除运行容器；请将它部署在用于此产品的受控宿主机上。Worker 不挂载该 socket 或宿主目录，以 UID 10001 和只读根文件系统运行。每次 Mathlib 运行只映射 `/dev/fuse:rw`，并创建一个挂载到 `/var/tmp` 的匿名 local 磁盘卷供准备验证环境；正常结束、取消和失败清理均使用 `docker rm --volumes`。标准库 worker 不映射设备，也不创建磁盘卷。
+Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删除运行容器。请将它部署在用于此产品的受控宿主机上。Worker 以 UID 10001 和只读根文件系统运行，不挂载 Docker socket 或宿主目录。每次证明运行有一个挂载到 `/var/theoremos-proof` 的独立磁盘卷。Worker 在这里覆盖保存脱敏后的最新候选、观测和终局回执。Docker 输出连接中断时，supervisor 等待容器结束，从卷中读回回执，再清理容器和磁盘卷。求证工作区使用 `/work` 的临时文件系统，模型服务密钥经标准输入传入。标准库运行使用 `/var/tmp` 的临时文件系统存放 Lean 检查缓存。Mathlib 运行映射 `/dev/fuse:rw`，并使用挂载到 `/var/tmp` 的匿名磁盘卷准备验证环境。
 
 为嵌套的非特权 Bubblewrap 验证器，worker 放开容器 seccomp / AppArmor profile，并使用 `systempaths=unconfined` 允许在独立 PID 命名空间内挂载新的 procfs。Mathlib 入口的外层 Bubblewrap 在新 user namespace 内仅授予 `SYS_ADMIN` 和 `SETFCAP`，用于构造冻结的依赖环境；Docker 容器仍保留 `--cap-drop=ALL`、`no-new-privileges` 和资源限制，不共享宿主机 PID 命名空间。`/tmp` 的 tmpfs 显式启用 `exec`，供验证器运行临时 Lean 启动脚本，并保留 `nosuid,nodev`。宿主机需要支持这一隔离方式；不支持时应修正宿主机配置，不能跳过 Lean 验证隔离。
 

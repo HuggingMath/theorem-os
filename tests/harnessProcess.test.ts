@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { confirmHarnessProcessStopped, prepareHarnessProcess, type HarnessProcessIdentity } from '../src/runtime/harnessProcess';
 
@@ -49,6 +50,26 @@ describe('shared native harness process isolation', () => {
       if(child.status===0) process.exit(9);`, [secret, directory]);
     expect(result.status, result.stderr).toBe(0);
     expect(fs.readFileSync(secret, 'utf8')).toBe('hidden file');
+  });
+
+  it('lets a Mathlib writer start a nested sandbox without exposing its hidden roots', () => {
+    const canary = path.join(outside, 'canary');
+    fs.writeFileSync(canary, 'private');
+    const moduleFile = fileURLToPath(new URL('../src/runtime/harnessProcess.ts', import.meta.url));
+    const result = spawnSync('/usr/bin/bwrap', ['--die-with-parent', '--unshare-user', '--uid', '0', '--gid', '0',
+      '--cap-add', 'CAP_SYS_ADMIN', '--cap-add', 'CAP_SETFCAP', '--bind', '/', '/', '--dev-bind', '/dev', '/dev', '--proc', '/proc',
+      '--', 'bun', '-e', `
+        import { spawnSync } from 'node:child_process';
+        import { prepareHarnessProcess } from ${JSON.stringify(moduleFile)};
+        const workspace = ${JSON.stringify(workspace)};
+        const launch = prepareHarnessProcess({ workspace, profile: ${JSON.stringify(profile)}, hiddenRoots: [${JSON.stringify(outside)}] },
+          '/usr/bin/bwrap', ['--die-with-parent', '--unshare-user', '--unshare-pid', '--unshare-ipc', '--unshare-net',
+            '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--cap-drop', 'ALL', '--bind', workspace, workspace,
+            '--', '/bin/sh', '-ec', 'test ! -r "$1"; printf draft > proof.lean', 'nested', ${JSON.stringify(canary)}]);
+        process.exit(spawnSync(launch.command, launch.args, { env: launch.env, stdio: 'inherit' }).status ?? 1);
+      `], { encoding: 'utf8', timeout: 10_000 });
+    expect(result.status, result.stderr).toBe(0);
+    expect(fs.readFileSync(path.join(workspace, 'proof.lean'), 'utf8')).toBe('draft');
   });
 
   it('masks a missing hidden path at its existing parent and rejects workspace overlap', () => {

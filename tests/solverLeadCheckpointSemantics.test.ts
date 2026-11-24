@@ -245,7 +245,9 @@ describe('Lead scheduling checkpoint control responses', () => {
     const reminder = cooperative.leadCheckpointInstruction(action);
     expect(reminder).toContain('researchDecisions: ["proposal-delivery"]');
     expect(reminder).toContain('task graph stays unchanged');
-    expect(reminder).toContain(JSON.stringify({ baseVersion: action.planVersion, upsert: [] }));
+    expect(JSON.parse(reminder.match(/Current response template[^\n]*\n([^\n]+)\n/u)![1])).toMatchObject({
+      kind: 'plan', dispatchNonce: action.planNonce, baseVersion: action.planVersion, upsert: [],
+    });
     expect(reminder).not.toContain('return without a revision');
     await checkpoint(action);
     expect(state.cooperation!.researchDecisions).toContainEqual(expect.objectContaining({

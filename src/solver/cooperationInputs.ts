@@ -314,9 +314,14 @@ export abstract class CooperationInputs extends CooperationPlanning {
                   this.changed();
                 });
               } else {
-                if (!response || typeof response !== 'object' || Array.isArray(response) || response.kind !== 'plan' ||
-                    typeof response.baseVersion !== 'string' || !initial && response.dispatchNonce !== nonce)
-                  throw new Error(code('invalid'));
+                if (!response || typeof response !== 'object' || Array.isArray(response))
+                  throw new Error(code('invalid') + ': expected a JSON object');
+                const fields: string[] = [];
+                if (response.kind !== 'plan') fields.push('kind must be "plan"');
+                if (typeof response.baseVersion !== 'string') fields.push('baseVersion must be the current plan version');
+                if ((!initial || response.dispatchNonce !== undefined) && response.dispatchNonce !== nonce)
+                  fields.push('dispatchNonce must match this Lead dispatch');
+                if (fields.length) throw new Error(code('invalid') + ': ' + fields.join(', '));
                 const details = deliveryDetails(response);
                 await this.input.exclusiveCheck(async () => {
                   const publication = this.archive.planPublication ?? this.archive.initialPlanPublication;

@@ -5,6 +5,7 @@ import { CooperativeResearch } from '../src/solver/cooperation';
 import { directSolverModules, type SolverModules } from '../src/solver/modules';
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import type { SolverProblem } from '../src/solver/problem';
+import { setTaskStatus } from '../src/solver/taskLifecycle';
 import { parseCooperationPlan } from '../src/solver/tasks';
 import { answeredGoalPathStall, cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
@@ -69,6 +70,29 @@ describe('idle original-goal frontier', () => {
     expect(action).not.toHaveProperty('recovery');
     expect(action).not.toHaveProperty('coordination');
     expect(events.some(item => item.event === 'routes_idle')).toBe(false);
+  });
+
+  it('waits on a stalled plan when a task starts, then reopens planning on new feedback', async () => {
+    const fixture = create(true);
+    state.cooperation!.planVersion = (fixture as any).planVersion();
+    const goal = state.cooperation!.tasks[0];
+    setTaskStatus(goal, 'pending', 'reopened');
+    const reason = new Error('math_plan_changed_original_target');
+    (fixture as any).rejectPlan(reason);
+    const first = state.cooperation!.planRejection!;
+    expect(first.stalled).toBe(false);
+
+    setTaskStatus(goal, 'running', 'dispatched');
+    (fixture as any).rejectPlan(reason);
+    expect(state.cooperation!.planRejection).toMatchObject({ inputDigest: first.inputDigest, stalled: true });
+
+    const waiting = vi.spyOn(fixture as any, 'waitForDispatch');
+    const lead = fixture.next(workers[0], budget);
+    expect(waiting).toHaveBeenCalledOnce();
+    setTaskStatus(goal, 'blocked', 'rejected');
+    goal.feedback = 'The saved proof exposed an unavailable premise.';
+    (fixture as any).changed();
+    await expect(lead).resolves.toMatchObject({ kind: 'lead' });
   });
 
   it.each([

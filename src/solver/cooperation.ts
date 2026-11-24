@@ -38,7 +38,7 @@ import { assignmentDeliveryFile, isDefinitionTask, isFeasibilityReview, taskGrou
 import { consumeLeadWakes, dropLeadWakes, LEAD_MAX_BACKOFF, leadWakePending, settleLeadWakes } from './leadWakes';
 import { idlePeerEpisode, idlePeersAwaitingLead, IDLE_PEER_WAKE_MS, leadInbox, leadInboxBasis, NO_WORK_STAGES, type LeadInboxBasis } from './leadInbox';
 import { restoreResidue } from './stateInvariants';
-import { digest, directDeliveryRejections, isTaskSourceRepairFeedback, rejectionCode, CooperationState, TaskVersions, DispatchBudget, RETRY_DISPATCH, DispatchResult, bounded } from './cooperationShared';
+import { digest, directDeliveryRejections, isTaskSourceRepairFeedback, leadPlanPublicationTarget, rejectionCode, CooperationState, TaskVersions, DispatchBudget, RETRY_DISPATCH, DispatchResult, bounded } from './cooperationShared';
 import { CooperationInputs } from './cooperationInputs';
 import { ResearchAdmissionError } from './researchAdmission';
 export { parseCooperationPlan } from './tasks';
@@ -340,7 +340,7 @@ export class CooperativeResearch extends CooperationInputs {
       try {
         const rejection = this.archive.planRejection;
         if (!rejection?.stalled || rejection.proposalDigest !== this.proposedPlanDigest() ||
-            rejection.inputDigest !== this.planningInputDigest()) {
+            rejection.inputDigest !== this.planningInputDigest('rejection')) {
           const plan = this.readLeadPlan();
           const initial = !this.archive.tasks.length;
           // Host-synced notes describe the accepted graph, not a new answer to findings that
@@ -353,7 +353,7 @@ export class CooperativeResearch extends CooperationInputs {
           if (!inherited) await this.acceptPlan(plan);
           if (initial) dropLeadWakes(this.archive.leadWakes!);
         }
-      } catch (error) { this.rejectPlan(error); }
+      } catch (error) { this.rejectPlan(error, 'restore'); }
     }
     if (!solverSourceFeedback(this.input.state.problem, this.lead.worktree)) {
       await this.restoreLeadSources();
@@ -465,7 +465,7 @@ export class CooperativeResearch extends CooperationInputs {
     const owedIdle = (wakes.recent ?? []).some(item => item.reason === 'peers-idle' && item.seq > wakes.consumed && item.seq <= through);
     const rejection = this.archive.planRejection;
     if (rejection?.stalled && !owedProgress) {
-      if (rejection.inputDigest === this.planningInputDigest(true) && rejection.proposalDigest === this.proposedPlanDigest()) {
+      if (rejection.inputDigest === this.planningInputDigest('rejection') && rejection.proposalDigest === this.proposedPlanDigest()) {
         dropLeadWakes(wakes, through);
         if (!running && !this.canAdvance()) {
           if (this.input.continuousResearch) return this.idleFrontier(this.activeGoalFrontier(), rejection.inputDigest);
@@ -582,14 +582,12 @@ export class CooperativeResearch extends CooperationInputs {
       JSON.stringify(obligations.nextCheckOutcomes.map(record => ({ checkId: record.id,
         outcomeDeliveryId: record.outcome?.deliveryId }))) + '.');
     if (obligations.feedback) required.push('Repair the current host plan validation feedback; an unchanged saved draft does not answer it.');
-    const revision = this.archive.tasks.length && action.planVersion
-      ? ' When the task graph stays unchanged, start the decision-only revision with ' +
-        JSON.stringify({ baseVersion: action.planVersion, upsert: [] }) +
-        ' and include the required researchDecisions, progressReview or nextCheckDecisions in that same JSON object. ' +
-        'A decision without tasks or upsert/remove is not a plan revision. '
-      : ' Include a complete tasks array and the required decisions in the same JSON object; an initial plan cannot use upsert/remove. ';
+    const target = this.publishedPlans.has(action) ? undefined : leadPlanPublicationTarget(action);
+    const { file, ...envelope } = target ?? {};
+    const revision = Boolean(this.archive.tasks.length && action.planVersion);
     const response = {
-      ...(this.archive.tasks.length && action.planVersion ? { baseVersion: action.planVersion, upsert: [] }
+      ...envelope,
+      ...(revision ? { baseVersion: action.planVersion, upsert: [] }
         : { tasks: ['<complete task definitions covering every original target>'] }),
       ...(obligations.research ? { researchDecisions: obligations.researchInputs.map(record => ({
         deliveryId: record.id, outcome: '<choose adopt, source or decline>', reason: '<specific mathematical reason>',
@@ -605,8 +603,14 @@ export class CooperativeResearch extends CooperationInputs {
         action: '<choose continue, revise or stop>', reason: '<specific mathematical reason>',
       })) } : {}),
     };
-    return 'Save or publish a validated math-plan revision as your instructions describe before returning. ' + required.join(' ') +
-      revision + 'Current response template (replace every angle-bracket placeholder with your own decision; ' +
+    const destination = file
+      ? `Publish the following complete event as a single JSON line in ${file}. Keep kind, dispatchNonce and baseVersion from the template. ` +
+        'If you return using RESEARCH.md instead, save the same decision in its math-plan fence without the publication fields kind and dispatchNonce. '
+      : 'Save the current decision in a math-plan fence in RESEARCH.md before returning. ';
+    const schema = revision
+      ? 'Use upsert:[] when the task graph stays unchanged, and include the required decisions in the same object. '
+      : 'Include a complete tasks array and the required decisions in the same object. ';
+    return destination + required.join(' ') + ' ' + schema + 'Current response template (replace every angle-bracket placeholder with your own decision; ' +
       'the template itself is not a valid submission):\n' + JSON.stringify(response) + '\n' +
       (obligations.research ? 'For research adoption add taskIds naming newly added or substantively changed tasks; ' +
         'for source add sourcePaths naming changed owned Lean files. ' : '') +

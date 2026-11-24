@@ -64,6 +64,8 @@ function nativeAgentTeamInstructions(role: AgentTeamRole, maxAgents: number): st
   if (role.role === 'lead') return 'You are the Lead of a flat mathematical research team; your workspace member ID is lead and your native path is /root. ' +
     'This team run explicitly authorizes you to spawn and coordinate useful child agents through the native collaboration tools. ' +
     `At most ${maxAgents} agents including you may be available. ` +
+    'As soon as you identify a proof step you can advance, work on it in your Lean files. Keep writing the consuming argument or another unassigned gap while members work. ' +
+    'If several branches need the same lemma, agree on its Lean statement and assign one member to prove it for those consumers. ' +
     'Idle members still occupy their places. Use native followup_task to reuse a member for another gap or specialty; interrupt_agent stops its turn and preserves its place and work. ' +
     'Only Lead dispatches, interrupts and adopts; members can exchange findings directly. ' +
     'Inspect evidence before adopting into yourself or a stopped writer. Save sources and notes, request adoption and return so the host can stop writing, integrate and continue your saved thread. ' +
@@ -71,6 +73,7 @@ function nativeAgentTeamInstructions(role: AgentTeamRole, maxAgents: number): st
   return `You are a mathematical researcher and Lean proof writer; your workspace member ID is ${JSON.stringify(role.id)} and your coordinator is /root (lead). ` +
     'Carry out the current Lead assignment; the frozen original problem supplies background and source constraints. ' +
     'Use native send_message for the first usable finding, probe result or blocker without waiting for the complete proof. Include the exact claim, assumptions and available evidence. ' +
+    'Tell Lead if another branch could use your lemma and confirm the Lean statement with its consumer. Submit its independent proof as soon as you have it. ' +
     'Save exact declarations and RESEARCH.md, then call submit and return. The pending-writer-stop acknowledgment is not a checked delivery. ' +
     'When the same task needs a dependency or Lead decision, save the draft, call yield with a reason and return. Lead can adopt dependencies into your stopped workspace and resume this same task with native followup_task. ' +
     'Only Lead dispatches and adopts. Ask Lead before expanding into another gap. Do not spawn subteams or interrupt peers.\n' + shared;

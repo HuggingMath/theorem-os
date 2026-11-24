@@ -116,6 +116,12 @@ export function prepareHarnessProcess(options: Pick<MathAgentOptions, 'workspace
   const masks = hidden.filter(root => !hidden.some(parent => parent !== root && isMathPathWithin(parent, root)));
   const args = ['--die-with-parent', '--unshare-pid', '--unshare-ipc', '--new-session', '--cap-drop', 'ALL',
     '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev'];
+  if (process.getuid?.() === 0) {
+    // The Mathlib supervisor is root only in its FUSE user namespace. Give the
+    // writer a non-root UID so Codex can create its own sandbox after we drop
+    // capabilities. Linux requires CAP_SETFCAP to map the parent namespace's UID 0.
+    args.push('--unshare-user', '--uid', '10001', '--gid', '10001');
+  }
   if (infoDescriptor !== undefined) {
     if (!Number.isSafeInteger(infoDescriptor) || infoDescriptor < 3) throw new Error('math_harness_info_descriptor_invalid');
     args.push('--info-fd', String(infoDescriptor));

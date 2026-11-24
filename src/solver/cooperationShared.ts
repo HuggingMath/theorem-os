@@ -164,14 +164,22 @@ export type DispatchResult = CooperativeAction | typeof RETRY_DISPATCH | undefin
 
 export const bounded = (text: string, bytes: number) => limitMathOutput(text, bytes, 'head');
 
+/** The current dispatch owns both the JSONL destination and its event envelope. */
+export function leadPlanPublicationTarget(action: CooperativeAction | undefined) {
+  if (action?.kind !== 'lead') return;
+  const file = leadPlanDeliveryFile(action), nonce = action.initialPlanNonce ?? action.planNonce;
+  if (!file || !nonce || !action.planVersion) return;
+  return { file, kind: 'plan' as const, dispatchNonce: nonce, baseVersion: action.planVersion };
+}
+
 /** Reuse the saved diagnostic across turns while always targeting the current dispatch. */
 export function leadPlanPublicationFeedback(action: CooperativeAction | undefined,
   state: Pick<CooperationState, 'planVersion' | 'planPublicationRejection'>): string | undefined {
-  const rejection = state.planPublicationRejection, file = action && leadPlanDeliveryFile(action);
-  if (action?.kind !== 'lead' || !file || !rejection || rejection.baseVersion !== state.planVersion) return;
+  const rejection = state.planPublicationRejection, target = leadPlanPublicationTarget(action);
+  if (!target || !rejection || rejection.baseVersion !== state.planVersion) return;
   return 'Host rejected a Lead publication before accepting it:\n' + JSON.stringify(rejection) + '\n' +
     'Correct the reported error and append a new complete JSON event using the current publication target: ' +
-    JSON.stringify({ file, kind: 'plan', dispatchNonce: action.initialPlanNonce ?? action.planNonce, baseVersion: action.planVersion }) + '. ' +
+    JSON.stringify(target) + '. ' +
     'Preserve the log and use the current assignment protocol; a saved rejection may come from an earlier dispatch. ' +
     'Keep kind:"plan", baseVersion and any dispatchNonce at the top level of the same event as tasks or upsert/remove; ' +
     'a bare plan patch is not a publication event. Only the first valid publication in a dispatch is accepted. This intake feedback grants no proof acceptance.';

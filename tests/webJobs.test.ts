@@ -394,6 +394,21 @@ describe('web job ownership, scheduling and secret lifetime without provider cal
     expect(next.status).toBe('completed');
   });
 
+  it('preserves Lean acceptance when cancellation arrives during worker cleanup', async () => {
+    const { jobs, runner } = setup();
+    const run = jobs.create('owner', input(), provider);
+    await tick();
+    const call = runner.calls[0];
+    call.send({ type: 'result', result: result() });
+    try {
+      jobs.cancel('owner', run.id);
+      expect(call.signal.aborted).toBe(false);
+    } finally { call.end(); }
+    await tick();
+    expect(run.status).toBe('completed');
+    expect(run.result).toEqual(result());
+  });
+
   it('keeps only the latest redacted candidate without changing phase or proof acceptance', async () => {
     const { jobs, runner } = setup();
     const key = 'sk-live-source-secret';

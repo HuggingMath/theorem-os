@@ -22,7 +22,7 @@ export function buildCommonResearchGuide(problem: SolverProblem,
   access: Pick<ContextAccess, 'root' | 'tools' | 'worktree' | 'environment' | 'mathTools' | 'corpusFile' |
     'retrievalRoot' | 'knowledgeFile' | 'knowledgeDigest' | 'libraryCatalog'>, environmentDigest: string,
   purpose: 'comparison' | 'workflow' = 'comparison') {
-  const { command, help } = buildResearchToolGuide(problem, access, environmentDigest);
+  const { command, help, longCommandSummary } = buildResearchToolGuide(problem, access, environmentDigest);
   materializeResearchToolHelp({ toolHelp: help.build() }, access.worktree);
   const editable = problem.ownedFiles.filter(file => !Object.hasOwn(problem.frozenFiles ?? {}, file));
   const instructions = 'Research the frozen original mathematics problem with the pinned theoremos-research skill. ' +
@@ -37,7 +37,7 @@ export function buildCommonResearchGuide(problem: SolverProblem,
     'A model message, local diagnostic or historical receipt is never acceptance. The host confirms writer shutdown, freezes actual sources and independently checks the required declarations and all original targets. ' +
     (purpose === 'comparison' ? 'Use the existing tools within their actual permissions; native child agents are not enabled by this comparison.\n'
       : 'Use the existing tools within their actual permissions. The host launches isolated worker sessions; do not spawn additional agents inside this session.\n') +
-    help.instruction(access.worktree) + mathematicsRuntimeInstruction(access.environment.DEEPSCIENTIST_MATH_ENV_FILE) +
+    longCommandSummary + help.instruction(access.worktree) + mathematicsRuntimeInstruction(access.environment.DEEPSCIENTIST_MATH_ENV_FILE) +
     (access.mathTools ? '\n' + mathToolsInstruction(access.mathTools, access.worktree) : '');
   return { instructions, command };
 }
