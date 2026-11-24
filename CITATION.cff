@@ -6,6 +6,7 @@ message: "When citing TheoremOS, please include the release tag or commit you us
 authors:
   - family-names: Liu
     given-names: Zhenhao
+    affiliation: "WestlakeNLP, Westlake University"
   - name: TheoremOS contributors
 repository-code: "https://github.com/HuggingMath/theorem-os"
 url: "https://theoremos.top"

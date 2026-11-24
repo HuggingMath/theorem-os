@@ -1,13 +1,15 @@
-<!-- README_SYNC: source=2cbe72f0cfde; updated=2026-11-18 -->
+<!-- README_SYNC: source=2cbe72f0cfde; updated=2026-11-24 -->
 <p align="center"><a href="./README.md">简体中文</a> · English</p>
 
 <div align="center">
   <img src="./docs/assets/mark.png" alt="" width="64" height="64">
   <h1>TheoremOS</h1>
   <p><strong>Take a mathematical problem from its original statement to an independently checked Lean proof.</strong></p>
-  <p><a href="https://theoremos.top/">Project site</a> · <a href="https://app.theoremos.top/">Workbench</a> · <a href="https://theoremos.top/archive.html">Public proof archive</a></p>
+  <p>Developed at <a href="https://westlakenlp.com/"><strong>WestlakeNLP</strong></a>, <a href="https://en.westlake.edu.cn/">Westlake University</a></p>
+  <p><a href="https://theoremos.top/">Project site</a> · <a href="https://app.theoremos.top/">Workbench</a> · <a href="https://theoremos.top/archive.html">Public proof archive</a> · <a href="https://github.com/HuggingMath/TheoremOS">Website &amp; archive repo</a></p>
 </div>
 
+[![WestlakeNLP Lab](https://img.shields.io/badge/Lab-WestlakeNLP-1e3a5f)](https://westlakenlp.com/)
 [![Lean 4 · Mathlib](https://img.shields.io/badge/Lean_4-Mathlib-315cf5.svg)](./docs/web-workbench.md)
 [![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue.svg)](./LICENSE)
 
@@ -78,4 +80,4 @@ The project-owned source is licensed under [AGPL-3.0-only](./LICENSE). The [scop
 
 When using TheoremOS in a paper, report or demonstration, please cite [CITATION.cff](./CITATION.cff) and include the release tag or commit. Credit the original authors of problems, data and third-party software separately. Identify independent modifications so readers can distinguish them from official releases and understand who maintains them.
 
-Thanks to [Lean](https://lean-lang.org/), [Mathlib](https://github.com/leanprover-community/mathlib4), and [Lean-Eval](https://github.com/leanprover/lean-eval) for the tools and evaluation resources.
+TheoremOS is developed at [**WestlakeNLP**](https://westlakenlp.com/), the Natural Language Processing Lab at [Westlake University](https://en.westlake.edu.cn/) (led by [Prof. Yue Zhang](https://en.westlake.edu.cn/faculty/nlp/yue-zhang.html); X: [@NlpWestlake](https://x.com/NlpWestlake)). Thanks to [Lean](https://lean-lang.org/), [Mathlib](https://github.com/leanprover-community/mathlib4), and [Lean-Eval](https://github.com/leanprover/lean-eval) for the tools and evaluation resources.
