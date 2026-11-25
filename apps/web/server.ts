@@ -152,7 +152,7 @@ class HttpError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
 }
 function paperPdfHttpError(error: WebPaperPdfError): HttpError {
-  const location = error.file && Number.isSafeInteger(error.line) ? '（' + error.file + ':' + error.line + '）' : '';
+  const location = error.file && Number.isSafeInteger(error.line) ? `${error.file}:${error.line}` : '';
   const detail = error.detail ? ' ' + error.detail : '';
   switch (error.code) {
     case 'paper_pdf_busy': return new HttpError(429, 'PDF 编译任务较多，请稍后重试。');
@@ -164,8 +164,9 @@ function paperPdfHttpError(error: WebPaperPdfError): HttpError {
     case 'paper_pdf_container_failed': return new HttpError(503, 'PDF 编译容器不可用。');
     case 'paper_pdf_invalid_output': return new HttpError(502, 'PDF 编译结果无效。');
     case 'paper_pdf_missing_output': return new HttpError(422, 'PDF 编译未生成产物。');
-    default: return new HttpError(422, location ? 'PDF 编译失败' + location + '。' + (detail || '请检查 LaTeX 源码。')
-      : 'PDF 编译失败。' + (detail || '请检查 LaTeX 源码。'));
+    default: return location
+      ? new HttpError(422, `PDF 编译失败（${location}）。${detail || '请检查 LaTeX 源码。'}`)
+      : new HttpError(422, `PDF 编译失败。${detail || '请检查 LaTeX 源码。'}`);
   }
 }
 const equal = (left: string, right: string) => /^[a-f0-9]{64}$/.test(left) &&
