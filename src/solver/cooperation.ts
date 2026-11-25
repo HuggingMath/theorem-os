@@ -863,6 +863,7 @@ export class CooperativeResearch extends CooperationInputs {
       node.assignment = dispatchAssignment;
       if (stoppedAssignment) this.input.emit('task_assignment_released', { taskId: node.task.id,
         workerId: stoppedAssignment.workerId, takenBy: worker.id, reason: 'worker-stopped' });
+      return dispatchAssignment;
     };
     const canonicalGoal = !resuming && node.task.kind === 'goal' && this.canonicalTaskCandidate(node, worker, scopedSeed);
     if (node.task.kind === 'lemma' || node.task.kind === 'goal' && (canonicalGoal || this.input.access.get(worker.id)?.installedLibrary)) {
@@ -1102,16 +1103,19 @@ export class CooperativeResearch extends CooperationInputs {
         this.preparingTaskTypes.delete(node); finishPreparation(); this.changed();
       }
     }
-    claimAssignment();
-    if (!node.assignment.connectionCheck && automaticTaskConnection(node.task, this.archive.tasks, this.archive.groups)) {
+    let assignment = claimAssignment();
+    if (!assignment.connectionCheck && automaticTaskConnection(node.task, this.archive.tasks, this.archive.groups)) {
       // Upgrading an idle historical assignment keeps its saved draft but supersedes late publications.
-      if (resuming && node.assignment === resumedAssignment) node.assignment = { ...node.assignment, assignmentId: crypto.randomUUID() };
-      node.assignment.connectionCheck = createTaskConnectionCheck(node.task, node.assignment, this.archive.tasks,
+      if (resuming && assignment === resumedAssignment) {
+        assignment = { ...assignment, assignmentId: crypto.randomUUID() };
+        node.assignment = assignment;
+      }
+      assignment.connectionCheck = createTaskConnectionCheck(node.task, assignment, this.archive.tasks,
         { environmentDigest: this.input.state.environmentDigest, problemReceiptDigest: this.input.state.problem.receiptDigest },
-        dependency => committedSource(worker.worktree, node.assignment!.seedCommit,
+        dependency => committedSource(worker.worktree, assignment.seedCommit,
           `${this.input.state.problem.projectRelative}/${dependency.proofPath}`));
       this.input.emit('task_connection_check_assigned', { taskId: node.task.id, workerId: worker.id,
-        connectionCheck: node.assignment.connectionCheck });
+        connectionCheck: assignment.connectionCheck });
     }
     if (!advisory(node.task) &&
         fs.existsSync(path.join(worker.worktree, this.input.state.problem.projectRelative, '.lake/source-constraints.json'))) {
@@ -1121,7 +1125,7 @@ export class CooperativeResearch extends CooperationInputs {
       const declarations = Object.fromEntries(Object.entries(problem.declarations).map(([file, originals]) => {
         // Library modules are byte-frozen as a whole; their declarations need no per-task bodies.
         if (problem.frozenFiles && Object.hasOwn(problem.frozenFiles, file)) return [file, originals];
-        const source = committedSource(worker.worktree, node.assignment!.seedCommit, `${problem.projectRelative}/${file}`);
+        const source = committedSource(worker.worktree, assignment.seedCommit, `${problem.projectRelative}/${file}`);
         const matching = originalDeclarationRegions(source);
         return [file, originals.map(original => {
           if (original.body || file === node.task.proofPath &&
@@ -1136,10 +1140,10 @@ export class CooperativeResearch extends CooperationInputs {
     this.moveTask(node, 'running', 'dispatched');
     const route = this.archive.groups?.find(record => record.group.id === taskGroup(node.task));
     this.input.emit('task_assigned', { taskId: node.task.id, workerId: worker.id, kind: node.task.kind,
-      taskDigest: node.assignment.taskDigest, assignmentKey: assignmentDeliveryFile(node.assignment),
+      taskDigest: assignment.taskDigest, assignmentKey: assignmentDeliveryFile(assignment),
       planVersion: this.archive.planVersion, groupId: taskGroup(node.task), groupTurns: route?.turns,
-      seedCommit: node.assignment.seedCommit });
-    this.changed(); return { kind: 'task', assignment: node.assignment, task: node.task };
+      seedCommit: assignment.seedCommit });
+    this.changed(); return { kind: 'task', assignment, task: node.task };
   }
   /** Host proof attempts start only from a fresh, unconditional typed helper whose dependencies are checked. */
   private tacticBatteryCandidate(node: TaskRecord): boolean {
