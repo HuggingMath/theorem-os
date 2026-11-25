@@ -33,6 +33,7 @@ await fs.access(path.join(root, 'out/web/app.js')).catch(() => { throw new Error
 await fs.mkdir(output, { recursive: true });
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;
 const sample = loadWebSample()!, recording = withFailedAttempt(sample);
+const doubleCheckTask = 'Fixture for explaining two Lean checks of the same commit';
 /** A pause in the replay before one of its observations: `reached` once the replay waits there, `release` to go on. */
 type Gate = { reached: Promise<void>; arrive: () => void; release: () => void; open: Promise<void> };
 const gate = (): Gate => {
@@ -51,6 +52,17 @@ const runner: WebRunner = {
     if (input.continuation) {
       continued.push(input);
       send({ type: 'result', result: { status: 'incomplete', proof: input.continuation.source.replace('exact Nat.zero_add n', 'simp'), report: {} } }); return;
+    }
+    if (input.input.task === doubleCheckTask) {
+      const frame = recording.observations.find(item => item.checks.some(check => check.id === 'lean-failed-attempt'))!;
+      const receipt = frame.checks.find(check => check.id === 'lean-failed-attempt')!, now = Date.now();
+      const first = { ...receipt, record: { ...receipt.record, verification: { checkedAt: now - 2 } } };
+      const second = { ...receipt,
+        record: { ...receipt.record, verification: { checkedAt: now - 1 }, stdoutPreview: 'Submission.lean:4:44: error: Different diagnostic for this check.' } };
+      send({ type: 'observation', observation: { ...frame, observedAt: new Date(now).toISOString(), webRunId: input.id,
+        sequence: 1, plan: null, guidance: [], deliveries: [], checks: [first, second] } });
+      send({ type: 'result', result: { status: 'incomplete', proof: '', report: {} } });
+      return;
     }
     let observations = 0;
     return replaySample(recording, input.id, send, signal, { hold: message => {
@@ -569,6 +581,40 @@ try {
   await page.keyboard.press('Escape');
   await viewer(page).waitFor({ state: 'detached' });
   mark('问为什么 asks the run\'s own model about a failed attempt, with the cost named first, the key asked once, follow-ups carrying the thread and 停止 giving the question back');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const rechecked = await postRun({ page }, { ...input, task: doubleCheckTask }, 'same commit recheck fixture');
+  await waitForRun({ page }, rechecked.id, candidate => candidate.status === 'completed');
+  await selectHistoryRun(page, rechecked.id);
+  await openTab(page, 'trajectory');
+  const full = page.locator('[data-trajectory-detail="full"]');
+  if (await full.getAttribute('aria-pressed') === 'false') await full.click();
+  const retriesForCommit = step(page, '[data-kind="retries"]');
+  await retriesForCommit.waitFor();
+  if (await retriesForCommit.getAttribute('data-open') === 'false') await retriesForCommit.locator('.trajectory-fold').click();
+  const failedChecks = step(page, '[data-kind="attempt"][data-tone="failed"]');
+  const firstCheck = failedChecks.filter({ hasText: 'The rfl tactic failed.' });
+  const secondCheck = failedChecks.filter({ hasText: 'Different diagnostic for this check.' });
+  await open(page, firstCheck, 'ask');
+  await question.fill('What did the first check say?');
+  if (await viewer(page).locator('[data-ask-key]').count()) await viewer(page).locator('[data-ask-key]').fill(input.apiKey);
+  await viewer(page).locator('[data-ask-submit]').click();
+  for (let tries = 0; explained.length < 5 && tries < 50; tries++) await page.waitForTimeout(100);
+  answerNext();
+  await viewer(page).locator('.trajectory-ask-answer').waitFor();
+  await page.keyboard.press('Escape');
+  await viewer(page).waitFor({ state: 'detached' });
+  await open(page, secondCheck, 'ask');
+  assert.equal(await viewer(page).locator('.trajectory-ask-turn').count(), 0, 'another check of the same commit opens a fresh thread');
+  assert.equal(await question.inputValue(), '这一步为什么没通过？应该怎么改？');
+  await viewer(page).locator('[data-ask-submit]').click();
+  for (let tries = 0; explained.length < 6 && tries < 50; tries++) await page.waitForTimeout(100);
+  assert.deepEqual(explained[5]!.body.input.map(item => item.role), ['user']);
+  const revisedContext = explained[5]!.body.input[0]!.content[0]!.text;
+  assert.match(revisedContext, /Different diagnostic for this check/u);
+  assert.doesNotMatch(revisedContext, /The rfl tactic failed|What did the first check say/u);
+  answerNext();
+  await viewer(page).locator('.trajectory-ask-answer').waitFor();
+  mark('rechecking the same commit keeps its Lean output and Ask Why conversation with the selected check');
   assert.deepEqual(errors, []);
   console.log('Trajectory checks passed: sample, detail level, live following and line guidance, feedback, comparison, time overview, filter, polling, narrow layout, continuing from a version and asking why a step failed.');
 } finally {

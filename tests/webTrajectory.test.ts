@@ -5,6 +5,7 @@ import type { WebEvent, WebRun } from '../apps/web/shared';
 import { checkHeadline, recordedTrajectory, trajectoryPage, trajectoryQuery, trajectoryVersionQuery, WebTrajectories, type TrajectoryPage } from '../apps/web/trajectory';
 import { buildTrajectory, emptyTrajectory, mergeTrajectory, retryRuns, sameWords, stepTasks, trajectoryTally, trajectoryTaskNames, type TrajectoryStep } from '../apps/web/client/trajectory';
 import { withFailedAttempt } from '../scripts/web-trajectory-fixture';
+import { translateWebProgress } from '../apps/web/progress';
 
 const sample = loadWebSample()!;
 const first = (index = recordedTrajectory(sample.events, sample.observations)) => trajectoryPage(index, { after: 0, since: 0 });
@@ -63,6 +64,30 @@ describe('web trajectory index', () => {
     expect(trajectories.page(owner, run.id, { after: 0, since: 0, instance: page.instance }).instance).not.toBe(page.instance);
   });
 
+  it('loads a check with receipts first seen in different chunks without dropping older receipts', () => {
+    const frame = sample.observations.find(item => item.checks.length && item.sources.length)!;
+    const check = frame.checks[0]!;
+    const observed = Array.from({ length: 70 }, (_, position) => ({ ...frame, sequence: position + 1,
+      sources: position === 0 ? frame.sources : [],
+      checks: [{ ...check, id: String(position), record: { ...check.record, verification: { checkedAt: 1_000 } } }] }));
+    observed.push({ ...frame, sequence: 71, sources: [],
+      checks: [{ ...check, id: '0', record: { ...check.record, verification: { checkedAt: 2_000 } } }] });
+    const trajectories = new WebTrajectories({
+      listEventsAfter: () => [],
+      listObservationsAfter: (_owner, _run, after, limit) => observed.slice(after, after + limit),
+      getObservation: (_owner, _run, sequence) => observed[sequence - 1],
+    });
+    const ids = observed.slice(0, 70).map(item => item.checks[0]!.id);
+    // This selector is in the second chunk even though the same check and commit were seen in the first.
+    const detail = trajectories.version('owner', frame.webRunId, check.taskId, check.commit, check.taskVersion, ids.at(-1))!;
+    expect(detail.checks.map(receipt => receipt.id)).toEqual(ids);
+    expect(trajectories.version('owner', frame.webRunId, check.taskId, check.commit, 'other-version', ids.at(-1))).toBeUndefined();
+    const recheck = trajectories.version('owner', frame.webRunId, check.taskId, check.commit, check.taskVersion, '0', 2_000)!;
+    expect(recheck.checks).toEqual(observed[70]!.checks);
+    const aggregate = trajectories.version('owner', frame.webRunId, check.taskId, check.commit)!;
+    expect(aggregate.checks.map(receipt => receipt.id)).toEqual([...ids, '0']);
+  });
+
   it('validates cursors and version parameters and takes a one-line Lean reason from a failed receipt', () => {
     expect(trajectoryQuery(new URLSearchParams({ after: '3', since: '2', instance: 'abc-1' }))).toEqual({ after: 3, since: 2, instance: 'abc-1' });
     for (const params of [{ after: '-1' }, { since: '1.5' }, { instance: 'A B' }]) expect(trajectoryQuery(new URLSearchParams(params))).toBeUndefined();
@@ -85,6 +110,16 @@ describe('web trajectory index', () => {
     expect(webSampleResponse(sample, 'trajectory', 'GET', new URLSearchParams({ after: 'x' })).status).toBe(400);
     expect(webSampleResponse(sample, 'trajectory/version', 'GET', new URLSearchParams({ task: 'goal_1', commit: 'abc' })).status).toBe(404);
     expect(webSampleResponse(sample, 'trajectory/version', 'GET', new URLSearchParams()).status).toBe(400);
+  });
+
+  it('serves the exact commit of a saved task source in the sample', () => {
+    const source = sample.observations.flatMap(frame => frame.sources).find(item => item.taskId === 'goal_1')!;
+    const route = `tasks/${source.taskId}/source`, version = source.taskVersion;
+    const newest = webSampleResponse(sample, route, 'GET', new URLSearchParams({ version }));
+    expect((newest.body as { source: typeof source }).source.commit).not.toBe(source.commit);
+    expect(webSampleResponse(sample, route, 'GET', new URLSearchParams({ version, commit: source.commit })))
+      .toEqual({ status: 200, body: { source } });
+    expect(webSampleResponse(sample, route, 'GET', new URLSearchParams({ version, commit: 'a'.repeat(40) })).status).toBe(404);
   });
 });
 describe('web trajectory steps', () => {
@@ -138,7 +173,24 @@ describe('web trajectory steps', () => {
     expect(failed).toMatchObject({ taskId: 'goal_2', number: 1, outcome: 'failed', integrated: false });
     expect(failed!.ref!.check).toMatchObject({ passed: false, headline: 'The rfl tactic failed.', receiptIds: ['lean-failed-attempt'] });
     expect(passed).toMatchObject({ taskId: 'goal_2', number: 2, outcome: 'passed', integrated: true });
-    expect(passed!.previous?.commit).toBe(failed!.ref!.version.commit);
+    expect(passed!.previous?.version.commit).toBe(failed!.ref!.version.commit);
+  });
+
+  it.each(['commit', 'task revision'] as const)('matches overlapping failed attempts by their recorded %s', identity => {
+    const data = emptyTrajectory(), at = Date.UTC(2026, 9, 22);
+    const firstCommit = 'a'.repeat(40), keptCommit = identity === 'commit' ? 'b'.repeat(40) : firstCommit;
+    const keptVersion = 'c'.repeat(64), firstVersion = identity === 'task revision' ? 'd'.repeat(64) : keptVersion;
+    data.events = [[firstCommit, firstVersion], [keptCommit, keptVersion]].map(([commit, taskDigest], index) => {
+      const event = translateWebProgress({ event: 'task_checked', taskId: 'goal', passed: false, commit, taskDigest })!;
+      return { type: event.event, message: event.message, details: event.details, at: new Date(at + 700 * index).toISOString(), sequence: index + 1 };
+    });
+    data.versions.set(keptCommit, { key: keptCommit, taskId: 'goal', commit: keptCommit, firstAt: at + 650, revision: 1,
+      checks: [{ at: at + 650, passed: false, status: 'failed', receiptIds: ['kept-receipt'], theorems: ['Goal'],
+        observation: 1, taskVersion: keptVersion, headline: 'type mismatch' }] });
+    const [firstAttempt, lastAttempt] = of(buildTrajectory({ data, status: 'running', createdAt: new Date(at).toISOString() }), 'attempt');
+    expect(firstAttempt).toMatchObject({ number: 1, outcome: 'failed', ref: undefined });
+    expect(lastAttempt).toMatchObject({ number: 2, outcome: 'failed',
+      ref: { version: { commit: keptCommit }, check: { taskVersion: keptVersion, receiptIds: ['kept-receipt'] } } });
   });
 
   it('takes a task\'s consecutive attempts as one entry, where the last of them stands', () => {

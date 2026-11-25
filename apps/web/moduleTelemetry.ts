@@ -15,6 +15,10 @@ export function sanitizeWebEventDetails(value: unknown): WebEventDetails | undef
   const details: WebEventDetails = {};
   for (const key of ['workerId', 'taskId', 'moduleId'] as const)
     if (Object.hasOwn(value, key) && typeof value[key] === 'string' && ids.test(value[key])) details[key] = value[key];
+  if (Object.hasOwn(value, 'commit') && typeof value.commit === 'string' &&
+      /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(value.commit)) details.commit = value.commit;
+  if (Object.hasOwn(value, 'taskDigest') && typeof value.taskDigest === 'string' &&
+      /^[a-f0-9]{64}$/u.test(value.taskDigest)) details.taskDigest = value.taskDigest;
   if (details.moduleId && ['__proto__', 'prototype', 'constructor'].includes(details.moduleId)) delete details.moduleId;
   for (const key of ['turn', 'usedBytes', 'maxBytes'] as const)
     if (Object.hasOwn(value, key) && count(value[key])) details[key] = value[key];

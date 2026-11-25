@@ -28,7 +28,10 @@ import { TaskTypePreflightCache } from '../src/solver/taskTypePreflight';
 import { captureResearchBasis, researchSourceDigest, settleResearch } from '../src/solver/researchRecords';
 import { researchSourceTasks, scopedResearchSources } from '../src/solver/researchSources';
 import { bindMathematicalGap } from '../src/solver/mathematicalGaps';
-import { proposedNextChecks } from '../src/solver/nextChecks';
+import { currentNextCheck, proposedNextChecks } from '../src/solver/nextChecks';
+import { emptyProofSearchCheckpoint } from '../src/math/leanProofSearch';
+import { localProofSearchPath } from '../src/math/proofSearchCheckpointPath';
+import { proofSearchRecordForAssignment, projectProofSearchRecord, retainProofSearchCheckpoint } from '../src/solver/proofSearchRecords';
 import { proposedDefinitionContractChecks } from '../src/solver/definitionContractChecks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { WorkerProofLifecycle } from '../src/solver/workerProofLifecycle';
@@ -3012,5 +3015,68 @@ describe('continuation of a host-frozen unfinished delivery', () => {
     expect(restored.tasks.find(node => node.nextCheckId)?.proof).toBeUndefined();
     await f.seed();
     expect(readSolverRunState(f.stateFile).cooperation!.nextChecks).toHaveLength(1);
+  });
+
+  it.each(['pinned', 'legacy', 'missing'] as const)('restores a progress-origin proof search with a %s checkpoint', async mode => {
+    const f = fixture(), cooperation = f.oldState.cooperation!, goal = f.tasks[2]!, helper = f.tasks[0]!;
+    const identity = { problemReceiptDigest: f.oldState.problem.receiptDigest, environmentDigest: f.oldState.environmentDigest };
+    const scope = { ...identity, taskId: helper.id, taskDigest: taskVersion(helper) };
+    const saved = emptyProofSearchCheckpoint({ scope, sourceDigest: mathDigest('source'), projectionDigest: mathDigest('projection'),
+      backendDigest: mathDigest('backend'), target: { file: helper.proofPath!, theoremName: helper.theoremName!, type: helper.type! },
+      environment: { environmentDigest: mathDigest('diagnostic env') }, sourceFiles: [] });
+    saved.replaySources = [{ file: helper.proofPath!, source: helpers }];
+    const basisDigest = mathDigest(canonicalMathJson(saved.basis)), sourceProject = path.join(f.sourceWorktree, f.projectRelative);
+    const retain = (generation: number, history?: string) => {
+      const file = localProofSearchPath(sourceProject, basisDigest, generation, history);
+      const bytes = canonicalMathJson({ ...saved, generation });
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, bytes, { mode: 0o400 });
+      return retainProofSearchCheckpoint({ projectRoot: sourceProject, runDirectory: f.oldDirectory,
+        reference: { path: file, digest: mathDigest(bytes) }, scope, history, workerId: 'prover-1', assignmentKey: 'fixture' });
+    };
+    const owner = retain(0);
+    cooperation.proofSearchRecords = { [helper.id]: owner };
+    const gap = { consumer: { taskId: goal.id, taskDigest: taskVersion(goal) }, previousGap: 'Membership was assumed.',
+      reduced: 'The candidate is specified.', remaining: 'Membership remains unknown.', evidenceScope: 'Original assumptions.',
+      reconsiderWhen: [], nextCheck: { action: 'construction-check' as const, objective: 'Check one branch.',
+        expectedEvidence: 'A candidate or an open goal.', execution: { kind: 'proof-search' as const,
+          taskId: helper.id, taskDigest: scope.taskDigest, basis: basisDigest,
+          ...(mode === 'legacy' ? {} : { checkpoint: owner.checkpoint }), node: saved.nodes[0]!.id } } };
+    cooperation.deliveries!.push({ id: 'search-gap', taskId: helper.id, taskDigest: taskVersion(helper), producer: 'prover-1',
+      kind: 'progress', status: 'conditional', statement: helper.objective, premises: [], dependencies: [], remainingObligations: [gap.remaining],
+      summary: 'Check the branch.', evidenceRefs: [], createdAt: 10, mathematicalGap: gap,
+      mathematicalGapScope: bindMathematicalGap(gap, helper, cooperation, identity) });
+    const proposed = proposedNextChecks(cooperation, identity, 11)[0]!;
+    if (mode === 'legacy') delete proposed.record.proofSearchSeed;
+    cooperation.nextChecks = [proposed.record]; cooperation.tasks.push(proposed.node);
+    const working = mode === 'pinned' ? retain(1, proposed.record.id) : undefined;
+    if (working) cooperation.proofSearchRecords[proposed.record.taskId] = working;
+    if (mode === 'missing') fs.unlinkSync(owner.checkpoint.path);
+    expect(currentNextCheck(proposed.record, cooperation, identity)).toBe(true);
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    await f.seed();
+    const restored = readSolverRunState(f.stateFile).cooperation!, check = restored.nextChecks![0]!;
+    expect(restored.deliveries!.find(delivery => delivery.id === 'search-gap')).toMatchObject({ kind: 'progress', status: 'conditional' });
+    if (mode === 'missing') {
+      expect(currentNextCheck(check, restored, identity)).toBe(false);
+      expect(check.status).toBe('stale');
+      expect(restored.tasks.find(node => node.nextCheckId === check.id)).toMatchObject({ status: 'blocked' });
+    } else {
+      expect(currentNextCheck(check, restored, identity)).toBe(true);
+      const selected = proofSearchRecordForAssignment(restored.proofSearchRecords, scope, check);
+      expect(selected?.checkpoint.digest).toBe((working ?? owner).checkpoint.digest);
+      expect(Boolean(restored.proofSearchRecords?.[helper.id])).toBe(mode === 'legacy');
+      const projected = projectProofSearchRecord({ record: selected, scope, runDirectory: f.directory, history: check.id,
+        projectRoot: path.join(f.newState.workers![1]!.worktree, f.projectRelative) });
+      expect(projected?.checkpoint.digest).toBe(selected!.checkpoint.digest);
+      expect(fs.readFileSync(projected!.checkpoint.path)).toEqual(fs.readFileSync((working ?? owner).checkpoint.path));
+      if (mode === 'pinned') {
+        expect(check.proofSearchSeed?.checkpoint.digest).toBe(owner.checkpoint.digest);
+        expect(check.proofSearchSeed?.checkpoint.path).toContain(f.directory);
+      }
+      for (const record of [owner, working]) if (record) fs.unlinkSync(record.checkpoint.path);
+    }
+    await f.seed();
+    expect(readSolverRunState(f.stateFile).cooperation?.nextChecks).toEqual(restored.nextChecks);
   });
 });

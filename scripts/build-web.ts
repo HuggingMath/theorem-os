@@ -64,8 +64,30 @@ fs.writeFileSync(path.join(output, 'research.css'), ['research.css', 'collaborat
 const fonts = ['Geist-latin.woff2', 'Geist-OFL.txt', 'TheoremOSSerif-latin.woff2', 'Lora-OFL.txt', 'JetBrainsMono.woff2', 'JetBrainsMono-OFL.txt',
   'TheoremOSWorkbenchHeading.woff2',
   'NotoSerifSC-ui.woff2', 'NotoSerifSC-ui-extra.woff2', 'NotoSerifSC-common.woff2', 'NotoSerifSC-OFL.txt', 'NotoSansSC-ui.woff2', 'NotoSansSC-ui-extra.woff2', 'NotoSansSC-common.woff2', 'NotoSansSC-OFL.txt'];
-for (const file of ['mark.svg', 'favicon.svg', ...fonts.map(font => `fonts/${font}`)])
-  fs.copyFileSync(path.join(root, 'docs/assets', file), path.join(output, 'assets', file));
+for (const name of fs.readdirSync(path.join(output, 'assets'))) {
+  if (/^(?:mark|favicon)\.[a-f0-9]{12}\.svg(?:\.br)?$/u.test(name)) fs.rmSync(path.join(output, 'assets', name));
+}
+const hashedBrandAssets = new Map<string, string>();
+for (const file of ['mark.svg', 'favicon.svg', ...fonts.map(font => `fonts/${font}`)]) {
+  const target = path.join(output, 'assets', file);
+  fs.copyFileSync(path.join(root, 'docs/assets', file), target);
+  if (file === 'mark.svg' || file === 'favicon.svg') {
+    const hash = crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex').slice(0, 12);
+    const versionedName = `assets/${path.basename(file, '.svg')}.${hash}.svg`;
+    fs.copyFileSync(target, path.join(output, versionedName));
+    hashedBrandAssets.set(`assets/${file}`, versionedName);
+  }
+}
+const versionBrandRefs = (text: string) => {
+  let out = text;
+  for (const [source, versioned] of hashedBrandAssets) out = out.replaceAll(source, versioned);
+  return out;
+};
+for (const file of fs.readdirSync(output, { recursive: true, encoding: 'utf8' })) {
+  if (!file.endsWith('.js')) continue;
+  const full = path.join(output, file);
+  fs.writeFileSync(full, versionBrandRefs(fs.readFileSync(full, 'utf8')));
+}
 fs.mkdirSync(path.join(output, 'assets/licenses'), { recursive: true });
 fs.cpSync(path.join(root, 'node_modules/katex/dist/fonts'), path.join(output, 'assets/katex/fonts'), { recursive: true });
 fs.copyFileSync(path.join(root, 'node_modules/katex/dist/katex.min.css'), path.join(output, 'assets/katex/katex.min.css'));
@@ -94,7 +116,7 @@ for (const page of pages) {
       }
       return `${attribute}${asset}"`;
     });
-  fs.writeFileSync(file, html);
+  fs.writeFileSync(file, page === 'explain.html' || page === 'formalization.html' ? html : versionBrandRefs(html));
 }
 const buildDigest = crypto.createHash('sha256');
 // Identify the complete shipped frontend, including page text, fonts and classic records.

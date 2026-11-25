@@ -128,12 +128,15 @@ export function ProblemDraftPanel(props: ProblemDraftPanelProps) {
         rememberBinding(props.owner, item.version.value.mode, next, true);
       });
       if (mounted.current && item.version.value.mode === props.value.mode) {
+        setOpen(false); setShowArchived(false);
         setNotice(submitted ? tx('已复制为新题，原提交记录和归档版本会保留。请先保存这份新草稿。', 'Copied into a new problem. The original submission and archived version remain. Save this new draft first.') : tx('已恢复到编辑器，核对后即可提交。', 'Restored in the editor. Review it before submitting.')); void load(); }
     } catch (cause) { if (mounted.current) notify(cause); }
     finally { lock.current = false; if (mounted.current) setBusy(false); }
   };
   const visible = items.map(item => ({ ...item, versions: item.versions.filter(version => showArchived || (version.status ?? 'open') === 'open') })).filter(item => item.versions.length);
-  return <details class="problem-account-drafts" data-problem-account-drafts open={open} onToggle={event => setOpen(event.currentTarget.open)}>
+  const original = props.value.mode === 'natural' ? props.value.text : props.value.draft.source;
+  return <details class="problem-account-drafts" data-problem-account-drafts hidden={!props.target && (!props.account || !original.trim())}
+    open={open} onToggle={event => setOpen(event.currentTarget.open)}>
     <summary>{tx('保存与恢复原题草稿', 'Save and restore problem drafts')}</summary>
     <p>{tx('保存到账号后可跨设备恢复；不保存 API Key。', 'Save to your account to restore on another device. API keys are excluded.')}</p>
     {!props.account ? <p>{tx('当前草稿只在此标签页保留。登录账号后可跨设备保存。', 'This draft stays in this tab. Sign in to save across devices.')}</p> : <>

@@ -89,11 +89,15 @@ describe('static workbench files', () => {
 
   it('caches static assets at edges while keeping HTML uncached', async () => {
     const katex = path.join(directory, 'assets/katex/katex.min.css');
+    const hashedMark = path.join(directory, 'assets/mark.0123456789ab.svg');
+    const hashedFavicon = path.join(directory, 'assets/favicon.0123456789ab.svg');
     const font = path.join(directory, 'assets/fonts/NotoSansSC-ui.woff2');
     const html = path.join(directory, 'index.html');
     fs.mkdirSync(path.dirname(katex), { recursive: true });
     fs.mkdirSync(path.dirname(font), { recursive: true });
     fs.writeFileSync(katex, 'body{}');
+    fs.writeFileSync(hashedMark, '<svg/>');
+    fs.writeFileSync(hashedFavicon, '<svg/>');
     fs.writeFileSync(font, Buffer.alloc(64, 1));
     fs.writeFileSync(html, '<!doctype html>');
     const assetServer = http.createServer((request, response) => {
@@ -104,9 +108,13 @@ describe('static workbench files', () => {
     const assetOrigin = `http://127.0.0.1:${(assetServer.address() as { port: number }).port}`;
     try {
       const katexRes = await fetch(`${assetOrigin}/assets/katex/katex.min.css`);
+      const markRes = await fetch(`${assetOrigin}/assets/mark.0123456789ab.svg`);
+      const faviconRes = await fetch(`${assetOrigin}/assets/favicon.0123456789ab.svg`);
       const fontRes = await fetch(`${assetOrigin}/assets/fonts/NotoSansSC-ui.woff2`);
       const htmlRes = await fetch(`${assetOrigin}/index.html`);
       expect(katexRes.headers.get('cache-control')).toBe('public, max-age=31536000, immutable, no-transform');
+      expect(markRes.headers.get('cache-control')).toBe('public, max-age=31536000, immutable, no-transform');
+      expect(faviconRes.headers.get('cache-control')).toBe('public, max-age=31536000, immutable, no-transform');
       expect(fontRes.headers.get('cache-control')).toBe('public, max-age=86400, stale-while-revalidate=604800, no-transform');
       expect(htmlRes.headers.get('cache-control')).toBe('no-cache, no-transform');
     } finally {

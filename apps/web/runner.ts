@@ -29,7 +29,7 @@ import { webFormalizationPhases, webFormalizationReason, type WorkerFormalizatio
 import { mathDigest, readMathText } from '../../src/math/mathRuntimeIo';
 import { webProofJournalDirectory, webProofJournalFiles } from './proofJournal';
 import { webWorkerDisconnectGraceMs, webWorkerHeartbeatMs, webWorkerShutdownMs } from './workerDisconnect';
-import { hydrateObservation, type CompactWebObservation } from './observationSources';
+import { hydrateObservation, maxWorkerObservationBytes, type CompactWebObservation } from './observationSources';
 
 export type WebRunner = {
   readiness(): Promise<{ ready: boolean; message: string; nativeTeam?: boolean; nativeTeamPreferences?: boolean; nativeTeamExpertCards?: boolean }>;
@@ -92,9 +92,10 @@ export function isWebObservation(value: unknown): value is WebObservation {
     value.checks.every(check => object(check) && object(check.record) &&
       ['id', 'taskId', 'taskVersion', 'commit', 'sourceDigest', 'environmentDigest'].every(field => typeof check[field] === 'string'));
 }
+const libraryRestartSchema = z.object({ previousSolverRunId: z.string().min(1).max(128),
+  solverRunId: z.string().min(1).max(128), round: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict();
 const workerMessageSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('library_restart'), previousSolverRunId: z.string().min(1).max(128),
-    solverRunId: z.string().min(1).max(128), round: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict(),
+  libraryRestartSchema.extend({ type: z.literal('library_restart') }),
   z.object({ type: z.literal('progress'), event: z.string().min(1).max(100), message: z.string().max(2_000),
     details: z.custom<WebEventDetails>(isWebEventDetails).optional() }).strict(),
   z.object({ type: z.literal('error'), message: z.string().min(1).max(2_000),
@@ -108,34 +109,43 @@ const workerMessageSchema = z.discriminatedUnion('type', [
     proof: z.string().max(128 * 1024), report: z.record(z.unknown()) }).strict() }).strict(),
 ]);
 
-export function parseWorkerMessage(line: string, stream?: { runId: string; sources: Map<string, string> }): WorkerMessage | undefined {
+type ObservationStream = { runId: string; sources: Map<string, string> };
+
+function readWorkerObservation(observation: unknown, supplied: unknown, stream?: ObservationStream): WebObservation | undefined {
+  if (!object(observation) || stream && observation.webRunId !== stream.runId) return;
+  if (supplied === undefined) return isWebObservation(observation) ? observation : undefined;
+  if (!object(supplied)) return;
+  const current = new Map<string, string>();
+  let bytes = 0;
+  const hydrated = hydrateObservation(observation as CompactWebObservation, digest => {
+    const cached = current.get(digest);
+    if (cached !== undefined) return cached;
+    let source: string | undefined;
+    if (Object.hasOwn(supplied, digest)) {
+      const text = supplied[digest];
+      if (typeof text !== 'string' || mathDigest(text) !== digest) throw new Error('web_observation_invalid_source_blob');
+      source = text;
+    } else source = stream?.sources.get(digest);
+    if (source !== undefined) {
+      bytes += Buffer.byteLength(source);
+      if (bytes > maxWorkerObservationBytes) throw new Error('web_observation_too_large');
+      current.set(digest, source);
+    }
+    return source;
+  });
+  if (!isWebObservation(hydrated)) return;
+  if (stream) stream.sources = current;
+  return hydrated;
+}
+
+export function parseWorkerMessage(line: string, stream?: ObservationStream): WorkerMessage | undefined {
   try {
     const value: unknown = JSON.parse(line);
     if (object(value) && value.type === 'observation') {
-      if (Object.keys(value).length === 2 && isWebObservation(value.observation))
-        return { type: 'observation', observation: value.observation };
-      if (Object.keys(value).length !== 3 || !object(value.observation) || !object(value.sourceBlobs) ||
-        stream && value.observation.webRunId !== stream.runId) return;
-      const current = new Map<string, string>();
-      let bytes = 0;
-      const observation = hydrateObservation(value.observation as CompactWebObservation, digest => {
-        let source = current.get(digest);
-        if (source === undefined) {
-          const supplied = value.sourceBlobs as Record<string, unknown>;
-          if (Object.hasOwn(supplied, digest)) {
-            const text = supplied[digest];
-            if (typeof text !== 'string' || mathDigest(text) !== digest) throw new Error('web_observation_invalid_source_blob');
-            source = text;
-          } else source = stream?.sources.get(digest);
-          if (source !== undefined) current.set(digest, source);
-        }
-        if (source !== undefined) bytes += Buffer.byteLength(source);
-        if (bytes > 15 * 1024 * 1024) throw new Error('web_observation_too_large');
-        return source;
-      });
-      if (!isWebObservation(observation)) return;
-      if (stream) stream.sources = current;
-      return { type: 'observation', observation };
+      if (Object.keys(value).length !== (Object.hasOwn(value, 'sourceBlobs') ? 3 : 2)) return;
+      const observation = readWorkerObservation(value.observation, value.sourceBlobs, stream);
+      if (observation) return { type: 'observation', observation };
+      return;
     }
     if (object(value) && value.type === 'catalog' && Object.keys(value).length === 2)
       return { type: 'catalog', catalog: validateTheoremKnowledge(value.catalog) };
@@ -159,7 +169,7 @@ async function readProofJournal(container: string, webRunId: string, signal: Abo
         const packet: unknown = JSON.parse(readMathText(path.join(journal, file), 16 * 1024 * 1024 + 4096));
         if (!object(packet) || packet.webRunId !== webRunId || !Array.isArray(packet.messages)) continue;
         for (const raw of packet.messages) {
-          const message = parseWorkerMessage(JSON.stringify(raw));
+          const message = parseWorkerMessage(JSON.stringify(raw), { runId: webRunId, sources: new Map() });
           if (message) events.push(message);
         }
       } catch { /* Missing or interrupted checkpoint writes do not invalidate an available terminal receipt. */ }
@@ -282,7 +292,7 @@ export class DockerWebRunner implements WebRunner {
     if (!this.active.has(id)) throw new Error('运行环境尚未就绪或已结束。');
     return new Promise((resolve, reject) => {
       const child = spawn('docker', ['exec', '--interactive', `theoremos-web-${id}`,
-        'bun', 'apps/web/worker-command.ts'], { stdio: ['pipe', 'pipe', 'ignore'] });
+        'bun', 'apps/web/worker-command.ts', '--observation-source-refs'], { stdio: ['pipe', 'pipe', 'ignore'] });
       let output = '', settled = false;
       const finish = (error?: Error) => {
         if (settled) return;
@@ -291,9 +301,15 @@ export class DockerWebRunner implements WebRunner {
         try {
           const value: unknown = JSON.parse(output);
           if (!object(value) || typeof value.id !== 'string' || typeof value.status !== 'string') throw new Error();
-          if (value.observation && !isWebObservation(value.observation)) throw new Error();
-          if (value.catalog) validateTheoremKnowledge(value.catalog);
-          resolve(value as WebCommandResult);
+          const { observation, sourceBlobs, libraryRestart: transition, ...receipt } = value;
+          const observed = observation === undefined ? undefined
+            : readWorkerObservation(observation, sourceBlobs, { runId: id, sources: new Map() });
+          if (observation !== undefined && !observed) throw new Error();
+          const libraryRestart = transition === undefined ? undefined : libraryRestartSchema.parse(transition);
+          if (libraryRestart && (command.type !== 'capture' || observed?.solverRunId !== libraryRestart.solverRunId)) throw new Error();
+          if (receipt.catalog) validateTheoremKnowledge(receipt.catalog);
+          resolve({ ...receipt, ...(observed ? { observation: observed } : {}),
+            ...(libraryRestart ? { libraryRestart } : {}) } as WebCommandResult);
         } catch { reject(new Error('运行环境未返回有效命令回执。')); }
       };
       const timer = setTimeout(() => finish(new Error('命令回执超时，请先查询当前回执再重试。')), 15_000);
@@ -474,8 +490,9 @@ export class DockerWebRunner implements WebRunner {
         // Capture the actual saved checkpoint and source evidence before deleting the container.
         try {
           const captured = await this.command(input.id, { type: 'capture' });
-          if (captured.observation) onMessage({ type: 'observation', observation: captured.observation });
-          if (captured.catalog) onMessage({ type: 'catalog', catalog: captured.catalog });
+          if (captured.libraryRestart) forward({ type: 'library_restart', ...captured.libraryRestart });
+          if (captured.observation) forward({ type: 'observation', observation: captured.observation });
+          if (captured.catalog) forward({ type: 'catalog', catalog: captured.catalog });
         } catch { /* A run cancelled during bootstrap may not have a checkpoint yet. */ }
         await remove();
         child.kill('SIGKILL');

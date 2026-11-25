@@ -43,6 +43,7 @@ const grantsSchema = z.object({ guidance: z.boolean().optional(), edit: z.boolea
   approve: z.boolean().optional(), proof: z.boolean().optional() }).strict();
 const bindingSchema = z.object({ ...mutation, runId: id, statementVersionId: id,
   exposure: z.enum(['members', 'public']).optional(), grants: grantsSchema.optional() }).strict();
+const bindingWithStatementSchema = bindingSchema.omit({ statementVersionId: true });
 const taskRefSchema = z.object({ id, version: nonempty(128) }).strict();
 const observationRefSchema = z.object({ sequence: z.number().int().positive(), stateDigest: hash }).strict();
 const targetSchema = z.object({ runId: id, statementVersionId: id, observationRef: observationRefSchema,
@@ -370,38 +371,55 @@ export class WebResearchProjects {
     const stored = this.writable(viewer, projectId), input = parse(versionSchema, value) as ResearchStatementInput;
     if (this.request(stored, viewer, 'version', input)) return this.detail(viewer, projectId);
     this.compare(stored.project.revision, input.expectedRevision);
+    const version = this.appendVersion(stored, viewer, input, options?.preserveSource);
+    this.remember(stored, viewer, 'version', input, version.id); this.save(stored); return this.detail(viewer, projectId);
+  }
+  private statementVersionId(viewer: string, requestId: string) {
+    return `version-${mathDigest(`${this.identity(viewer)}:${requestId}`).slice(0, 32)}`;
+  }
+  private appendVersion(stored: StoredProject, viewer: string, input: ResearchStatementInput, preserveSource?: boolean) {
     const { requestId, expectedRevision: _expected, ...statement } = input;
-    const source = input.formalizationId || options?.preserveSource ? input.source : input.source.trim();
+    const source = input.formalizationId || preserveSource ? input.source : input.source.trim();
     const version: ResearchStatementVersion = { ...statement, source,
-      id: `version-${mathDigest(`${this.identity(viewer)}:${requestId}`).slice(0, 32)}`,
+      id: this.statementVersionId(viewer, requestId),
       sourceDigest: mathDigest(source), author: this.author(viewer), createdAt: now() };
     stored.versions.push(version); stored.project.currentStatementVersionId = version.id;
     this.event(stored, viewer, 'statement-created', '建立新的形式化陈述版本', { statementVersionId: version.id });
     this.contribute(stored, viewer, 'formalization', '建立形式化陈述版本', { statementVersionId: version.id });
-    this.remember(stored, viewer, 'version', input, version.id); this.save(stored); return this.detail(viewer, projectId);
+    return version;
   }
-  bindRun(viewer: string, projectId: string, value: unknown): ResearchProjectDetail {
+  bindRun(viewer: string, projectId: string, value: unknown, newStatement?: Pick<ResearchStatementInput, 'statement' | 'assumptions'>): ResearchProjectDetail {
     this.authenticated(viewer);
-    const stored = this.readable(viewer, projectId), input = parse(bindingSchema, value) as ResearchRunBindingInput;
+    const stored = this.readable(viewer, projectId);
+    const input = (newStatement
+      ? parse(bindingWithStatementSchema.transform(binding => ({ ...binding, statementVersionId: this.statementVersionId(viewer, binding.requestId) })), value)
+      : parse(bindingSchema, value)) as ResearchRunBindingInput;
+    const requestInput = newStatement ? { ...input, newStatement } : input;
     if (!this.access(viewer, stored).edit) throw new WebStorageError(403, '只有协作者可绑定研究运行。');
-    if (this.request(stored, viewer, 'binding', input)) return this.detail(viewer, projectId);
+    if (this.request(stored, viewer, 'binding', requestInput)) return this.detail(viewer, projectId);
     this.compare(stored.project.revision, input.expectedRevision);
-    const version = stored.versions.find(item => item.id === input.statementVersionId);
     const run = this.storage.getRun(viewer, input.runId);
-    if (!version) throw new WebStorageError(404, '陈述版本不存在。');
+    const version = stored.versions.find(item => item.id === input.statementVersionId);
+    if (!version && !newStatement) throw new WebStorageError(404, '陈述版本不存在。');
     if (!run) throw new WebStorageError(404, '运行不存在或不属于本人。');
-    if (run.source !== version.source || run.environment !== version.environment ||
-      version.environmentDigest && run.observation?.inspection.configuration.environmentDigest !== version.environmentDigest)
+    const environmentDigest = run.observation?.inspection.configuration.environmentDigest;
+    if (version && (run.source !== version.source || run.environment !== version.environment ||
+      version.environmentDigest && environmentDigest !== version.environmentDigest))
       throw new WebStorageError(409, '运行的原题或环境与陈述版本不一致。');
     const previous = stored.bindings.find(binding => binding.runId === run.id);
-    if (previous && (previous.runOwner !== viewer || previous.statementVersionId !== version.id))
+    if (previous && (previous.runOwner !== viewer || previous.statementVersionId !== input.statementVersionId))
       throw new WebStorageError(409, '运行已经绑定其他陈述。');
-    const binding: StoredBinding = { runId: run.id, statementVersionId: version.id, owner: this.author(viewer), runOwner: viewer,
+    if (newStatement) {
+      const statement = parse(versionSchema, { ...newStatement, requestId: input.requestId, source: run.source,
+        environment: run.environment, ...(environmentDigest ? { environmentDigest } : {}) }) as ResearchStatementInput;
+      this.appendVersion(stored, viewer, statement, true);
+    }
+    const binding: StoredBinding = { runId: run.id, statementVersionId: input.statementVersionId, owner: this.author(viewer), runOwner: viewer,
       exposure: input.exposure ?? 'members', grants: { ...noGrants, ...input.grants }, createdAt: previous?.createdAt ?? now() };
     if (previous) stored.bindings[stored.bindings.indexOf(previous)] = binding; else stored.bindings.push(binding);
     this.event(stored, viewer, 'run-bound', previous ? '更新运行共享与操作授权' : '关联研究运行',
-      { runId: run.id, statementVersionId: version.id });
-    this.remember(stored, viewer, 'binding', input, run.id); this.save(stored); return this.detail(viewer, projectId);
+      { runId: run.id, statementVersionId: binding.statementVersionId });
+    this.remember(stored, viewer, 'binding', requestInput, run.id); this.save(stored); return this.detail(viewer, projectId);
   }
   /** Internal authorization result. Only the caller's explicit projection may cross an HTTP response. */
   resolveBinding(viewer: string, projectId: string, runId: string, permission: ResearchRunPermission = 'read') {

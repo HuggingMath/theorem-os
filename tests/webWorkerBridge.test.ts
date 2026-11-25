@@ -9,9 +9,11 @@ import { taskVersion } from '../src/solver/tasks';
 import { readKnowledgeCatalog } from '../src/solver/theoremKnowledgeStore';
 import { WebKnowledgeService } from '../apps/web/knowledgeService';
 import { WebStorage } from '../apps/web/storage';
+import { WebTrajectories } from '../apps/web/trajectory';
 import type { WorkerInput, WorkerMessage } from '../apps/web/shared';
 import { webWorkerFixture } from './helpers/webWorkerBridge';
-import { mathDigest } from '../src/math/mathRuntimeIo';
+import { mathDigest, withMathRuntimeLease } from '../src/math/mathRuntimeIo';
+import { hashMathFormalSourceDeclaration } from '../src/math/leanSource';
 import { webGuidanceSchema } from '../apps/web/collaborationValidation';
 import { parseWorkerMessage } from '../apps/web/runner';
 import type { WebObservation } from '../apps/web/collaboration';
@@ -111,6 +113,110 @@ describe('isolated Web worker bridge', () => {
     expect(messages.filter(message => message.type === 'catalog')).toHaveLength(1);
   });
 
+  it('keeps every target source when its shared file would exceed the expanded frame budget', async () => {
+    const f = fixture(), webRunId = 'web-fixture';
+    const tasks = Array.from({ length: 20 }, (_, index) => ({ ...f.goal, id: `goal-${index}`,
+      theoremName: `Original.target${index}`, dependsOn: [] }));
+    const source = 'namespace Original\n' + tasks.map((_, index) => `theorem target${index} : True := by sorry\n`).join('') +
+      'end Original\n/- ' + 'a'.repeat(850_000) + ' -/\n';
+    fs.writeFileSync(path.join(f.project, 'Submission.lean'), source);
+    const commit = f.commit();
+    f.state.problem.targets = tasks.map(task => ({ proofPath: task.proofPath!, theoremName: task.theoremName,
+      declarationHash: hashMathFormalSourceDeclaration(source, task.theoremName)! }));
+    f.state.cooperation!.canonicalCommit = commit;
+    f.state.cooperation!.tasks = tasks.map(task => ({ task, status: 'pending', attempts: 0 }));
+    f.state.cooperation!.history = [];
+    f.save();
+
+    const journal = path.join(f.directory, 'journal');
+    fs.mkdirSync(journal);
+    let wire = '';
+    const sink = webProofMessageSink(new Writable({
+      write(chunk: Buffer, _encoding, done) { wire = chunk.toString('utf8'); done(); },
+    }), '', { directory: journal, webRunId });
+    const bridge = createWebWorkerBridge({ webRunId, directory: f.directory, output: f.output, onMessage(message, frame) {
+      if (message.type === 'observation') sink(message, frame);
+    } });
+    const { observation } = await bridge.capture();
+    expect(observation.coverage.sources).toBe('recorded');
+    expect(observation.sources.map(item => item.taskId)).toEqual(tasks.map(task => task.id));
+    expect(Object.values(JSON.parse(wire).sourceBlobs)).toEqual([source]);
+    const stream = { runId: webRunId, sources: new Map<string, string>() };
+    expect(parseWorkerMessage(wire, stream)).toEqual({ type: 'observation', observation });
+    f.state.turns++; f.save();
+    const next = await bridge.capture();
+    expect(JSON.parse(wire).sourceBlobs).toEqual({});
+    expect(parseWorkerMessage(wire, stream)).toEqual({ type: 'observation', observation: next.observation });
+    const backup = JSON.parse(fs.readFileSync(path.join(journal, 'observation.json'), 'utf8')).messages[0];
+    expect(parseWorkerMessage(JSON.stringify(backup))).toEqual({ type: 'observation', observation: next.observation });
+  });
+
+  it.each(['single', 'independent'] as const)('captures original proof receipts without a cooperation plan in %s mode', async mode => {
+    const f = fixture(), target = f.state.problem.targets[0]!;
+    const { statementHash, leanStatementHash } = f.state.problem.contract;
+    const { commit, sourceDigest, verification } = f.proof;
+    const receipt = { ...verification.results[0]!, theoremName: target.theoremName, receiptId: 'original-failed',
+      status: 'failed' as const, error: 'Lean rejected the original proof', statementHash, leanStatementHash,
+      sourceDeclarationHash: target.declarationHash };
+    const check = { commit, sourceDigest, passed: false, verification: { ...verification, status: 'failed' as const, results: [receipt] } };
+    f.state.cooperation = undefined;
+    if (mode === 'single') {
+      f.state.workerCount = 1;
+      f.state.workers = undefined;
+      f.state.check = check;
+    } else {
+      f.state.coordination = 'independent';
+      f.state.workers![0]!.check = check;
+    }
+    f.save();
+    const task = { ...target, id: 'original_goal_1', kind: 'goal' as const, objective: `Prove ${target.theoremName}`, revision: 0, dependsOn: [] };
+    const expected = { taskId: task.id, taskVersion: taskVersion(task), commit, sourceDigest };
+    const bridge = createWebWorkerBridge({ webRunId: 'web-fixture', directory: f.directory, output: f.output });
+    const { observation } = await bridge.capture();
+    expect(observation.plan).toBeNull();
+    expect(observation.sources).toMatchObject([{ ...expected, source: f.source, file: 'Submission.lean' }]);
+    expect(observation.checks).toMatchObject([{ ...expected, id: receipt.receiptId,
+      record: { theoremName: target.theoremName, passed: false, originalProblemPassed: false, error: receipt.error, acceptance: 'not-assessed' } }]);
+    expect(observation.coverage).toEqual({ sources: 'recorded', checks: 'recorded' });
+  });
+
+  it('keeps a cooperative goal failure explainable when the worker records the same task check', async () => {
+    const f = fixture(), owner = 'offline-owner', webRunId = 'web-fixture';
+    const proof = f.proofFor(f.goal, f.currentCommit, f.source);
+    const receipt = { ...proof.verification.results[0]!, status: 'failed' as const, error: 'Lean rejected the local proof.' };
+    const failed = { ...proof, passed: false, verification: { ...proof.verification, status: 'failed' as const, results: [receipt] } };
+    f.state.cooperation!.tasks[1] = { task: f.goal, status: 'blocked', attempts: 1, proof: failed };
+    f.state.workers![1]!.check = failed;
+    f.save();
+    const bridge = createWebWorkerBridge({ webRunId, directory: f.directory, output: f.output });
+    const { observation } = await bridge.capture();
+    const checks = observation.checks.filter(check => check.taskId === f.goal.id);
+    expect(checks).toHaveLength(1);
+    const [check] = checks;
+    expect(check!.record).toMatchObject({ passed: false, error: receipt.error });
+    expect(check!.record).not.toHaveProperty('originalProblemPassed');
+
+    // Simulate already frozen observations with the extra whole-problem projection.
+    const storage = new WebStorage(path.join(f.directory, 'stored-receipts'));
+    const directory = ['owners', mathDigest(owner), 'runs', webRunId, 'observations'];
+    const wronglyTagged = { ...check!, record: { ...check!.record, originalProblemPassed: false } };
+    storage.saveRecord([...directory, '1.json'], { ...observation, checks: [...observation.checks, wronglyTagged] }, true);
+    const checkedAgainAt = failed.verification.checkedAt + 1000;
+    const checkedAgain = { ...check!, record: { ...check!.record, error: 'Lean rejected the recheck.',
+      verification: { ...(check!.record.verification as Record<string, unknown>), checkedAt: checkedAgainAt } } };
+    const wronglyTaggedAgain = { ...checkedAgain, record: { ...checkedAgain.record, originalProblemPassed: false } };
+    storage.saveRecord([...directory, '2.json'], { ...observation, sequence: 2, checks: [wronglyTagged, wronglyTaggedAgain] }, true);
+    expect(storage.listObservations(owner, webRunId).map(frame => frame.checks)).toEqual([observation.checks, [...checks, checkedAgain]]);
+    const trajectories = new WebTrajectories(storage);
+    const selector = [owner, webRunId, f.goal.id, failed.commit, taskVersion(f.goal), receipt.receiptId] as const;
+    expect(trajectories.version(...selector, failed.verification.checkedAt)?.checks).toEqual(checks);
+    expect(trajectories.explanationVersion(...selector, failed.verification.checkedAt))
+      .toMatchObject({ status: 'found', detail: { checks } });
+    expect(trajectories.explanationVersion(...selector, checkedAgainAt))
+      .toMatchObject({ status: 'found', detail: { checks: [checkedAgain] } });
+    expect(trajectories.explanationVersion(...selector)).toEqual({ status: 'ambiguous' });
+  });
+
   it('reports each original target verdict when a shared Lean check only partially passes, including in retained observations', async () => {
     const f = fixture(), firstTarget = f.state.problem.targets[0]!;
     const secondTarget = { ...firstTarget, theoremName: 'Original.second', declarationHash: mathDigest('second declaration') };
@@ -126,14 +232,15 @@ describe('isolated Web worker bridge', () => {
       { task: f.goal, status: 'pending', attempts: 0 }, { task: second, status: 'pending', attempts: 0 },
     ];
     f.state.cooperation!.history = [];
-    f.state.check = { commit, sourceDigest, passed: false, verification: {
+    const check = f.state.workers![0]!.check = { commit, sourceDigest, passed: false, verification: {
       ...verification, status: 'failed', results: [secondReceipt, firstReceipt],
     } };
     f.save();
 
-    const { observation } = await createWebWorkerBridge({
+    const bridge = createWebWorkerBridge({
       webRunId: 'web-fixture', directory: f.directory, output: f.output,
-    }).capture();
+    });
+    const { observation } = await bridge.capture();
     expect(observation.acceptance).toBe('not-assessed');
     expect(observation.checks).toMatchObject([
       { taskId: f.goal.id, taskVersion: taskVersion(f.goal), id: firstReceipt.receiptId, commit, sourceDigest,
@@ -142,6 +249,8 @@ describe('isolated Web worker bridge', () => {
       { taskId: second.id, taskVersion: taskVersion(second), id: secondReceipt.receiptId, commit, sourceDigest,
         record: { theoremName: secondTarget.theoremName, status: 'failed', passed: false, error: secondReceipt.error } },
     ]);
+    f.state.check = check; f.save();
+    expect((await bridge.capture()).observation.checks).toEqual(observation.checks);
 
     const legacy = { ...observation, checks: observation.checks.flatMap(({ record: { originalProblemPassed: _batch, ...record }, ...check }) =>
       [f.goal, second].map(task => ({ ...check, taskId: task.id, taskVersion: taskVersion(task), record: { ...record, passed: false } }))) };
@@ -197,6 +306,34 @@ describe('isolated Web worker bridge', () => {
       observationRef: { sequence: captured.observation.sequence, stateDigest: captured.observation.snapshot.stateDigest } } }, commandOptions))
       .toMatchObject({ status: 'queued' });
     await expect(original.capture({ force: true })).rejects.toThrow('web_bridge_run_identity_changed');
+  });
+
+  it.each([false, true])('captures the new round before cleanup even if streaming already sampled it (%s)', async streamingFirst => {
+    const f = fixture(), messages: WorkerMessage[] = [];
+    const options = { webRunId: 'web-fixture', directory: f.directory, onMessage: (message: WorkerMessage) => messages.push(message) };
+    await createWebWorkerBridge({ ...options, output: f.output }).capture();
+    const output = path.join(f.directory, 'rounds', '1', 'result.json');
+    fs.mkdirSync(`${output}.runtime`, { recursive: true });
+    writeSolverRunState(`${output}.runtime/state.json`, { ...f.state, runId: 'solver-next' });
+    const libraryRestart = { previousSolverRunId: f.state.runId, round: 1 };
+    const active = { ...options, output, libraryRestart };
+    writeWebActiveRun(active, f.activeRunFile);
+    const next = createWebWorkerBridge(active), start = messages.length;
+    if (streamingFirst) await next.capture();
+    let capture!: ReturnType<typeof handleWebWorkerCommand>;
+    await withMathRuntimeLease({ lockPath: path.join(f.directory, 'web-bridge.lock'), flockExecutable: '/usr/bin/flock' }, async () => {
+      // The cancellation command must wait for an in-flight observer rather than abandon the evidence.
+      capture = handleWebWorkerCommand({ type: 'capture' }, { activeRunFile: f.activeRunFile });
+      expect(await Promise.race([capture, new Promise(resolve => setTimeout(() => resolve('waiting'), 80))])).toBe('waiting');
+    });
+    const command = await capture;
+    expect(command).toMatchObject({ status: 'captured',
+      libraryRestart: { ...libraryRestart, solverRunId: 'solver-next' },
+      observation: { solverRunId: 'solver-next', sequence: 2, acceptance: 'not-assessed' } });
+    if (!streamingFirst) await next.capture();
+    const streamed = messages.slice(start).filter(message => ['library_restart', 'observation'].includes(message.type));
+    expect(streamed).toEqual([expect.objectContaining({ type: 'library_restart', ...libraryRestart, solverRunId: 'solver-next' }),
+      expect.objectContaining({ type: 'observation', observation: expect.objectContaining({ solverRunId: 'solver-next', sequence: 2 }) })]);
   });
 
   it('projects dependency sources from the same committed owned snapshot, preserving their paths and bytes', async () => {

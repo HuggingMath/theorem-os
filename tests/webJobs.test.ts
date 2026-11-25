@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebJobs } from '../apps/web/jobs';
+import { decodeTaskDraft } from '../apps/web/client/draft';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebObservation } from '../apps/web/collaboration';
 import { webLimits, type WebProvider, type WebResult, type WebRunInput, type WorkerInput, type WorkerMessage } from '../apps/web/shared';
@@ -160,6 +161,23 @@ describe('web job ownership, scheduling and secret lifetime without provider cal
     runner.calls[0].finish({ status: 'incomplete', proof: '', report: {} }); await tick();
   });
 
+  it('saves the new round evidence delivered during cancellation without accepting a late result', async () => {
+    const { jobs, runner } = setup(), run = jobs.create('owner', input(), provider);
+    await tick();
+    const { send } = runner.calls[0]!;
+    send({ type: 'observation', observation: observation(run.id, 'solver-first', 1) });
+    jobs.cancel('owner', run.id);
+    send({ type: 'library_restart', previousSolverRunId: 'unrelated', solverRunId: 'solver-next', round: 1 });
+    expect(run.observation?.solverRunId).toBe('solver-first');
+    send({ type: 'library_restart', previousSolverRunId: 'solver-first', solverRunId: 'solver-next', round: 1 });
+    send({ type: 'observation', observation: observation(run.id, 'solver-next', 2) });
+    send({ type: 'result', result: result() });
+    expect(run).toMatchObject({ status: 'cancelled', phase: 'cancelled',
+      observation: { solverRunId: 'solver-next', acceptance: 'not-assessed' } });
+    expect(run.result).toBeUndefined();
+    expect(jobs.storage.listObservations('owner', run.id).map(item => item.solverRunId)).toEqual(['solver-first', 'solver-next']);
+  });
+
   it('starts queued jobs in order, respects concurrency and rejects excess active work', async () => {
     const { jobs, runner } = setup(2, 4);
     const runs = Array.from({ length: 4 }, (_, index) => jobs.create('owner', { ...input(), task: `Task ${index}` }, provider));
@@ -216,6 +234,28 @@ describe('web job ownership, scheduling and secret lifetime without provider cal
       { ...reference, file: '/tmp/fixture-source', source: 'theorem example : True := by trivial' });
     expect(original.knowledgeDigest).toBeUndefined();
     expect(continued.knowledgeDigest).toBeUndefined();
+  });
+
+  it('keeps an explicit no-history choice when recreating an archived run', async () => {
+    const { jobs, runner } = setup();
+    const catalog = jobs.knowledge.importCatalog('owner', buildTheoremKnowledge([known('existing')]));
+    const original = jobs.create('owner', { ...input(), knowledgeDigest: null }, provider);
+    await tick();
+    runner.calls[0]!.finish();
+    await tick();
+    const archive = jobs.storage.exportRun('owner', original);
+    const draft = decodeTaskDraft(JSON.parse(JSON.stringify(archive)));
+    expect(draft.knowledgeDigest).toBeNull();
+    const recreated = jobs.create('owner', { ...input(), knowledgeDigest: draft.knowledgeDigest }, provider);
+    const automatic = jobs.create('owner', input(), provider);
+    expect(recreated.knowledgeDigest).toBeNull();
+    expect(automatic.knowledgeDigest).toBe(catalog.digest);
+    await tick();
+    expect(runner.calls[1]!.input.knowledgeCatalog).toBeUndefined();
+    runner.calls[1]!.finish();
+    await tick();
+    expect(runner.calls[2]!.input.knowledgeCatalog?.entries).toHaveLength(1);
+    runner.calls[2]!.finish();
   });
 
   it('prevents another owner from reading or cancelling a job', async () => {

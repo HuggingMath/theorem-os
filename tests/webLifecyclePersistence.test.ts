@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AgentActivity } from '../apps/web/client/agentActivity';
+import type { WebObservation } from '../apps/web/collaboration';
 import { readWebConfig } from '../apps/web/config';
 import { WebExplanations } from '../apps/web/explanations';
 import { WebFormalizations } from '../apps/web/formalizations';
@@ -12,6 +14,8 @@ import type { WebRunner } from '../apps/web/runner';
 import { createWebService } from '../apps/web/server';
 import type { WebRun, WebRunInput, WorkerExplanationInput, WorkerExplanationMessage, WorkerInput, WorkerMessage } from '../apps/web/shared';
 import { WebStorage } from '../apps/web/storage';
+import { isAcceptedRun } from '../apps/web/presentation';
+import { mathDigest } from '../src/math/mathRuntimeIo';
 import { buildTheoremKnowledge } from '../src/solver/theoremKnowledge';
 
 // Disposable files and a fake worker only. Calls retain the real input reference to check credential cleanup.
@@ -30,6 +34,7 @@ type Kind = 'research' | 'formalization' | 'explanation';
 type Call = { id: string; input: { apiKey: string }; signal: AbortSignal; late(): void; end(): void; fail(error: Error): void };
 class Runner implements WebRunner {
   calls: Call[] = [];
+  reportResearch?: (message: WorkerMessage) => void;
   delayAbort = new Set<Kind>();
   async readiness() { return { ready: true, message: 'fixture' }; }
   private wait(kind: Kind, id: string, input: { apiKey: string }, signal: AbortSignal, late: () => void) {
@@ -39,6 +44,7 @@ class Runner implements WebRunner {
     });
   }
   run(value: WorkerInput, send: (message: WorkerMessage) => void, signal: AbortSignal) {
+    this.reportResearch = send;
     return this.wait('research', value.id, value.input, signal, () => {
       send({ type: 'catalog', catalog: buildTheoremKnowledge([]) });
       send({ type: 'result', result: { status: 'evaluated_passed', proof, report: {} } });
@@ -96,6 +102,150 @@ function setup(kind: Kind, concurrency = 1, dataRoot?: string) {
   return { service, storage, runner };
 }
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
+
+describe('research restart with partially written run state', () => {
+  const restart = (root: string, writeTail?: (storage: WebStorage) => void) => {
+    // Copy the crash image so cleanup of the simulated old process cannot write into the restored run.
+    const crashImage = fs.mkdtempSync(path.join(os.tmpdir(), 'web-lifecycle-crash-'));
+    cleanups.push(async () => { fs.rmSync(crashImage, { recursive: true, force: true }); });
+    fs.cpSync(root, crashImage, { recursive: true });
+    const storage = new WebStorage(crashImage);
+    writeTail?.(storage);
+    return new WebJobs(new Runner(), { concurrency: 1, queueLimit: 8 }, { storage });
+  };
+
+  it('recovers the durable events before recording an interrupted run', async () => {
+    const { service, storage } = setup('research');
+    const id = service.create('alice');
+    await settle();
+    const run = storage.getRun('alice', id)!;
+    const next = { sequence: run.events.at(-1)!.sequence + 1, at: new Date().toISOString(),
+      type: 'evaluation_started', message: 'The event reached disk before the run summary.' };
+    const jobs = restart(storage.root!, crash => {
+      crash.saveRecord(['owners', mathDigest('alice'), 'runs', id, 'events', `${next.sequence}.json`], next, true);
+      expect(crash.getRun('alice', id)?.events).toEqual(run.events);
+    });
+    const recovered = jobs.get('alice', id)!;
+    expect(recovered).toMatchObject({ status: 'error', phase: 'interrupted' });
+    expect(recovered.events.slice(-2)).toEqual([next, expect.objectContaining({ sequence: next.sequence + 1, type: 'interrupted' })]);
+    expect(jobs.storage.listEvents('alice', id)).toEqual(recovered.events);
+    await jobs.close();
+  });
+
+  const frame = (webRunId: string, solverRunId: string, sequence: number): WebObservation => {
+    const snapshot = { schema: 'theoremos.run-observation.v1' as const, runId: solverRunId,
+      stateDigest: mathDigest(`${solverRunId}:${sequence}`), resultDigest: null };
+    return { schema: 'theorem-os.web-observation.v1', webRunId, solverRunId, sequence,
+      observedAt: new Date().toISOString(), evidence: 'recorded-not-replayed', acceptance: 'not-assessed', snapshot,
+      inspection: { runId: solverRunId, snapshot, tasks: [], workers: [], edits: [] } as unknown as WebObservation['inspection'],
+      plan: null, sources: [], checks: [], guidance: [], coverage: { sources: 'recorded', checks: 'recorded' } };
+  };
+
+  it.each([false, true])('recovers the latest durable observation from the current solver attempt (new round: %s)', async newRound => {
+    const { service, storage, runner } = setup('research');
+    const id = service.create('alice');
+    await settle();
+    runner.reportResearch!({ type: 'observation', observation: frame(id, 'first-solver', 1) });
+    if (newRound) runner.reportResearch!({ type: 'library_restart', previousSolverRunId: 'first-solver', solverRunId: 'next-solver', round: 1 });
+    const solverRunId = newRound ? 'next-solver' : 'first-solver';
+    const latest = frame(id, solverRunId, 2);
+    expect(storage.getRun('alice', id)?.observation?.sequence).toBe(newRound ? undefined : 1);
+    const jobs = restart(storage.root!, crash => {
+      crash.saveObservation('alice', latest);
+      fs.writeFileSync(path.join(crash.ownerDirectory('alice')!, 'runs', id, 'observations', '3.json'), '{"sequence":');
+    });
+    expect(jobs.get('alice', id)).toMatchObject({ phase: 'interrupted', observation: latest,
+      solverAttempt: { solverRunId, round: Number(newRound), sequence: 2 } });
+    expect(jobs.storage.getRun('alice', id)?.observation).toEqual(latest);
+    expect(jobs.storage.getObservation('alice', id)).toEqual(latest);
+    expect(jobs.storage.listObservations('alice', id).map(item => item.sequence)).toEqual([1, 2]);
+    await jobs.close();
+  });
+
+  it('keeps the observation empty after a library restart until the new solver has produced one', async () => {
+    const { service, storage, runner } = setup('research');
+    const id = service.create('alice');
+    await settle();
+    runner.reportResearch!({ type: 'observation', observation: frame(id, 'previous-solver', 1) });
+    runner.reportResearch!({ type: 'library_restart', previousSolverRunId: 'previous-solver', solverRunId: 'new-solver', round: 1 });
+    const jobs = restart(storage.root!);
+    expect(jobs.get('alice', id)?.solverAttempt).toEqual({ solverRunId: 'new-solver', round: 1, sequence: 1 });
+    expect(jobs.get('alice', id)?.observation).toBeUndefined();
+    await jobs.close();
+  });
+
+  it('preserves the immutable observation when recovering a run with a legacy duplicate receipt', async () => {
+    const { service, storage } = setup('research');
+    const id = service.create('alice');
+    await settle();
+    const run = storage.getRun('alice', id)!;
+    const original = frame(id, 'legacy-solver', 1);
+    const taskVersion = mathDigest('legacy-goal');
+    const taskCheck = { id: 'task-check', taskId: 'goal', taskVersion, commit: 'a'.repeat(40),
+      sourceDigest: mathDigest(proof), environmentDigest: mathDigest('environment'),
+      record: { passed: false, statementHash: taskVersion, leanStatementHash: taskVersion } };
+    const legacy = { ...original, checks: [taskCheck, { ...taskCheck, record: { ...taskCheck.record, originalProblemPassed: false } }] };
+    storage.saveRun('alice', { ...run, observation: legacy });
+    const file = (store: WebStorage) => path.join(store.ownerDirectory('alice')!, 'runs', id, 'observations', '1.json');
+    const jobs = restart(storage.root!);
+    expect(jobs.get('alice', id)).toMatchObject({ phase: 'interrupted', observation: { checks: [taskCheck] } });
+    expect(fs.readFileSync(file(jobs.storage), 'utf8')).toBe(fs.readFileSync(file(storage), 'utf8'));
+    await jobs.close();
+  });
+
+  it('makes durable actions available to AgentActivity before the summary debounce has elapsed', async () => {
+    const { service, storage, runner } = setup('research');
+    const id = service.create('alice');
+    await settle();
+    const action = { workerId: 'lead', itemId: 'saved', phase: 'completed', kind: 'message', status: 'done', text: 'Already on disk' } as const;
+    runner.reportResearch!({ type: 'action', action });
+    expect(storage.getRun('alice', id)?.actions).toBeUndefined();
+    const jobs = restart(storage.root!);
+    const run = jobs.get('alice', id)!;
+    expect(run).toMatchObject({ phase: 'interrupted', actions: { count: 1 } });
+    const activity = new AgentActivity(async <T>(url: string) => {
+      expect(url).toBe(`/api/runs/${id}/actions?after=0`);
+      return { actions: jobs.storage.listActionsAfter('alice', id, 0, 500), dropped: 0 } as T;
+    });
+    activity.sync(run);
+    await settle();
+    expect(activity.records(run).actions).toEqual([expect.objectContaining(action)]);
+    await jobs.close();
+  });
+
+  it.each([false, true])('preserves saved Lean acceptance across restart (finished event durable: %s)', async eventWritten => {
+    const { service, storage, runner } = setup('research');
+    const id = service.create('alice');
+    await settle();
+    runner.calls[0]!.late(); // Deliberately leave the runner in cleanup.
+    const run = storage.getRun('alice', id)!;
+    expect(run).toMatchObject({ status: 'running', result: { status: 'evaluated_passed', proof } });
+    const jobs = restart(storage.root!, eventWritten ? crash => {
+      const sequence = run.events.at(-1)!.sequence + 1;
+      crash.saveRecord(['owners', mathDigest('alice'), 'runs', id, 'events', `${sequence}.json`],
+        { sequence, at: run.updatedAt, type: 'finished', message: '完整原题通过独立 Lean 验收' }, true);
+    } : undefined);
+    const recovered = jobs.get('alice', id)!;
+    expect(isAcceptedRun(recovered)).toBe(true);
+    expect(recovered).toMatchObject({ status: 'completed', phase: 'evaluated_passed', result: run.result });
+    expect(recovered.finishedAt).toBe(run.updatedAt);
+    expect(jobs.storage.listEvents('alice', id).filter(event => event.type === 'finished')).toHaveLength(1);
+    expect(recovered.events.some(event => event.type === 'interrupted')).toBe(false);
+    await jobs.close();
+  });
+});
+
+it('starts with committed sessions when an interrupted session write leaves a temporary file', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'web-session-crash-'));
+  cleanups.push(async () => { fs.rmSync(root, { recursive: true, force: true }); });
+  const storage = new WebStorage(root);
+  const session = { id: 'alice', csrf: 'fixture', touchedAt: Date.now() };
+  storage.saveSession(session);
+  fs.writeFileSync(path.join(root, 'sessions', `${mathDigest(session.id)}.json.${crypto.randomUUID()}.tmp`), '');
+  const service = createWebService({ ...readWebConfig({}), dataRoot: root, staticRoot: root }, new Runner(), { sample: null });
+  try { expect(service.storage.listSessions()).toEqual([session]); }
+  finally { await service.close(); }
+});
 
 describe.each<Kind>(['research', 'formalization', 'explanation'])('%s lifecycle with failed terminal persistence', kind => {
   it('stops its worker instead of throwing out of an asynchronous message callback when persistence fails', async () => {

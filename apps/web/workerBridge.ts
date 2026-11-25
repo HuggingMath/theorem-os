@@ -14,16 +14,20 @@ import { parseCooperationPlan, taskGroup, taskVersion, type TaskRecord } from '.
 import { allowedKnowledgeFile, buildTheoremKnowledge, validateTheoremKnowledge, type TheoremKnowledgeBase } from '../../src/solver/theoremKnowledge';
 import { importKnowledgeRuns } from '../../src/solver/theoremKnowledgeRuns';
 import { proofReceiptsMatch, type ProofCheck } from '../../src/solver/modules/evidence';
-import type { WebCheckReceipt, WebCommand, WebCommandResult, WebObservation, WebTaskSource } from './collaboration';
+import type { WebCheckReceipt, WebCommand, WebCommandResult, WebLibraryRestart, WebObservation, WebTaskSource } from './collaboration';
 import type { WorkerMessage } from './shared';
 import { projectWebDeclarationArtifacts } from './declarationArtifacts';
 import { projectWebNativeTeam } from './nativeTeamObservation';
-import { compactObservation, type WorkerObservationFrame } from './observationSources';
+import { maxWorkerObservationBytes, standaloneObservationFrame, type WorkerObservationFrame } from './observationSources';
 
 export const webActiveRunFile = '/work/active-run.json';
+const libraryRestartSchema = z.object({ previousSolverRunId: z.string().min(1).max(128),
+  round: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict();
+type LibraryRestart = Omit<WebLibraryRestart, 'solverRunId'>;
 const activeRunSchema = z.object({ schema: z.literal('theorem-os.web-active-run.v1'),
-  webRunId: z.string().min(1).max(128), directory: z.string().min(1), output: z.string().min(1) }).strict();
-type ActiveRun = z.infer<typeof activeRunSchema>;
+  webRunId: z.string().min(1).max(128), directory: z.string().min(1), output: z.string().min(1),
+  libraryRestart: libraryRestartSchema.optional() }).strict();
+type ActiveRun = { webRunId: string; directory: string; output: string; libraryRestart?: LibraryRestart };
 const metaSchema = z.object({ schema: z.literal('theorem-os.web-bridge.v1'), webRunId: z.string(), solverRunId: z.string(),
   libraryRound: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   sequence: z.number().int().nonnegative(), contentDigest: z.string(),
@@ -32,20 +36,20 @@ const metaSchema = z.object({ schema: z.literal('theorem-os.web-bridge.v1'), web
 }).strict();
 type BridgeMeta = z.infer<typeof metaSchema>;
 const maxSourceBytes = 4 * 1024 * 1024, maxSourcesBytes = 6 * 1024 * 1024, maxChecksBytes = 2 * 1024 * 1024;
-const maxMessageBytes = 15 * 1024 * 1024;
 const oid = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
 const childOf = (directory: string, file: string) => path.isAbsolute(file) && file.startsWith(directory + path.sep);
 const relativePath = (file: string) => file && !path.isAbsolute(file) && !file.includes('\\') &&
   file.split('/').every(part => part && part !== '.' && part !== '..');
 
-export function writeWebActiveRun(input: { webRunId: string; directory: string; output: string }, file = webActiveRunFile): void {
+export function writeWebActiveRun(input: ActiveRun, file = webActiveRunFile): void {
   const directory = fs.realpathSync(input.directory), output = path.resolve(input.output);
   if (!childOf(directory, output)) throw new Error('web_bridge_output_outside_run');
-  writeMathJsonDurable(file, { schema: 'theorem-os.web-active-run.v1', webRunId: input.webRunId, directory, output });
+  writeMathJsonDurable(file, activeRunSchema.parse({ schema: 'theorem-os.web-active-run.v1',
+    webRunId: input.webRunId, directory, output, libraryRestart: input.libraryRestart }));
 }
 
 function readActiveRun(file: string): ActiveRun {
-  const value = activeRunSchema.parse(JSON.parse(readMathText(file, 8_192)));
+  const value = activeRunSchema.parse(JSON.parse(readMathText(file, 8_192))) as ActiveRun;
   if (path.resolve(value.directory) !== value.directory || fs.realpathSync(value.directory) !== value.directory ||
       !childOf(value.directory, value.output)) throw new Error('web_bridge_active_run_invalid');
   return value;
@@ -58,7 +62,6 @@ export function freezeWebKnowledge(directory: string, catalog?: unknown): string
   return file;
 }
 
-type LibraryRestart = { previousSolverRunId: string; round: number };
 function bridgeMeta(file: string, webRunId: string, solverRunId: string, restart?: LibraryRestart): BridgeMeta | undefined {
   if (!fs.existsSync(file)) return;
   const value = metaSchema.parse(JSON.parse(readMathText(file, 32 * 1024)));
@@ -107,6 +110,7 @@ function sourceProjection(state: SolverRunState, directory: string) {
   const sources: WebTaskSource[] = [], checks: WebCheckReceipt[] = [];
   let sourceBytes = 0, checkBytes = 0, sourcePartial = false, checkPartial = false;
   const sourceIds = new Set<string>(), checkIds = new Set<string>();
+  const sourceTexts = new Set<string>();
   const roots = runRoots(state, directory), snapshots = new Map<string, ReturnType<typeof committedOwnedSources>>();
   const snapshot = (commit: string) => {
     let value = snapshots.get(commit);
@@ -123,11 +127,14 @@ function sourceProjection(state: SolverRunState, directory: string) {
       const source = selected.files[file], dependencySources = Object.entries(selected.files)
         .filter(([dependency]) => dependency !== file && dependency.endsWith('.lean'))
         .map(([file, source]) => ({ file, source }));
-      const bytes = Buffer.byteLength(source) + dependencySources.reduce((sum, dependency) => sum + Buffer.byteLength(dependency.source), 0);
+      const newTexts = [...new Set([source, ...dependencySources.map(dependency => dependency.source)])]
+        .filter(text => !sourceTexts.has(text));
+      const bytes = newTexts.reduce((sum, text) => sum + Buffer.byteLength(text), 0);
       if (sourceBytes + bytes > maxSourcesBytes) { sourcePartial = true; return; }
       sources.push({ taskId: node.task.id, taskVersion: version, commit, sourceDigest: selected.digest,
         environmentDigest: state.environmentDigest, file, source, scope: 'owned-file',
         ...(dependencySources.length ? { dependencySources } : {}) });
+      for (const text of newTexts) sourceTexts.add(text);
       sourceBytes += bytes; sourceIds.add(key);
     } catch { sourcePartial = true; }
   };
@@ -138,7 +145,7 @@ function sourceProjection(state: SolverRunState, directory: string) {
     for (const receipt of proof.verification.results) {
       if (receipt.proofPath !== node.task.proofPath || receipt.theoremName !== node.task.theoremName) continue;
       const id = receipt.receiptId || `observation-${mathDigest(canonicalMathJson(receipt))}`;
-      const key = canonicalMathJson([node.task.id, version, proof.commit, id]);
+      const key = canonicalMathJson([node.task.id, version, proof.commit, id, proof.verification.checkedAt, original ? proof.passed : null]);
       if (checkIds.has(key)) continue;
       // The original-problem check can pass one target while failing the batch.
       const passed = original ? proofReceiptsMatch({ ...proof.verification, status: receipt.status, results: [receipt] }, proof.commit, [{
@@ -176,12 +183,24 @@ function sourceProjection(state: SolverRunState, directory: string) {
     }
     if (commit) addSource(node, commit); else sourcePartial = true;
   }
-  if (state.check) for (const node of state.cooperation?.tasks ?? []) if (node.task.kind === 'goal') {
-    const target = state.problem.targets.find(item => item.proofPath === node.task.proofPath && item.theoremName === node.task.theoremName);
-    if (target && state.check.verification.results.some(receipt =>
-      receipt.proofPath === target.proofPath && receipt.theoremName === target.theoremName)) addProof(node, state.check, target);
+  const wholeChecks = [state.check, ...(state.workers ?? []).map(worker => worker.check)]
+    // Cooperative workers also retain their most recent task-scoped proof in check.
+    .filter((proof): proof is ProofCheck => proof !== undefined && !('taskDigest' in proof));
+  for (const [index, target] of state.problem.targets.entries()) {
+    const node = state.cooperation?.tasks.find(item => item.task.kind === 'goal' &&
+      item.task.proofPath === target.proofPath && item.task.theoremName === target.theoremName);
+    // Direct and independent runs use the same frozen target identity as their knowledge evidence.
+    const task = node?.task ?? { id: `original_goal_${index + 1}`, kind: 'goal' as const,
+      objective: `Prove ${target.theoremName}`, revision: 0, dependsOn: [], ...target };
+    let found = false;
+    for (const proof of wholeChecks) {
+      if (proof.verification.results.some(receipt => receipt.proofPath === target.proofPath && receipt.theoremName === target.theoremName)) {
+        addProof({ task }, proof, target);
+        found = true;
+      } else checkPartial = true;
+    }
+    if (!node && !found) sourcePartial = true;
   }
-  if (!state.cooperation?.tasks.length && state.problem.targets.length) sourcePartial = true;
   return { sources, checks, coverage: { sources: sourcePartial ? 'partial' as const : 'recorded' as const,
     checks: checkPartial ? 'partial' as const : 'recorded' as const } };
 }
@@ -205,9 +224,11 @@ export function createWebWorkerBridge(options: {
       !options.libraryRestart.previousSolverRunId)) throw new Error('web_bridge_run_identity_changed');
   // Each new bridge starts with a self-contained frame. Retain only the previous frame's digests.
   let emittedSources = new Set<string>();
-  async function capture(input: { includeCatalog?: boolean; force?: boolean } = {}) {
+  let captured = false;
+  async function capture(input: { includeCatalog?: boolean; force?: boolean; waitMs?: number } = {}) {
     const messages: WorkerMessage[] = [];
-    const result = await withMathRuntimeLease({ lockPath: path.join(directory, 'web-bridge.lock'), flockExecutable: '/usr/bin/flock' }, async lease => {
+    const result = await withMathRuntimeLease({ lockPath: path.join(directory, 'web-bridge.lock'), flockExecutable: '/usr/bin/flock',
+      waitMs: input.waitMs }, async lease => {
       const stored = readRunInspection(options.output), { state, stateFile } = stored;
       if (options.libraryRestart?.previousSolverRunId === state.runId) throw new Error('web_bridge_run_identity_changed');
       const { agentTeam, ...report } = buildRunInspection(state, stored.result);
@@ -232,19 +253,28 @@ export function createWebWorkerBridge(options: {
       if (state.cooperation?.planVersion && state.cooperation.tasks.length) plan = exportRunPlan(state);
       const payload = { inspection, snapshot: inspection.snapshot, plan, ...projection, declarations,
         guidance: readHumanGuidance(stateFile, state.runId), deliveries: state.cooperation?.deliveries ?? [], history };
-      const contentDigest = mathDigest(canonicalMathJson(payload));
+      let observation: WebObservation = { schema: 'theorem-os.web-observation.v1', webRunId: options.webRunId,
+        solverRunId: state.runId, sequence: 0, observedAt: new Date().toISOString(), evidence: 'recorded-not-replayed',
+        acceptance: 'not-assessed', ...payload };
+      let frame = standaloneObservationFrame(observation);
+      const contentDigest = mathDigest(canonicalMathJson({ ...frame.observation, observedAt: '' }));
       const changed = restarted || previous?.contentDigest !== contentDigest;
       const sequence = (previous?.sequence ?? 0) + Number(changed);
-      if (restarted) messages.push({ type: 'library_restart', previousSolverRunId: previous!.solverRunId,
-        solverRunId: state.runId, round: options.libraryRestart!.round });
-      let observation: WebObservation = { schema: 'theorem-os.web-observation.v1', webRunId: options.webRunId,
-        solverRunId: state.runId, sequence, observedAt: new Date().toISOString(), evidence: 'recorded-not-replayed',
-        acceptance: 'not-assessed', ...payload };
-      if (options.apiKey && canonicalMathJson(observation).includes(options.apiKey)) {
-        observation = JSON.parse(JSON.stringify(observation).replaceAll(JSON.stringify(options.apiKey).slice(1, -1), '[REDACTED]'));
+      const libraryRestart = previous && options.libraryRestart && { ...options.libraryRestart, solverRunId: state.runId };
+      // Capture through docker exec can commit the new metadata before the streaming worker does.
+      const announceRestart = libraryRestart && options.onMessage && !captured;
+      if (announceRestart) messages.push({ type: 'library_restart', ...libraryRestart });
+      observation.sequence = sequence;
+      frame.observation.sequence = sequence;
+      let frameJson = JSON.stringify(frame);
+      const secret = options.apiKey && JSON.stringify(options.apiKey).slice(1, -1);
+      if (secret && frameJson.includes(secret)) {
+        observation = JSON.parse(JSON.stringify(observation).replaceAll(secret, '[REDACTED]'));
         observation.coverage.sources = 'partial'; observation.coverage.checks = 'partial';
+        frame = standaloneObservationFrame(observation);
+        frameJson = JSON.stringify(frame);
       }
-      if (Buffer.byteLength(canonicalMathJson(observation)) > maxMessageBytes) throw new Error('web_observation_too_large');
+      if (Buffer.byteLength(frameJson) > maxWorkerObservationBytes) throw new Error('web_observation_too_large');
       const meta: BridgeMeta = { schema: 'theorem-os.web-bridge.v1', webRunId: options.webRunId, solverRunId: state.runId,
         libraryRound: options.libraryRestart?.round ?? previous?.libraryRound ?? 0,
         sequence, contentDigest, observations: [...(restarted ? [] : previous?.observations ?? []),
@@ -258,11 +288,11 @@ export function createWebWorkerBridge(options: {
           const imported = importKnowledgeRuns([stateFile], { includeFindings: true });
           if (buildRunInspection(readRunInspection(options.output).state).snapshot.stateDigest !== inspection.snapshot.stateDigest)
             throw new Error('web_catalog_state_changed');
-          const base = fs.existsSync(catalogFile) ? validateTheoremKnowledge(JSON.parse(readMathText(catalogFile, maxMessageBytes))) : undefined;
+          const base = fs.existsSync(catalogFile) ? validateTheoremKnowledge(JSON.parse(readMathText(catalogFile, maxWorkerObservationBytes))) : undefined;
           const candidate = buildTheoremKnowledge(imported.candidates, base, imported.findings);
           const text = canonicalMathJson(candidate);
           if (options.apiKey && text.includes(options.apiKey)) throw new Error('web_catalog_secret_redacted');
-          if (Buffer.byteLength(text) > maxMessageBytes) throw new Error('web_catalog_too_large');
+          if (Buffer.byteLength(text) > maxWorkerObservationBytes) throw new Error('web_catalog_too_large');
           const digest = mathDigest(text);
           if (digest !== previous?.catalogDigest) { writeMathJsonDurable(catalogFile, candidate); catalog = candidate; }
           meta.catalogKey = key; meta.catalogDigest = digest;
@@ -274,27 +304,24 @@ export function createWebWorkerBridge(options: {
         }
       }
       if (input.includeCatalog && !catalog && fs.existsSync(catalogFile)) {
-        catalog = validateTheoremKnowledge(JSON.parse(readMathText(catalogFile, maxMessageBytes)));
+        catalog = validateTheoremKnowledge(JSON.parse(readMathText(catalogFile, maxWorkerObservationBytes)));
       }
       lease.assertHeld();
       if (!previous || canonicalMathJson(previous) !== canonicalMathJson(meta)) writeMathJsonDurable(metaFile, meta);
-      if (changed || input.force) messages.push({ type: 'observation', observation });
+      captured = true;
+      if (changed || input.force || announceRestart) messages.push({ type: 'observation', observation });
       if (catalog) messages.push({ type: 'catalog', catalog });
-      return { observation, ...(catalog ? { catalog } : {}) };
+      return { frame, result: { observation, ...(catalog ? { catalog } : {}), ...(libraryRestart ? { libraryRestart } : {}) } };
     });
     for (const message of messages) {
       if (!options.onMessage) break;
       if (message.type !== 'observation') { options.onMessage(message); continue; }
-      const current = new Set<string>();
-      const sourceBlobs: Record<string, string> = {};
-      const observation = compactObservation(message.observation, (digest, source) => {
-        current.add(digest);
-        if (!emittedSources.has(digest)) sourceBlobs[digest] = source;
-      });
-      options.onMessage(message, { type: 'observation', observation, sourceBlobs });
-      emittedSources = current;
+      const blobs = Object.entries(result.frame.sourceBlobs);
+      const sourceBlobs = Object.fromEntries(blobs.filter(([digest]) => !emittedSources.has(digest)));
+      options.onMessage(message, { ...result.frame, sourceBlobs });
+      emittedSources = new Set(blobs.map(([digest]) => digest));
     }
-    return result;
+    return result.result;
   }
   return { capture };
 }
@@ -348,8 +375,9 @@ const commandSchema = z.discriminatedUnion('type', [
 export async function handleWebWorkerCommand(value: unknown, options: { activeRunFile?: string } = {}): Promise<WebCommandResult> {
   const command = commandSchema.parse(value) as WebCommand;
   const active = readActiveRun(options.activeRunFile ?? webActiveRunFile);
-  const bridge = createWebWorkerBridge({ webRunId: active.webRunId, directory: active.directory, output: active.output });
-  if (command.type === 'capture') return { id: 'capture', status: 'captured', ...await bridge.capture({ includeCatalog: true, force: true }) };
+  const bridge = createWebWorkerBridge({ ...active, libraryRestart: command.type === 'capture' ? active.libraryRestart : undefined });
+  if (command.type === 'capture') return { id: 'capture', status: 'captured',
+    ...await bridge.capture({ includeCatalog: true, force: true, waitMs: 5_000 }) };
   const { state, stateFile } = readRunInspection(active.output);
   if (command.type === 'guidance') {
     try {

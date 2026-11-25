@@ -186,6 +186,10 @@ describe('allowlisted web progress translation', () => {
     const task = translateWebProgress({ event: 'task_checked', taskId: 'goal-1', passed: true, conditional: true,
       commit: 'private-commit', verification: { status: 'kernel_verified' } });
     expect(task?.details).toEqual({ taskId: 'goal-1', passed: true, conditional: true });
+    const commit = 'a'.repeat(40), taskDigest = 'b'.repeat(64);
+    const exact = translateWebProgress({ event: 'task_checked', taskId: 'goal-1', passed: false, commit, taskDigest });
+    expect(exact?.details).toEqual({ taskId: 'goal-1', passed: false, commit, taskDigest });
+    expect(parseWorkerMessage(JSON.stringify(exact))).toEqual(exact);
     const lemma = translateWebProgress({ event: 'lemma_checked', workerId: 'solver', bridge: true, lemma: false,
       passed: true, status: 'evaluated_passed', error: 'private-lean-error' });
     expect(lemma?.details).toEqual({ workerId: 'solver' });

@@ -32,7 +32,7 @@ const readLimits = { events: 5_000, observations: 40 } as const;
 
 /** One Lean check of a task version. An original-problem check separately records the outcome of the whole batch. */
 export type TrajectoryCheck = { at: number; passed: boolean; status: string; receiptIds: string[]; theorems: string[]; headline?: string; observation: number;
-  originalProblemPassed?: boolean };
+  originalProblemPassed?: boolean; taskVersion?: string; file?: string };
 /** A task's code at one commit, with every recorded check of it. */
 export type TrajectoryVersion = {
   key: string; taskId: string; commit: string; file?: string; source?: number; firstAt: number; checks: TrajectoryCheck[]; revision: number;
@@ -57,6 +57,9 @@ export type TrajectoryContext = { workers: { id: string; role: string }[]; targe
 export type TrajectoryIndex = {
   instance: string; revision: number; eventCursor: number; observationCursor: number; lastObservedAt?: number;
   events: WebEvent[]; versions: Map<string, TrajectoryVersion>; sources: Map<string, { file: string; observation: number }>;
+  sourceRevisions: Map<string, number>;
+  /** The first observed frame for each receipt, including receipts that joined the check later. */
+  receiptFrames: WeakMap<TrajectoryCheck, number[]>;
   plans: TrajectoryPlan[]; plan?: Map<string, TrajectoryPlanItem>; planVersion?: string;
   deliveries: Map<string, TrajectoryDelivery>; guidance: Map<string, TrajectoryGuidance>; edits: Map<string, TrajectoryEdit>;
   workers: Map<string, string>; targets: string[]; contextRevision: number;
@@ -69,13 +72,24 @@ let instances = 0;
 const started = Date.now().toString(36);
 export function createTrajectoryIndex(): TrajectoryIndex {
   return { instance: `${started}-${++instances}`, revision: 0, eventCursor: 0, observationCursor: 0, events: [], versions: new Map(), sources: new Map(),
+    sourceRevisions: new Map(), receiptFrames: new WeakMap(),
     plans: [], deliveries: new Map(), guidance: new Map(), edits: new Map(), workers: new Map(), targets: [], contextRevision: 0, retired: new Set(),
     dropped: { events: 0, versions: 0, plans: 0, deliveries: 0, guidance: 0, edits: 0 } };
 }
 
 const clip = (value: string | undefined, limit: number) => value === undefined ? undefined : value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
 const millis = (value: string | number | undefined) => typeof value === 'number' ? value : value === undefined ? NaN : Date.parse(value);
+function receiptTime(record: WebCheckReceipt['record']) {
+  const verification = record.verification as { checkedAt?: string | number } | undefined;
+  const batch = millis(verification?.checkedAt);
+  if (Number.isFinite(batch)) return batch;
+  const individual = millis(record.checkedAt as string | number | undefined);
+  if (Number.isFinite(individual)) return individual;
+}
+const originalVerdict = (record: WebCheckReceipt['record']) =>
+  typeof record.originalProblemPassed === 'boolean' ? record.originalProblemPassed : undefined;
 const versionKey = (taskId: string, commit: string) => `${taskId}\u0000${commit}`;
+const sourceRevisionKey = (key: string, taskVersion: string) => `${key}\u0000${taskVersion}`;
 /** Drops the oldest entries over the limit, remembering them so a repeated record is not added again. */
 function trim<T>(index: TrajectoryIndex, section: keyof TrajectoryIndex['dropped'], items: Map<string, T>, limit: number) {
   for (const key of items.keys()) {
@@ -110,12 +124,22 @@ function foldEvents(index: TrajectoryIndex, events: readonly WebEvent[]) {
 
 function foldSource(index: TrajectoryIndex, source: WebTaskSource, observation: number) {
   const key = versionKey(source.taskId, source.commit);
+  if (retired(index, 'versions', key)) return;
   const version = index.versions.get(key);
+  const revision = sourceRevisionKey(key, source.taskVersion);
+  if (!index.sourceRevisions.has(revision)) {
+    index.sourceRevisions.set(revision, observation);
+    for (const old of index.sourceRevisions.keys()) {
+      if (index.sourceRevisions.size <= trajectoryLimits.versions) break;
+      index.sourceRevisions.delete(old);
+    }
+    if (version) version.revision = index.revision;
+  }
   if (version) {
     if (version.source === undefined) { version.source = observation; version.file = source.file; version.revision = index.revision; }
     return;
   }
-  if (index.sources.has(key) || retired(index, 'versions', key)) return;
+  if (index.sources.has(key)) return;
   index.sources.set(key, { file: source.file, observation });
   // Sources wait here until a check names them; the map is bounded like the versions it feeds.
   for (const old of index.sources.keys()) { if (index.sources.size <= trajectoryLimits.versions) break; index.sources.delete(old); }
@@ -124,9 +148,7 @@ function foldSource(index: TrajectoryIndex, source: WebTaskSource, observation: 
 function foldCheck(index: TrajectoryIndex, receipt: WebCheckReceipt, observation: number, observedAt: number) {
   const key = versionKey(receipt.taskId, receipt.commit);
   if (retired(index, 'versions', key)) return;
-  const record = receipt.record ?? {}, verification = record.verification as { checkedAt?: unknown } | undefined;
-  const recorded = millis(verification?.checkedAt as number | undefined) || millis(record.checkedAt as number | undefined);
-  const at = Number.isFinite(recorded) ? recorded : observedAt;
+  const record = receipt.record ?? {}, at = receiptTime(record) ?? observedAt;
   let version = index.versions.get(key);
   if (!version) {
     const pending = index.sources.get(key);
@@ -137,19 +159,22 @@ function foldCheck(index: TrajectoryIndex, receipt: WebCheckReceipt, observation
     trim(index, 'versions', index.versions, trajectoryLimits.versions);
     if (!index.versions.has(key)) return;
   }
-  const originalProblemPassed = typeof record.originalProblemPassed === 'boolean' ? record.originalProblemPassed : undefined;
-  let check = version.checks.find(item => item.at === at && item.originalProblemPassed === originalProblemPassed);
+  const originalProblemPassed = originalVerdict(record);
+  let check = version.checks.find(item => item.at === at && item.originalProblemPassed === originalProblemPassed && item.taskVersion === receipt.taskVersion);
   if (check?.receiptIds.includes(receipt.id)) return;
   if (!check) {
     if (version.checks.length >= trajectoryLimits.checks) version.checks.splice(1, 1); // The first check stays: it is the attempt itself.
-    check = { at, passed: true, status: 'kernel_verified', receiptIds: [], theorems: [], observation,
+    check = { at, passed: true, status: 'kernel_verified', receiptIds: [], theorems: [], observation, taskVersion: receipt.taskVersion,
+      ...(typeof record.proofPath === 'string' ? { file: record.proofPath } : {}),
       ...(originalProblemPassed === undefined ? {} : { originalProblemPassed }) };
+    index.receiptFrames.set(check, []);
     version.checks.push(check);
     version.checks.sort((a, b) => a.at - b.at);
     version.firstAt = Math.min(version.firstAt, at);
   }
   if (check.receiptIds.length >= trajectoryLimits.receipts) return;
   check.receiptIds.push(receipt.id);
+  index.receiptFrames.get(check)!.push(observation);
   const theorem = typeof record.theoremName === 'string' ? record.theoremName : undefined;
   if (theorem && !check.theorems.includes(theorem)) check.theorems.push(theorem);
   if (record.passed !== true && check.passed) {
@@ -291,19 +316,52 @@ export function trajectoryPage(index: TrajectoryIndex, query: TrajectoryQuery, b
 }
 
 /** One version's saved file and receipts, read only from the observations the index recorded for it. */
-export type TrajectoryVersionDetail = { taskId: string; commit: string; source?: WebTaskSource; checks: WebCheckReceipt[] };
-export function trajectoryVersionDetail(version: TrajectoryVersion, observation: (sequence: number) => WebObservation | undefined): TrajectoryVersionDetail {
-  const sequences = [...new Set([...(version.source !== undefined ? [version.source] : []), ...version.checks.map(check => check.observation)])];
-  const receipts = new Set(version.checks.flatMap(check => check.receiptIds));
+export type TrajectoryVersionDetail = { taskId: string; commit: string; source?: WebTaskSource; checks: WebCheckReceipt[]; objective?: string };
+export function selectTrajectoryChecks(version: TrajectoryVersion, taskVersion?: string, receiptId?: string, checkAt?: number) {
+  return version.checks.filter(check => (taskVersion === undefined || check.taskVersion === taskVersion) &&
+    (checkAt === undefined || check.at === checkAt) &&
+    (receiptId === undefined || check.receiptIds.includes(receiptId)));
+}
+export function trajectoryVersionDetail(index: TrajectoryIndex, version: TrajectoryVersion,
+  observation: (sequence: number) => WebObservation | undefined, taskVersion?: string, selected = selectTrajectoryChecks(version, taskVersion)): TrajectoryVersionDetail {
+  const exactVersion = taskVersion ?? (selected.length === 1 ? selected[0]!.taskVersion : undefined);
+  const sourceFrame = exactVersion === undefined ? version.source : index.sourceRevisions.get(sourceRevisionKey(version.key, exactVersion));
+  const identity = (taskVersion: string | undefined, id: string, at: number, verdict: boolean | undefined) =>
+    JSON.stringify([taskVersion, id, at, verdict]);
+  const matches = (item: WebTaskSource | WebCheckReceipt) => item.taskId === version.taskId && item.commit === version.commit;
+  const frames = new Map<number, Map<string, TrajectoryCheck>>();
+  if (sourceFrame !== undefined) frames.set(sourceFrame, new Map());
+  for (const check of selected) for (const [offset, sequence] of (index.receiptFrames.get(check) ?? []).entries()) {
+    const wanted = frames.get(sequence) ?? new Map<string, TrajectoryCheck>();
+    wanted.set(identity(check.taskVersion, check.receiptIds[offset]!, check.at, check.originalProblemPassed), check);
+    frames.set(sequence, wanted);
+  }
   let source: WebTaskSource | undefined;
+  let objective: string | undefined;
   const checks = new Map<string, WebCheckReceipt>();
+  // Inspect the check's own frame first for its task description. If the task changed before capture, history can carry it.
+  const exactCheck = selected.length === 1 ? selected[0] : undefined;
+  const sequences = [...new Set([...(exactCheck ? [exactCheck.observation] : []), ...frames.keys()])];
   for (const sequence of sequences) {
     const item = observation(sequence);
     if (!item) continue;
-    source ??= item.sources.find(entry => entry.taskId === version.taskId && entry.commit === version.commit);
-    for (const check of item.checks) if (check.taskId === version.taskId && check.commit === version.commit && receipts.has(check.id) && !checks.has(check.id)) checks.set(check.id, check);
+    source ??= item.sources.find(entry => matches(entry) && (exactVersion === undefined || entry.taskVersion === exactVersion));
+    if (exactCheck && exactVersion !== undefined)
+      objective ??= [...item.inspection.tasks, ...item.history ?? []].find(task => task.id === version.taskId && task.version === exactVersion)?.objective;
+    const wanted = frames.get(sequence);
+    if (!wanted?.size) continue;
+    const at = Date.parse(item.observedAt);
+    for (const check of item.checks) if (matches(check)) {
+      const time = receiptTime(check.record) ?? at;
+      const verdict = originalVerdict(check.record);
+      const key = Number.isFinite(time) ? identity(check.taskVersion, check.id, time, verdict)
+        : [...wanted].find(([, group]) => group.taskVersion === check.taskVersion && group.originalProblemPassed === verdict &&
+          group.receiptIds.includes(check.id))?.[0];
+      if (key && wanted.has(key) && !checks.has(key)) checks.set(key, check);
+    }
   }
-  return { taskId: version.taskId, commit: version.commit, ...(source ? { source } : {}), checks: [...checks.values()].slice(-64) };
+  return { taskId: version.taskId, commit: version.commit, ...(source ? { source } : {}), checks: [...checks.values()],
+    ...(objective ? { objective } : {}) };
 }
 
 /** Query parameters of the trajectory routes; undefined means the request is malformed. */
@@ -313,9 +371,15 @@ export function trajectoryQuery(params: URLSearchParams): TrajectoryQuery | unde
   if (instance !== undefined && !/^[a-z0-9-]{1,64}$/u.test(instance)) return;
   return { after, since, ...(instance ? { instance } : {}) };
 }
-export function trajectoryVersionQuery(params: URLSearchParams): { taskId: string; commit: string } | undefined {
-  const taskId = params.get('task') ?? '', commit = params.get('commit') ?? '';
-  return taskId && taskId.length <= 200 && /^[A-Za-z0-9]{1,128}$/u.test(commit) ? { taskId, commit } : undefined;
+export function trajectoryVersionQuery(params: URLSearchParams): { taskId: string; commit: string; taskVersion?: string; receiptId?: string; checkAt?: number } | undefined {
+  const taskId = params.get('task') ?? '', commit = params.get('commit') ?? '', taskVersion = params.get('taskVersion'), receiptId = params.get('receiptId');
+  const checked = params.get('checkAt'), checkAt = checked === null ? undefined : Number(checked);
+  if (!taskId || taskId.length > 200 || !/^[A-Za-z0-9]{1,128}$/u.test(commit) ||
+    (taskVersion !== null && (!taskVersion || taskVersion.length > 200)) ||
+    (receiptId !== null && (!receiptId || receiptId.length > 200)) ||
+    (checkAt !== undefined && (!checked || !Number.isSafeInteger(checkAt) || checkAt < 0))) return;
+  return { taskId, commit, ...(taskVersion !== null ? { taskVersion } : {}), ...(receiptId !== null ? { receiptId } : {}),
+    ...(checkAt !== undefined ? { checkAt } : {}) };
 }
 export const trajectoryVersion = (index: TrajectoryIndex, taskId: string, commit: string) => index.versions.get(versionKey(taskId, commit));
 
@@ -344,12 +408,30 @@ export class WebTrajectories {
     const { index, behind } = this.read(owner, runId);
     return trajectoryPage(index, query, behind);
   }
-  version(owner: string, runId: string, taskId: string, commit: string): TrajectoryVersionDetail | undefined {
+  version(owner: string, runId: string, taskId: string, commit: string, taskVersion?: string, receiptId?: string, checkAt?: number): TrajectoryVersionDetail | undefined {
+    const read = this.readVersion(owner, runId, taskId, commit, taskVersion, receiptId, checkAt);
+    return read && trajectoryVersionDetail(read.index, read.version, sequence => this.reader.getObservation(owner, runId, sequence), taskVersion, read.checks);
+  }
+  explanationVersion(owner: string, runId: string, taskId: string, commit: string, taskVersion?: string, receiptId?: string, checkAt?: number) {
+    const read = this.readVersion(owner, runId, taskId, commit, taskVersion, receiptId, checkAt, checkAt === undefined);
+    if (!read) return { status: 'missing' } as const;
+    const failed = read.checks.filter(check => !check.passed);
+    if ((receiptId !== undefined && read.checks.length > 1) || failed.length > 1) return { status: 'ambiguous' } as const;
+    if (!failed.length) return { status: 'passed' } as const;
+    const detail = trajectoryVersionDetail(read.index, read.version, sequence => this.reader.getObservation(owner, runId, sequence), taskVersion, failed);
+    return { status: 'found', detail } as const;
+  }
+  private readVersion(owner: string, runId: string, taskId: string, commit: string, taskVersion?: string, receiptId?: string, checkAt?: number, complete = false) {
+    const find = (index: TrajectoryIndex) => {
+      const version = trajectoryVersion(index, taskId, commit);
+      if (!version) return;
+      const checks = selectTrajectoryChecks(version, taskVersion, receiptId, checkAt);
+      if (checks.length) return { index, version, checks };
+    };
     let read = this.read(owner, runId);
     // A rebuilt index catches up before answering, a bounded number of chunks at a time.
-    for (let chunk = 0; read.behind && !trajectoryVersion(read.index, taskId, commit) && chunk < 50; chunk++) read = this.read(owner, runId);
-    const version = trajectoryVersion(read.index, taskId, commit);
-    return version && trajectoryVersionDetail(version, sequence => this.reader.getObservation(owner, runId, sequence));
+    for (let chunk = 0; read.behind && (complete || !find(read.index)) && chunk < 50; chunk++) read = this.read(owner, runId);
+    return find(read.index);
   }
   forget(owner: string, runId: string) { this.indexes.delete(`${owner}\u0000${runId}`); }
   forgetOwner(owner: string) { for (const key of [...this.indexes.keys()]) if (key.startsWith(`${owner}\u0000`)) this.indexes.delete(key); }

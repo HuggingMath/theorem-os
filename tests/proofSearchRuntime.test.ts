@@ -6,7 +6,14 @@ import { canonicalMathJson, mathDigest, withMathRuntimeLease } from '../src/math
 import { proofSearchCheckpointSchema, searchLeanBranches, type ProofSearchCheckpoint,
   type SearchCheckpointReference } from '../src/math/leanProofSearch';
 import type { ProofSearchSession } from '../src/math/pantographSession';
-import { projectProofSearchRecord, retainProofSearchCheckpoint } from '../src/solver/proofSearchRecords';
+import { latestProofSearchRecord, projectProofSearchRecord, proofSearchRecordForAssignment,
+  readProofSearchCheckpoint, retainProofSearchCheckpoint } from '../src/solver/proofSearchRecords';
+import { runProofSearchTool } from '../src/solver/proofSearchTool';
+import { assignmentDeliveryFile, taskVersion, type CooperativeTask, type TaskAssignment } from '../src/solver/tasks';
+import type { DeliveryRecord } from '../src/solver/deliveries';
+import { bindMathematicalGap } from '../src/solver/mathematicalGaps';
+import type { MathematicalGap } from '../src/solver/mathematicalGapContract';
+import { proposedNextChecks } from '../src/solver/nextChecks';
 
 const boundary = vi.hoisted(() => ({ projection: vi.fn(), retainedProjection: vi.fn(), backend: vi.fn(), open: vi.fn() }));
 vi.mock('../src/math/leanSearchProjection', () => ({
@@ -102,6 +109,36 @@ beforeEach(() => {
 });
 afterEach(() => { fs.rmSync(directory, { recursive: true, force: true }); });
 
+async function nextCheckFixture() {
+  const helper: CooperativeTask = { id: scope.taskId, kind: 'lemma', objective: 'Prove helper', revision: 0, proofPath: target.file,
+    theoremName: target.theoremName, type: target.type, dependsOn: [] };
+  const goal: CooperativeTask = { id: 'original', kind: 'goal', revision: 0, objective: 'Prove original',
+    proofPath: 'Main.lean', theoremName: 'Original.target', dependsOn: [helper.id] };
+  const identity = { problemReceiptDigest: scope.problemReceiptDigest, environmentDigest: scope.environmentDigest };
+  const helperScope = { ...identity, taskId: helper.id, taskDigest: taskVersion(helper) };
+  boundary.projection.mockImplementation(({ projectRoot }) => projection(projectRoot));
+  boundary.retainedProjection.mockImplementation(({ projectRoot }) => projection(projectRoot));
+  boundary.open.mockImplementation(async () => session());
+  const result = await search({ scope: helperScope });
+  const first = result.checkpoint!, retain = (projectRoot: string, reference: SearchCheckpointReference,
+    workerId: string, history?: string, assignmentKey = workerId) => retainProofSearchCheckpoint({
+    projectRoot, runDirectory: directory, reference, scope: helperScope, workerId, assignmentKey, history,
+  });
+  const seed = retain(project, first, 'owner'), tasks = [helper, goal].map(task => ({ task, status: 'pending' as const, attempts: 0 }));
+  const state = { tasks, deliveries: [] as DeliveryRecord[], proofSearchRecords: { [helper.id]: seed } };
+  const gap: MathematicalGap = { consumer: { taskId: goal.id, taskDigest: taskVersion(goal) }, previousGap: 'The helper is open.',
+    reduced: 'Introduction yields an open equality.', remaining: 'Close the equality.', evidenceScope: 'Current contracts.',
+    reconsiderWhen: [], nextCheck: { action: 'apply-lemma', objective: 'Check an open branch.', expectedEvidence: 'Open branch or proof.',
+      execution: { kind: 'proof-search', taskId: helper.id, taskDigest: taskVersion(helper), basis: seed.basisDigest,
+        checkpoint: { ...first }, node: result.frontier!.at(-1)!.node } } };
+  const delivery = { id: 'gap-1', producer: 'owner', taskId: helper.id, taskDigest: taskVersion(helper), kind: 'progress' as const,
+    status: 'advisory' as const, statement: helper.objective, premises: [], dependencies: [], remainingObligations: [],
+    summary: 'An open branch', evidenceRefs: [], createdAt: seed.createdAt, mathematicalGap: gap,
+    mathematicalGapScope: bindMathematicalGap(gap, helper, state, identity) };
+  state.deliveries.push(delivery);
+  return { helper, identity, helperScope, result, first, seed, state, retain, delivery };
+}
+
 describe('proof-search runtime persistence with fake Lean boundaries', () => {
   it('rejects a 4.33.0 backend for a 4.33.1 project before preparing sources or opening a session', async () => {
     boundary.backend.mockReturnValue({ digest: backendDigest, toolchain: 'leanprover/lean4:v4.33.0', verify: vi.fn() });
@@ -175,6 +212,103 @@ describe('proof-search runtime persistence with fake Lean boundaries', () => {
     expect(output.dispose).toHaveBeenCalledTimes(1); expect(boundary.retainedProjection).not.toHaveBeenCalled();
   });
 
+  it('keeps parallel owner and checker continuations at the same generation independently resumable', async () => {
+    const first = await savedSearch(), history = mathDigest('independent check');
+    const retain = (projectRoot: string, reference: SearchCheckpointReference, workerId: string, history?: string) =>
+      retainProofSearchCheckpoint({ projectRoot, runDirectory: directory, reference, scope, workerId, assignmentKey: workerId, history });
+    const seed = retain(project, first.reference, 'owner');
+    const independent = makeProject('independent');
+    const projectRecord = (projectRoot: string, record: typeof seed, history?: string) =>
+      projectProofSearchRecord({ record, scope, projectRoot, runDirectory: directory, history })!.checkpoint;
+    const seedCopy = projectRecord(independent, seed, history);
+    boundary.projection.mockImplementation(({ projectRoot }) => projection(projectRoot));
+    boundary.retainedProjection.mockImplementation(({ projectRoot }) => projection(projectRoot));
+    boundary.open.mockImplementation(async () => session());
+    const from = first.checkpoint.nodes[1]!.id;
+    const authorization = (reference: SearchCheckpointReference) =>
+      ({ basisDigest: seed.basisDigest, checkpoint: reference });
+    const [owner, checker] = await Promise.all([
+      search({ request: { resume: first.reference, branches: [{ from, tactics: ['rfl'] }] } }),
+      search({ projectRoot: independent, history, retainedInput: authorization(seedCopy),
+        request: { resume: seedCopy, branches: [{ from, tactics: ['simp'] }] } }),
+    ]);
+    expect(owner.status).toBe('candidate');
+    expect(checker).toMatchObject({ status: 'exhausted', sourceBinding: 'host-retained-source-snapshot' });
+    const ownerRecord = retain(project, owner.checkpoint!, 'owner');
+    const checkerRecord = retain(independent, checker.checkpoint!, 'checker', history);
+    expect(ownerRecord.generation).toBe(checkerRecord.generation);
+    expect(ownerRecord.checkpoint.digest).not.toBe(checkerRecord.checkpoint.digest);
+    const records = { [scope.taskId]: latestProofSearchRecord(seed, ownerRecord),
+      'independent-task': latestProofSearchRecord(undefined, checkerRecord) };
+    const check = { taskId: 'independent-task', id: history, scope: { executionBasisDigest: seed.basisDigest },
+      proofSearchSeed: seed } as NonNullable<Parameters<typeof proofSearchRecordForAssignment>[2]>;
+    expect(proofSearchRecordForAssignment(records, scope)).toBe(ownerRecord);
+    expect(proofSearchRecordForAssignment(records, scope, check)).toBe(checkerRecord);
+    const ownerCopy = projectRecord(independent, ownerRecord, history);
+    expect(ownerCopy.path).not.toBe(path.resolve(independent, checker.checkpoint!.path));
+    expect(readProofSearchCheckpoint(independent, checker.checkpoint!, history).reference.digest).toBe(checker.checkpoint!.digest);
+    const migrated = makeProject('checker-restart'), checkerCopy = projectRecord(migrated, checkerRecord, history);
+    const end = await search({ projectRoot: migrated, history, retainedInput: authorization(checkerCopy),
+      request: { resume: checkerCopy, branches: [{ from: checker.frontier!.at(-1)!.node, tactics: ['rfl'] }] } });
+    expect(end).toMatchObject({ status: 'candidate', proofAcceptance: 'not-accepted' });
+    expect(path.dirname(end.candidates[0]!.artifact.path)).toBe(path.dirname(end.checkpoint!.path));
+    expect(readCheckpoint(migrated, end.checkpoint!).counters.replay).toBeGreaterThan(checker.counters!.replay);
+  });
+
+  it('resumes the latest local checkpoint before host projection only within the same independent assignment', async () => {
+    const f = await nextCheckFixture(), proposed = proposedNextChecks(f.state, f.identity, 2)[0]!;
+    const checker = makeProject('checker');
+    let assignment: TaskAssignment = { taskId: proposed.node.task.id, taskDigest: proposed.record.taskDigest,
+      workerId: 'checker', seedCommit: 'seed', assignmentId: 'dispatch-1' };
+    const projected = projectProofSearchRecord({ record: f.seed, scope: f.helperScope, projectRoot: checker,
+      runDirectory: directory, history: proposed.record.id })!;
+    const write = () => fs.writeFileSync(path.join(checker, 'COOPERATION.json'), JSON.stringify({
+      ...f.state, tasks: [...f.state.tasks, proposed.node], nextChecks: [proposed.record],
+      researchDelivery: { assignment, projectRelative: '.', ownedFiles: [target.file], ...f.identity },
+      proofSearchRecords: { [f.helper.id]: projected },
+    }));
+    write();
+    const run = (request: unknown) => runProofSearchTool({ projectRoot: checker, env, request });
+    const first = await run({ branches: [{ from: f.result.frontier!.at(-1)!.node, tactics: ['simp'] }] });
+    expect(first).toMatchObject({ status: 'exhausted', checkpoint: expect.anything() });
+    const next = { branches: [{ from: first.frontier!.at(-1)!.node, tactics: ['rfl'] }] };
+    const explicit = await run({ ...next, resume: first.checkpoint });
+    expect(explicit).toMatchObject({ status: 'candidate', sourceBinding: 'host-retained-source-snapshot',
+      counters: { issued: 6, completed: 6, replay: 3 } });
+    const implicit = await run(next);
+    expect(implicit).toMatchObject({ status: 'candidate', sourceBinding: 'host-retained-source-snapshot',
+      counters: { issued: 9, completed: 9, replay: 6 } });
+    expect(boundary.retainedProjection).toHaveBeenLastCalledWith(expect.objectContaining({
+      sources: readCheckpoint(project, f.first).replaySources,
+    }));
+    assignment = { ...assignment, assignmentId: 'dispatch-2' };
+    write();
+    await expect(run({ ...next, resume: implicit.checkpoint })).resolves.toMatchObject({
+      status: 'stale', reason: 'proof_search_stale_retained_checkpoint',
+    });
+    const restarted = await run({ branches: [{ from: f.result.frontier!.at(-1)!.node, tactics: ['rfl'] }] });
+    expect(restarted).toMatchObject({ status: 'candidate', counters: { issued: 3, completed: 3, replay: 1 } });
+    expect(readCheckpoint(checker, restarted.checkpoint!).generation).toBeGreaterThan(readCheckpoint(checker, implicit.checkpoint!).generation);
+  });
+
+  it('schedules an older exact checkpoint from its host-retained assignment delivery', async () => {
+    const f = await nextCheckFixture();
+    const next = await search({ scope: f.helperScope, request: { resume: f.first,
+      branches: [{ from: f.result.frontier!.at(-1)!.node, tactics: ['simp'] }],
+      limits: { timeoutMs: 30_000, maxTransitions: 32 } } });
+    const latest = f.retain(project, next.checkpoint!, 'owner');
+    expect(latest.generation).toBeGreaterThan(f.seed.generation);
+    f.state.proofSearchRecords[f.helper.id] = latestProofSearchRecord(f.seed, latest);
+    const receipt = { ...f.delivery, id: 'checkpoint-accepted', mathematicalGap: undefined, mathematicalGapScope: undefined,
+      assignmentKey: f.seed.assignmentKey, searchCheckpoint: f.seed.checkpoint };
+    f.state.deliveries.unshift({ ...receipt, searchCheckpoint: f.first });
+    expect(proposedNextChecks(f.state, f.identity, 2, directory)).toEqual([]);
+    f.state.deliveries[0] = { ...receipt, taskDigest: mathDigest('stale task version') };
+    expect(proposedNextChecks(f.state, f.identity, 2, directory)).toEqual([]);
+    f.state.deliveries[0] = receipt;
+    expect(proposedNextChecks(f.state, f.identity, 2, directory)[0]?.record.proofSearchSeed).toEqual(f.seed);
+  });
+
   it('keeps ordinary owner resumes stale when current source changes instead of restoring retained source', async () => {
     const first = await savedSearch(), changedSource = sources[0]!.source + '-- new owner edit\n';
     fs.writeFileSync(path.join(project, target.file), changedSource);
@@ -192,13 +326,61 @@ describe('proof-search runtime persistence with fake Lean boundaries', () => {
     expect(readCheckpoint(project, first.reference)).toEqual(first.checkpoint);
   });
 
+  it('starts a fresh worker search on changed source only if no resume or old node was requested', async () => {
+    const helper = { id: scope.taskId, kind: 'lemma' as const, objective: 'Prove helper', revision: 0, proofPath: target.file,
+      theoremName: target.theoremName, type: target.type, dependsOn: [] };
+    const identity = { ...scope, taskDigest: taskVersion(helper) };
+    boundary.projection.mockReturnValue(projection(project));
+    boundary.open.mockResolvedValue(session());
+    const first = await search({ scope: identity });
+    const assignment = { taskId: identity.taskId, taskDigest: identity.taskDigest, workerId: 'owner', seedCommit: 'seed' };
+    const firstCheckpoint = readCheckpoint(project, first.checkpoint!);
+    const record = retainProofSearchCheckpoint({ projectRoot: project, runDirectory: directory, reference: first.checkpoint!,
+      scope: identity, workerId: assignment.workerId, assignmentKey: assignmentDeliveryFile(assignment) });
+    const projected = projectProofSearchRecord({ record, scope: identity, projectRoot: project, runDirectory: directory })!;
+    fs.writeFileSync(path.join(project, 'COOPERATION.json'), JSON.stringify({
+      researchDelivery: { assignment, projectRelative: '.', ownedFiles: [target.file], ...identity }, tasks: [{ task: helper }],
+      proofSearchRecords: { [helper.id]: projected },
+    }));
+    const changedSource = sources[0]!.source + '-- edited helper inputs\n';
+    fs.writeFileSync(path.join(project, target.file), changedSource);
+    const changedFiles = [{ file: target.file, digest: mathDigest(changedSource) }, sourceFiles[1]!];
+    const changedProjection = projection(project, { sourceFiles: changedFiles,
+      sourceDigest: mathDigest(canonicalMathJson(changedFiles)), projectionDigest: mathDigest('changed projection'),
+      replaySources: [{ file: target.file, source: changedSource }, sources[1]!] });
+    clearBoundaryCalls();
+    boundary.projection.mockReturnValue(changedProjection);
+    const fake = session();
+    boundary.open.mockResolvedValue(fake);
+    const run = (request: unknown) => runProofSearchTool({ projectRoot: project, env, request });
+    const request = { branches: [{ tactics: ['intro n', 'rfl'] }] };
+    await expect(run({ ...request, resume: projected.checkpoint })).resolves.toMatchObject({
+      status: 'stale', reason: 'proof_search_stale_basis',
+    });
+    await expect(run({ branches: [{ from: firstCheckpoint.nodes[1]!.id, tactics: ['rfl'] }] })).resolves.toMatchObject({
+      status: 'stale', reason: 'proof_search_stale_basis',
+    });
+    expect(boundary.open).not.toHaveBeenCalled();
+    clearBoundaryCalls();
+    const next = await run(request);
+    expect(next).toMatchObject({ status: 'candidate', proofAcceptance: 'not-accepted', sourceBinding: 'current-worker-source',
+      counters: { issued: 2, completed: 2, replay: 0 } });
+    expect(next.basis).not.toBe(first.basis);
+    expect(boundary.projection).toHaveBeenCalledTimes(1);
+    expect(boundary.retainedProjection).not.toHaveBeenCalled();
+    expect(boundary.open).toHaveBeenCalledTimes(1);
+    expect(readCheckpoint(project, first.checkpoint!)).toEqual(firstCheckpoint);
+    expect(readCheckpoint(project, next.checkpoint!).replaySources?.[0]?.source).toBe(changedSource);
+  });
+
   it.each([
     ['basisDigest', 'proof_search_stale_retained_basis'],
-    ['checkpointDigest', 'proof_search_stale_retained_checkpoint'],
+    ['checkpoint', 'proof_search_stale_retained_checkpoint'],
   ] as const)('rejects a retained-input %s mismatch before preparing sources or opening a backend', async (field, reason) => {
     const first = await savedSearch(); clearBoundaryCalls();
-    const retainedInput = { basisDigest: first.result.basis!, checkpointDigest: first.reference.digest,
-      [field]: mathDigest('another authorization') };
+    const other = mathDigest('another authorization');
+    const retainedInput = { basisDigest: field === 'basisDigest' ? other : first.result.basis!,
+      checkpoint: field === 'checkpoint' ? { ...first.reference, digest: other } : first.reference };
     const result = await search({ request: continuation(first.reference, first.checkpoint), retainedInput });
     expect(result).toMatchObject({ status: 'stale', reason, proofAcceptance: 'not-accepted' });
     expect(boundary.projection).not.toHaveBeenCalled(); expect(boundary.retainedProjection).not.toHaveBeenCalled();
@@ -214,7 +396,7 @@ describe('proof-search runtime persistence with fake Lean boundaries', () => {
     const output = projection(project), fake = session({ firstStateId: 500 });
     boundary.retainedProjection.mockReturnValue(output); boundary.open.mockResolvedValue(fake);
     const result = await search({ request: continuation(first.reference, first.checkpoint),
-      retainedInput: { basisDigest: first.result.basis!, checkpointDigest: first.reference.digest } });
+      retainedInput: { basisDigest: first.result.basis!, checkpoint: first.reference } });
     expect(result).toMatchObject({ status: 'candidate', basis: first.result.basis, proofAcceptance: 'not-accepted',
       counters: { issued: 3, completed: 3, replay: 1 } });
     expect(boundary.retainedProjection).toHaveBeenCalledWith(expect.objectContaining({ projectRoot: project, ...target,
@@ -236,7 +418,7 @@ describe('proof-search runtime persistence with fake Lean boundaries', () => {
       const output = projection(project, override); boundary.retainedProjection.mockReturnValue(output);
       if (field === 'backendDigest') boundary.backend.mockReturnValue({ digest: changed, toolchain, verify: vi.fn() });
       const result = await search({ request: continuation(first.reference, first.checkpoint),
-        retainedInput: { basisDigest: first.result.basis!, checkpointDigest: first.reference.digest } });
+        retainedInput: { basisDigest: first.result.basis!, checkpoint: first.reference } });
       expect(result).toMatchObject({ status: 'stale', reason: 'proof_search_stale_basis', proofAcceptance: 'not-accepted' });
       expect(boundary.retainedProjection).toHaveBeenCalledTimes(1); expect(boundary.projection).not.toHaveBeenCalled();
       expect(boundary.open).not.toHaveBeenCalled(); expect(output.compile).not.toHaveBeenCalled();

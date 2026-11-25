@@ -15,10 +15,16 @@ export function mathConstructionImports(source: string): string[] {
 
 /** Header import module names with their source offsets, for exact rewrites. */
 export function mathConstructionImportSpans(source: string): { name: string; start: number; end: number }[] {
+  return mathConstructionHeader(source).imports;
+}
+
+/** Read the optional module/prelude directives and imports at the beginning of a file. */
+export function mathConstructionHeader(source: string): { directivesEnd: number; imports: { name: string; start: number; end: number }[] } {
   let offset = 0, tokenStart = 0;
-  const next = (): string | undefined => {
+  const next = (sameLine = false): string | undefined => {
     for (;;) {
-      while (/\s/u.test(source[offset] ?? '') && offset < source.length) offset++;
+      while (offset < source.length && (sameLine ? /[^\S\r\n]/u : /\s/u).test(source[offset]!)) offset++;
+      if (sameLine && (source[offset] === '\r' || source[offset] === '\n')) break;
       if (source.startsWith('--', offset)) {
         const end = source.indexOf('\n', offset);
         offset = end < 0 ? source.length : end;
@@ -85,8 +91,13 @@ export function mathConstructionImportSpans(source: string): { name: string; sta
     'initialize',
     'builtin_initialize',
   ]);
-  let token = next();
-  while (token === 'prelude' || token === 'module') token = next();
+  let token = next(), directivesEnd = 0;
+  while (token === 'prelude' || token === 'module') {
+    const nextToken = next(true);
+    // Retain inline comments, stopping before later comments such as declaration documentation.
+    directivesEnd = tokenStart;
+    token = nextToken ?? next();
+  }
   while (token === 'import' || token === 'public' || token === 'private' || token === 'meta') {
     while (token === 'public' || token === 'private' || token === 'meta') token = next();
     if (token !== 'import') break;
@@ -97,7 +108,7 @@ export function mathConstructionImportSpans(source: string): { name: string; sta
       token = next();
     }
   }
-  return imports;
+  return { directivesEnd, imports };
 }
 
 const assertRegularSource = (root: string, relative: string): string => {

@@ -8,7 +8,7 @@ export type ResearchLibraryTrialTargetRef = {
   commit: string; sourceDigest: string; environmentDigest: string; file: string;
 };
 export type ResearchLibraryTrialTarget = {
-  ref: ResearchLibraryTrialTargetRef; runTitle: string; taskTitle: string; declaration: string; type: string;
+  ref: ResearchLibraryTrialTargetRef; runTitle: string; projectTitle?: string; taskTitle: string; declaration: string; type: string;
   environment: 'standard' | 'mathlib'; premises: string[]; compatible: boolean; incompatibility?: string;
 };
 export type ResearchLibraryTrialReceipt = {
@@ -55,6 +55,6 @@ export type ResearchLibraryTrialHistoryItem = Pick<ResearchLibraryTrial, 'id' | 
   current: boolean; reason?: string; receiptId?: string; checkedAt?: string;
 };
 export type ResearchLibraryTrialHistory = {
-  trial: ResearchLibraryTrial; current: boolean; reason?: string; personalAttempt: boolean;
+  trial: ResearchLibraryTrial; current: boolean; reason?: string; personalAttempt: boolean; personalAttemptReason?: string;
   libraryPack: ResearchLibraryPack; dependencySources: { file: string; source: string }[];
 };

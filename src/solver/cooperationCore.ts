@@ -43,7 +43,7 @@ import { digest, ReviewRecord, HumanEditRecord, CooperationState, TaskVersions, 
 import { emptyLeadWakes, leadWakePending, reopenLeadWakes, requestLeadWake, type LeadWakeReason } from './leadWakes';
 import { MAX_INVALID_TASK_TRANSITIONS, setTaskStatus, type TaskStatus, type TaskTransitionCause } from './taskLifecycle';
 import { planApprovalStatus } from './planApproval';
-import { projectProofSearchRecord, proofSearchTargetForAssignment } from './proofSearchRecords';
+import { projectProofSearchRecord, proofSearchCheckForAssignment, proofSearchRecordForAssignment } from './proofSearchRecords';
 import { answerGoalProgress, GOAL_PROGRESS_REVIEW_MS, goalProgressTaskContext, observeGoalProgress, resetGoalProgressClock,
   type GoalProgressDecision } from './goalProgress';
 
@@ -402,7 +402,7 @@ export abstract class CooperationCore {
   protected refreshNextChecks() {
     const identity = { problemReceiptDigest: this.input.state.problem.receiptDigest, environmentDigest: this.input.state.environmentDigest };
     const now = Date.now();
-    for (const proposed of [...proposedNextChecks(this.archive, identity, now),
+    for (const proposed of [...proposedNextChecks(this.archive, identity, now, path.dirname(this.lead.worktree)),
       ...proposedDefinitionContractChecks(this.archive, identity, now)]) {
       const previous = this.archive.nextChecks?.find(record => record.id === proposed.record.id);
       if (previous) {
@@ -676,9 +676,9 @@ export abstract class CooperationCore {
     for (const worker of this.input.workers) {
       const action = this.active.get(worker.id)?.action;
       const scoped = this.contextState(action, worker, versions);
-      const search = action?.kind === 'task' ? projectProofSearchRecord({
-        record: this.archive.proofSearchRecords?.[this.proofSearchScope(action).taskId],
-        scope: this.proofSearchScope(action),
+      const searchAssignment = action?.kind === 'task' ? this.proofSearchAssignment(action) : undefined;
+      const search = searchAssignment ? projectProofSearchRecord({
+        ...searchAssignment,
         projectRoot: path.join(worker.worktree, this.input.state.problem.projectRelative),
         runDirectory: path.dirname(this.lead.worktree),
       }) : undefined;
@@ -746,11 +746,15 @@ export abstract class CooperationCore {
     this.wake();
   }
   /** An independent scoped check may continue its explicit target's advisory search, never an arbitrary task. */
-  protected proofSearchScope(action: Extract<CooperativeAction, { kind: 'task' }>) {
+  protected proofSearchAssignment(action: Extract<CooperativeAction, { kind: 'task' }>) {
     const identity = { problemReceiptDigest: this.input.state.problem.receiptDigest,
       environmentDigest: this.input.state.environmentDigest };
     const checks = (this.archive.nextChecks ?? []).filter(record => currentNextCheck(record, this.archive, identity));
-    return { ...identity, ...proofSearchTargetForAssignment(action.assignment, checks, identity) };
+    const check = proofSearchCheckForAssignment(action.assignment, checks, identity);
+    const { taskId, taskDigest } = check?.scope.target ?? action.assignment;
+    const scope = { ...identity, taskId, taskDigest };
+    return { scope, record: proofSearchRecordForAssignment(this.archive.proofSearchRecords, scope, check),
+      history: check?.id, requiredBasisDigest: check?.scope.executionBasisDigest };
   }
   /** With --plan-approval, the first accepted plan holds every worker until a human approves its exact version. */
   protected planApprovalPending() {

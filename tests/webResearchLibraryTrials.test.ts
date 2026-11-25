@@ -25,7 +25,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
   for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
 });
-function setup(storage = new WebStorage()) {
+function setup(storage = new WebStorage(), moduleSource = 'namespace Shared\ntheorem zero (n : Nat) : n + 0 = n := by simp\nend Shared\n') {
   const sample = structuredClone(loadWebSample()!), run = sample.run;
   run.id = 'trial-run'; run.title = 'Exact addition goal'; run.source = original; run.environment = 'standard'; run.status = 'completed';
   delete run.researchConfiguration;
@@ -53,7 +53,7 @@ function setup(storage = new WebStorage()) {
     async resolveMathematics() { return { environment: 'standard', environmentDigest: getLeanTaskEnvironment('standard').dependencyDigest,
       declarations: [{ name: 'Shared.zero', type: '(n : Nat) : n + 0 = n', file: 'Submission/Library/Shared.lean' }],
       pack: { schema: 'theorem-os.library-pack.v1', modules: [{ file: 'Submission/Library/Shared.lean',
-        source: 'namespace Shared\ntheorem zero (n : Nat) : n + 0 = n := by simp\nend Shared\n',
+        source: moduleSource,
         origin: { kind: 'run', runId: 'published-fixture', commit, file: 'Main.lean' } }] } }; },
     async validateMathematics() { return { passed: true, receiptRefs: ['fixture-publication-check'] }; },
   });
@@ -186,6 +186,24 @@ describe('isolated Library mathematics trials', () => {
     expect(fixture.calls[0].libraryPack?.modules.map(item => item.file)).toEqual(['Submission/Library/Shared.lean', 'Submission/Library/Existing.lean']);
     frozen.libraryPack!.modules[0].source += '\n-- changed fixed module';
     denied(() => fixture.trials.prepare(alice, release.assetId, 'v1', { ...input, requestId: 'conflicting-pack' }), 409);
+  });
+
+  it.each(['module\n', 'module -- Keep this comment\nprelude\n', 'module /- Keep this\nblock comment. -/\n'])('places new imports after the Lean header %j', async header => {
+    const f = setup(new WebStorage(), 'module\n\nnamespace Shared\npublic theorem zero (n : Nat) : n + 0 = n := by simp\nend Shared\n');
+    const baseline = `-- User source\n${header}public import Init\n\n` + original.replace('theorem target', '/-- Addition by zero. -/\npublic theorem target');
+    f.run.source = baseline;
+    advance(f, value => { value.sources[0].source = baseline; value.sources[0].sourceDigest = mathDigest(baseline); });
+    const release = await publish(f), { draft } = candidate(f, release);
+    expect(draft.source).toBe(baseline.replace('public import Init', 'import Submission.Library.Shared\npublic import Init').replace('by sorry', proof));
+    expect((await f.trials.check(alice, draft.id, checkInput(draft))).status).toBe('passed');
+  });
+
+  it('keeps the first declaration’s documentation attached when inserting imports', async () => {
+    const f = setup(), header = 'module\n\n', baseline = header + '/-- A preserved fact. -/\n' + original;
+    f.run.source = baseline;
+    advance(f, value => { value.sources[0].source = baseline; value.sources[0].sourceDigest = mathDigest(baseline); });
+    const release = await publish(f), { draft } = candidate(f, release);
+    expect(draft.source).toBe(baseline.replace('module\n', 'module\nimport Submission.Library.Shared\n').replace('by sorry', proof));
   });
 
   it('passes the fixed auxiliary-task type to the independent checker and refuses a missing type', async () => {
@@ -417,6 +435,36 @@ describe('private Library trial history and personal follow-through', () => {
     expect(f.trials.attachProposalAttempt(alice, shared.id, feedback.id, input).versions).toHaveLength(attached.versions.length);
     denied(() => f.projects.detail(carol, shared.id), 404);
   });
+  it('creates and binds one statement version for the follow-up run’s exact environment', async () => {
+    const f = setup(), { shared, trial, feedback } = await proposal(f);
+    f.projects.candidateDelivery(bob, shared.id, feedback.id, { requestId: 'approve-environment', expectedRevision: feedback.revision, action: 'approve' });
+    const source = trial.source.trim();
+    const run = f.jobs.create(alice, { providerId: 'fixture', apiKey: 'sk-disposable-fixture', model: 'fixture', effort: 'high',
+      environment: 'standard', source, task: 'Follow-up in an updated runtime', maxTurns: 1, maxRunSeconds: 30, workers: 1, coordination: 'independent',
+      libraryProposalOrigin: { projectId: shared.id, feedbackId: feedback.id, trialDigest: trial.digest } },
+    { id: 'fixture', name: 'Fixture', baseUrl: 'http://127.0.0.1/never-called' });
+    const newDigest = mathDigest('updated runtime');
+    run.observation = structuredClone(f.run.observation!);
+    run.observation.webRunId = run.id;
+    run.observation.inspection.configuration.environmentDigest = newDigest;
+    f.storage.saveRun(alice, run);
+    const before = f.projects.addVersion(alice, shared.id, { requestId: 'earlier-environment',
+      expectedRevision: f.projects.detail(alice, shared.id).revision, statement: 'Addition identity', source, environment: 'standard', environmentDigest });
+    const input = { requestId: 'attach-environment', expectedRevision: before.revision, runId: run.id,
+      trialDigest: trial.digest, confirmed: true, createStatementVersion: true };
+    const save = vi.spyOn(f.storage, 'saveRecord').mockImplementationOnce(() => { throw new Error('fixture storage unavailable'); });
+    try {
+      expect(() => f.trials.attachProposalAttempt(alice, shared.id, feedback.id, input)).toThrow('fixture storage unavailable');
+      expect(f.projects.detail(alice, shared.id)).toEqual(before);
+    } finally { save.mockRestore(); }
+    const attached = f.trials.attachProposalAttempt(alice, shared.id, feedback.id, input);
+    expect(attached).toMatchObject({ revision: before.revision + 1 });
+    expect(attached.versions).toHaveLength(before.versions.length + 1);
+    const version = attached.versions.find(item => item.id === attached.currentStatementVersionId);
+    expect(version).toMatchObject({ source, environmentDigest: newDigest });
+    expect(attached.runs.find(item => item.runId === run.id)?.statementVersionId).toBe(version?.id);
+    expect(f.trials.attachProposalAttempt(alice, shared.id, feedback.id, input)).toEqual(attached);
+  });
   it('lists saved prepared/passed/failed trials by run, release and state without leaking them across owners', async () => {
     const f = setup(), release = await publish(f), prepared = candidate(f, release, alice, 'prepared').draft;
     const passed = candidate(f, release, alice, 'passed').draft; await f.trials.check(alice, passed.id, checkInput(passed));
@@ -466,6 +514,19 @@ describe('private Library trial history and personal follow-through', () => {
     expect(f.runner.run).not.toHaveBeenCalled(); expect(f.runner.command).not.toHaveBeenCalled(); expect(f.calls).toHaveLength(1);
     denied(() => f.trials.preparePersonalAttempt(alice, draft.id, 'f'.repeat(64)), 409);
     denied(() => f.trials.preparePersonalAttempt(bob, draft.id, draft.digest), 404);
+  });
+  it('keeps passed evidence readable when unpublished source prevents a personal attempt', async () => {
+    const f = setup(), baseline = 'import Submission.Base\n' + original;
+    f.run.source = baseline;
+    advance(f, value => { value.sources[0].source = baseline; value.sources[0].sourceDigest = mathDigest(baseline); });
+    const release = await publish(f), { draft } = candidate(f, release);
+    const checked = await f.trials.check(alice, draft.id, checkInput(draft));
+    expect(checked.status).toBe('passed');
+    expect(f.calls[0].dependencySources?.map(item => item.file)).toContain('Submission/Base.lean');
+    const history = f.trials.history(alice, draft.id);
+    expect(history).toMatchObject({ current: true, trial: checked, personalAttempt: false,
+      personalAttemptReason: expect.stringContaining('尚未发布的多文件源码') });
+    expect(() => f.trials.preparePersonalAttempt(alice, draft.id, checked.digest)).toThrow(history.personalAttemptReason);
   });
   it('refuses altered receipts and candidate source before preparing a personal attempt', async () => {
     const f = setup(), release = await publish(f), { draft } = candidate(f, release); await f.trials.check(alice, draft.id, checkInput(draft));

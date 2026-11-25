@@ -2,13 +2,13 @@ import { webProviderExecutionDigest, webProviderHarness, webHarnessResearchError
 import crypto from 'node:crypto';
 import type { WebConfig } from './config';
 import type { WebRunner } from './runner';
-import type { WebEvent, WebEventDetails, WebProvider, WebWorkerProvider, WebRun, WebRunInput, WorkerInput, WorkerMessage } from './shared';
+import type { WebEvent, WebEventDetails, WebProvider, WebResult, WebWorkerProvider, WebRun, WebRunInput, WorkerInput, WorkerMessage } from './shared';
 import { webResearchModeError, webSkillWithoutCooperation, webDefaultSkillLoading } from './researchMode';
 import { normalizeWebTeamPreferences } from './nativeTeamProfiles';
 import { personalExpertCardsDigest } from '../../src/solver/personalExperts';
-import { isProgressEvent, parseWebFailure, webAgentActionLimits, webLimits } from './shared';
+import { isProgressEvent, parseWebFailure, webAgentActionLimits, webLimits, webRunEventLimit } from './shared';
 import { recordWebModuleEvent, sanitizeWebEventDetails } from './moduleTelemetry';
-import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
+import type { WebCommand, WebCommandResult, WebLibraryRestart, WebObservation } from './collaboration';
 import { canonicalMathJson } from '../../src/math/mathRuntimeIo';
 import { WebStorage, type WebCreation } from './storage';
 import { WebKnowledgeService } from './knowledgeService';
@@ -60,14 +60,28 @@ export class WebJobs {
     for (const { owner, run, creation } of this.storage.loadRuns()) {
       if (creation) this.creations.set(JSON.stringify([owner, creation.requestId]), { ...creation, runId: run.id });
       const provider: WebWorkerProvider = { id: run.providerId, name: run.providerId, baseUrl: '' };
+      const tail = this.storage.recoverRunTail(owner, run);
+      const recoveredObservation = tail.observation && this.applyObservation(run, tail.observation);
+      if (tail.actionCount !== undefined) run.actions = { ...run.actions, count: tail.actionCount };
       this.jobs.set(run.id, { owner, run, provider, input: { ...run, apiKey: '' }, controller: new AbortController() });
-      if (!terminal(run)) {
+      if (run.result && (!terminal(run) || run.phase === 'interrupted' && run.result.status === 'evaluated_passed')) {
+        if (run.phase === 'interrupted') {
+          delete run.error;
+          delete run.failure;
+          delete run.finishedAt;
+        }
+        const last = run.events.at(-1);
+        this.finishResult(run, run.result, last?.type === 'finished' ? last.at : run.updatedAt);
+      } else if (!terminal(run)) {
         run.status = 'error'; run.phase = 'interrupted'; run.finishedAt = new Date().toISOString();
         run.error = '服务已重启；保留最后观测与已有证据。本次运行未恢复执行。';
         run.failure = { kind: 'interrupted' };
         delete run.queue;
         this.event(run, 'interrupted', run.error);
-      } else if (run.phase === 'interrupted' && !run.failure) run.failure = { kind: 'interrupted' };
+      } else {
+        if (run.phase === 'interrupted' && !run.failure) run.failure = { kind: 'interrupted' };
+        if (recoveredObservation || tail.actionCount !== undefined) this.persist(run);
+      }
     }
   }
 
@@ -143,20 +157,20 @@ export class WebJobs {
     if (this.list(owner).length >= webLimits.maxRuns)
       throw new Error(`已达到 ${webLimits.maxRuns} 条运行记录的上限。请先下载需要的档案，删除已结束的记录后重试。`);
     const now = new Date().toISOString();
-    const pinnedDigest = input.knowledgeDigest === undefined
+    const knowledgeDigest = input.knowledgeDigest === undefined
       ? continuation ? this.get(owner, continuation.runId)?.knowledgeDigest : this.knowledge.latestReusableCatalog(owner)?.digest
-      : input.knowledgeDigest ?? undefined;
-    if (pinnedDigest && !this.knowledge.getCatalog(owner, pinnedDigest))
+      : input.knowledgeDigest;
+    if (knowledgeDigest && !this.knowledge.getCatalog(owner, knowledgeDigest))
       throw new WebStorageError(404, '所选知识目录不存在或不属于当前会话。');
     const pinnedInput: WebRunInput = { ...input, environment: input.environment ?? 'standard',
       autoExplain: input.autoExplain ?? true, explanationLanguage: input.explanationLanguage ?? 'zh' };
     if (researchConfiguration && !input.nativeTeamCapacity) pinnedInput.modulePlan = structuredClone(researchConfiguration.modulePlan);
     if (input.researchMode === 'skill') pinnedInput.skillLoading ??= webDefaultSkillLoading(provider);
-    if (pinnedDigest) pinnedInput.knowledgeDigest = pinnedDigest;
+    if (knowledgeDigest) pinnedInput.knowledgeDigest = knowledgeDigest;
     else delete pinnedInput.knowledgeDigest;
     const { apiKey, knowledgeDigest: _selectedKnowledgeDigest, ...visible } = pinnedInput;
     const environment = input.environment ?? 'standard';
-    const run: WebRun = { ...clean(visible, apiKey), ...(pinnedDigest ? { knowledgeDigest: pinnedDigest } : {}),
+    const run: WebRun = { ...clean(visible, apiKey), ...(knowledgeDigest !== undefined ? { knowledgeDigest } : {}),
       environment, id: crypto.randomUUID(),
       title: '', status: 'queued',
       phase: 'queued', createdAt: now, updatedAt: now, timings: {}, events: [], modules: {} };
@@ -295,7 +309,7 @@ export class WebJobs {
       for (const listener of this.listeners.get(owner) ?? []) listener(version);
     });
   }
-  private libraryRestart(job: Job, message: Extract<WorkerMessage, { type: 'library_restart' }>) {
+  private libraryRestart(job: Job, message: WebLibraryRestart) {
     const current = job.run.solverAttempt ?? (job.run.observation && {
       solverRunId: job.run.observation.solverRunId, round: 0, sequence: job.run.observation.sequence });
     if (!current || current.solverRunId !== message.previousSolverRunId ||
@@ -306,31 +320,34 @@ export class WebJobs {
     this.persist(job.run);
   }
   private observe(job: Job, observation: WebObservation) {
-    const current = job.run.solverAttempt ?? (job.run.observation && {
-      solverRunId: job.run.observation.solverRunId, round: 0, sequence: job.run.observation.sequence });
-    if (observation.webRunId !== job.run.id || observation.snapshot.runId !== observation.solverRunId ||
+    if (this.applyObservation(job.run, observation)) this.persist(job.run);
+  }
+  private applyObservation(run: WebRun, observation: WebObservation) {
+    const current = run.solverAttempt ?? (run.observation && {
+      solverRunId: run.observation.solverRunId, round: 0, sequence: run.observation.sequence });
+    if (observation.webRunId !== run.id || observation.snapshot.runId !== observation.solverRunId ||
         current && (current.solverRunId !== observation.solverRunId || current.sequence >= observation.sequence)) return;
     const configuration = observation.inspection.configuration;
-    const actualHarness = configuration?.agentHarness, expectedHarness = job.run.harness ?? 'codex';
+    const actualHarness = configuration?.agentHarness, expectedHarness = run.harness ?? 'codex';
     if (actualHarness && actualHarness.id !== expectedHarness || expectedHarness !== 'codex' && !actualHarness ||
-        job.run.agentHarness && canonicalMathJson(job.run.agentHarness) !== canonicalMathJson(actualHarness)) return;
-    if ((configuration?.researchMode ?? 'legacy') !== (job.run.researchMode ?? 'legacy')) return;
+        run.agentHarness && canonicalMathJson(run.agentHarness) !== canonicalMathJson(actualHarness)) return;
+    if ((configuration?.researchMode ?? 'legacy') !== (run.researchMode ?? 'legacy')) return;
     if ((configuration?.researchDelegation?.mode === 'team' ? configuration.researchDelegation.maxAgents : undefined)
-        !== job.run.nativeTeamCapacity) return;
-    if (canonicalMathJson(configuration?.researchDelegation?.preferredProfiles ?? []) !== canonicalMathJson(job.run.nativeTeamPreferredProfiles ?? [])) return;
-    const cards = job.researchConfiguration?.personalExperts;
+        !== run.nativeTeamCapacity) return;
+    if (canonicalMathJson(configuration?.researchDelegation?.preferredProfiles ?? []) !== canonicalMathJson(run.nativeTeamPreferredProfiles ?? [])) return;
+    const cards = run.researchConfiguration?.personalExperts;
     if (configuration?.researchDelegation?.personalExperts?.digest !== (cards?.length ? personalExpertCardsDigest(cards) : undefined)) return;
-    if (job.run.researchMode === 'skill') {
-      const skill = configuration?.researchSkill, frozen = job.run.researchSkill;
-      if (!skill || skill.loading !== (job.run.skillLoading ?? 'native') ||
+    if (run.researchMode === 'skill') {
+      const skill = configuration?.researchSkill, frozen = run.researchSkill;
+      if (!skill || skill.loading !== (run.skillLoading ?? 'native') ||
           frozen && (skill.name !== frozen.name || skill.digest !== frozen.digest || skill.loading !== frozen.loading)) return;
-      job.run.researchSkill = { ...skill };
+      run.researchSkill = { ...skill };
     }
-    if (actualHarness) job.run.agentHarness = { ...actualHarness };
-    job.run.solverAttempt = { solverRunId: observation.solverRunId, round: current?.round ?? 0, sequence: observation.sequence };
-    job.run.observation = projectStoredObservationChecks(observation);
-    job.run.updatedAt = observation.observedAt;
-    this.persist(job.run);
+    if (actualHarness) run.agentHarness = { ...actualHarness };
+    run.solverAttempt = { solverRunId: observation.solverRunId, round: current?.round ?? 0, sequence: observation.sequence };
+    run.observation = projectStoredObservationChecks(observation);
+    run.updatedAt = observation.observedAt;
+    return true;
   }
   guidance(owner: string, runId: string, id: string) {
     const run = this.get(owner, runId);
@@ -421,6 +438,7 @@ export class WebJobs {
       const apiKey = job.input.apiKey;
       const capture = clean(await this.runner.command(id, { type: 'capture' }), apiKey);
       if (this.jobs.get(id) !== job) throw new WebStorageError(404, '运行不存在或不属于当前会话。');
+      if (capture.libraryRestart) this.libraryRestart(job, capture.libraryRestart);
       if (capture.observation) this.observe(job, capture.observation);
       if (capture.catalog) job.run.knowledgeCatalogDigest = this.knowledge.importCatalog(owner, capture.catalog).digest;
     }
@@ -442,7 +460,7 @@ export class WebJobs {
     const event: WebEvent = { sequence, at: run.updatedAt, type, message: message.slice(0, 2_000), ...(details ? { details } : {}) };
     recordWebModuleEvent(run, event);
     run.events.push(event);
-    if (run.events.length > 200) run.events.shift();
+    if (run.events.length > webRunEventLimit) run.events.shift();
     this.persist(run);
   }
   private pump() {
@@ -466,11 +484,27 @@ export class WebJobs {
       this.changed(job.owner);
     });
   }
+  private finishResult(run: WebRun, result: WebResult, finishedAt: string, beforeFinished?: () => void) {
+    run.status = result.status === 'runtime_error' ? 'error' : 'completed';
+    run.phase = result.status;
+    run.finishedAt ??= finishedAt;
+    delete run.queue;
+    beforeFinished?.();
+    if (run.events.at(-1)?.type === 'finished') { this.persist(run); return; }
+    const acceptance = !run.formalization ? '完整原题通过独立 Lean 验收'
+      : !isStatementReviewed(run) ? '候选 Lean 陈述通过独立验收；原题含义尚未审核通过。'
+      : run.formalization.confirmation === 'manual' ? 'Lean 陈述通过独立 Lean 验收；原题含义已由你确认。Lean 验收不能替代自然语言原意核对。'
+        : run.formalization.confirmation === 'automatic' ? 'Lean 陈述通过独立 Lean 验收；原题含义仅经模型审核，未经人工确认。Lean 验收不能替代自然语言原意核对。'
+          : 'Lean 陈述通过独立 Lean 验收；原题含义未记录确认方式，请核对 Lean 陈述。Lean 验收不能替代自然语言原意核对。';
+    this.event(run, 'finished', result.status === 'evaluated_passed' ? acceptance : '运行结束，请查看验收状态');
+  }
   private async execute(job: Job) {
     const key = job.input.apiKey;
     let messageError: unknown;
     const handle = (raw: WorkerMessage) => {
-      if (messageError || this.jobs.get(job.run.id) !== job || terminal(job.run) && !['observation', 'catalog'].includes(raw.type)) return;
+      if (messageError || this.jobs.get(job.run.id) !== job || terminal(job.run) &&
+          raw.type !== 'observation' && raw.type !== 'catalog' &&
+          !(job.run.status === 'cancelled' && raw.type === 'library_restart')) return;
       try {
         const message = clean(raw, key);
         if (message.type === 'progress') {
@@ -484,8 +518,9 @@ export class WebJobs {
           const tally = job.run.actions ??= { count: 0 };
           if (tally.count >= webAgentActionLimits.perRun) tally.dropped = (tally.dropped ?? 0) + 1;
           else {
-            tally.count++;
-            this.storage.saveAction(job.owner, job.run.id, { ...message.action, sequence: tally.count, at: new Date().toISOString() });
+            const sequence = tally.count + 1;
+            this.storage.saveAction(job.owner, job.run.id, { ...message.action, sequence, at: new Date().toISOString() });
+            tally.count = sequence;
           }
           this.actionsChanged(job.run);
         } else if (message.type === 'artifact') {
@@ -529,18 +564,12 @@ export class WebJobs {
       if (messageError) throw messageError;
       if (!terminal(job.run)) {
         if (!job.run.result) throw new Error(job.run.error || '没有收到运行结果。');
-        job.run.status = job.run.result.status === 'runtime_error' ? 'error' : 'completed';
         const accepted = job.run.result.status === 'evaluated_passed';
-        // Transfer credentials only to the explanation queue, before the solver releases them. The queue saves its
-        // initial records before the finished notification; proof acceptance never depends on explanation success.
-        if (accepted) try { this.onProofAccepted?.(job.owner, job.run, { apiKey: job.input.apiKey, provider: job.provider }); }
-        catch { this.event(job.run, 'explanation_queue_failed', '证明已验收，自动讲解未能保存；请稍后重试。'); }
-        const acceptance = !job.run.formalization ? '完整原题通过独立 Lean 验收'
-          : !isStatementReviewed(job.run) ? '候选 Lean 陈述通过独立验收；原题含义尚未审核通过。'
-          : job.run.formalization.confirmation === 'manual' ? 'Lean 陈述通过独立 Lean 验收；原题含义已由你确认。Lean 验收不能替代自然语言原意核对。'
-            : job.run.formalization.confirmation === 'automatic' ? 'Lean 陈述通过独立 Lean 验收；原题含义仅经模型审核，未经人工确认。Lean 验收不能替代自然语言原意核对。'
-              : 'Lean 陈述通过独立 Lean 验收；原题含义未记录确认方式，请核对 Lean 陈述。Lean 验收不能替代自然语言原意核对。';
-        this.event(job.run, 'finished', accepted ? acceptance : '运行结束，请查看验收状态');
+        this.finishResult(job.run, job.run.result, new Date().toISOString(), accepted ? () => {
+          // The explanation queue receives credentials before the solver releases them.
+          try { this.onProofAccepted?.(job.owner, job.run, { apiKey: job.input.apiKey, provider: job.provider }); }
+          catch { this.event(job.run, 'explanation_queue_failed', '证明已验收，自动讲解未能保存；请稍后重试。'); }
+        } : undefined);
         if (accepted && isStatementReviewed(job.run)) this.onAccepted?.(job.owner);
       }
     } catch (error) {

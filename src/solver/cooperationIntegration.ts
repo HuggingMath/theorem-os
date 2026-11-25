@@ -323,13 +323,14 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
       else await publish();
     };
     await persistProgress();
-    const finish = async (node: TaskRecord) => {
+    const finish = async (node: TaskRecord, receipt?: TaskProof) => {
       if (!checked.has(node.task.id)) { checked.add(node.task.id); progress.completed++; }
       progress.taskId = undefined;
       if (node.status === 'integrated' && node.task.kind === 'goal' && node.integratedCheck?.passed &&
           !node.integratedCheck.conditions?.length && this.checkedDeliveries.has(node.integratedCheck) &&
           hasTaskAcceptance(node.integratedCheck)) freshGoals.set(node.task.id, digest(node.task));
-      this.input.emit('task_recheck_finished', { ...progress, taskId: node.task.id, passed: node.status === 'integrated', ...(snapshot ? { staged: true } : {}) });
+      this.input.emit('task_recheck_finished', { ...progress, taskId: node.task.id, passed: node.status === 'integrated',
+        commit: receipt?.commit, taskDigest: receipt?.taskDigest, ...(snapshot ? { staged: true } : {}) });
       await persistProgress();
     };
     while (pending.length || retryable.size) {
@@ -353,11 +354,14 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
       this.input.signal.throwIfAborted();
       if (snapshot && !snapshot.current()) return false;
       const assignment = this.canonicalCheckAssignment(node.task, canonical, tasks);
+      let savedReceipt: TaskProof | undefined;
       try {
         if (reusable(node)) {
           node.feedback = undefined;
-          this.input.emit('task_check_reused', { taskId: node.task.id, commit: node.integratedCheck!.commit, canonicalCommit: canonical });
-          await finish(node); continue;
+          const receipt = node.integratedCheck!;
+          this.input.emit('task_check_reused', { taskId: node.task.id, passed: receipt.passed,
+            commit: receipt.commit, taskDigest: receipt.taskDigest, canonicalCommit: canonical });
+          await finish(node, receipt); continue;
         }
         if (!batchAttempted.has(node) && (this.input.modules.M2.checkTask ?? checkTaskProof) === checkTaskProof) {
           const source = projection(node);
@@ -404,7 +408,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
         this.input.signal.throwIfAborted();
         if (['unavailable', 'blocked'].includes(receipt.verification.status)) throw verifierFailure('integrated-task-recheck', receipt, node.task);
         if (snapshot && !snapshot.current()) return false;
-        node.integratedCheck = receipt;
+        savedReceipt = node.integratedCheck = receipt;
         if (!receipt.passed && !retried.has(node) && !receipt.conditions?.length &&
             hasDeterministicLeanFailure(receipt.verification)) retryable.set(node, beforeGoals);
         if (!receipt.passed) { this.moveTask(node, 'blocked', 'invalidated'); node.feedback = solverProofFeedback(receipt); if (!snapshot) this.wakeLead('integration-blocked'); }
@@ -418,7 +422,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
         if (snapshot && !snapshot.current()) return false;
         this.moveTask(node, 'blocked', 'invalidated'); node.feedback = rejected.message; if (!snapshot) this.wakeLead('integration-blocked');
       }
-      await finish(node);
+      await finish(node, savedReceipt);
     }
     this.input.signal.throwIfAborted();
     if (snapshot && !snapshot.current()) return false;
@@ -437,6 +441,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
       const group = this.archive.groups?.find(record => record.group.id === taskGroup(node.task));
       if ((node.task.status ?? 'active') !== 'active' || group && group.group.status !== 'active') continue;
       const saved = node.proof;
+      let savedReceipt: TaskProof | undefined;
       this.input.emit('task_conditional_recheck_started', { taskId: node.task.id });
       try {
         if (!(node.task.conditional || node.assignment && hasTaskConnectionCheck(node.task, node.assignment)) ||
@@ -461,7 +466,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
           return proof;
         });
         if (['unavailable', 'blocked'].includes(proof.verification.status)) throw verifierFailure('conditional-task-recheck', proof, node.task);
-        node.proof = proof;
+        savedReceipt = node.proof = proof;
         if (proof.passed) node.feedback = undefined;
         else {
           this.moveTask(node, 'blocked', 'invalidated'); node.feedback = solverProofFeedback(proof); this.wakeLead('conditional-recheck-failed');
@@ -470,7 +475,8 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
         this.input.signal.throwIfAborted();
         node.feedback = expectedRejection(error, integrationRejections).message; this.moveTask(node, 'blocked', 'invalidated'); this.wakeLead('conditional-recheck-failed');
       }
-      this.input.emit('task_conditional_recheck_finished', { taskId: node.task.id, passed: node.status === 'conditional' });
+      this.input.emit('task_conditional_recheck_finished', { taskId: node.task.id, passed: node.status === 'conditional',
+        commit: savedReceipt?.commit, taskDigest: savedReceipt?.taskDigest });
       this.changed();
     }
   }

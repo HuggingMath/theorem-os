@@ -160,9 +160,9 @@ export function recordedSolutionRoute(input: RecordedSolutionRouteInput): Soluti
           ...(delivery ? deliverySections(delivery) : step.kind === 'attempt' ? section(t('提交说明'), step.note) : []),
           ...section(t('提交版本'), version?.commit, true),
           ...section(t('检查回执'), strings(check?.receiptIds), true),
-          ...section(t('上一版'), step.kind === 'attempt' ? step.previous?.commit : undefined, true),
+          ...section(t('上一版'), step.kind === 'attempt' ? step.previous?.version.commit : undefined, true),
         ],
-        ...(version ? { source: { name: version.file ?? 'Submission.lean', commit: version.commit, sha256: delivery?.sourceDigest }, action: recordAction(index, version.source !== undefined) } : {}),
+        ...(version ? { source: { name: check?.file ?? version.file ?? 'Submission.lean', commit: version.commit, sha256: delivery?.sourceDigest }, action: recordAction(index, version.source !== undefined) } : {}),
       }, proof ? 'proof' : taskId(step.taskId));
     } else if (step.kind === 'plan' || step.kind === 'edit') {
       const plan = step.plan;

@@ -3,7 +3,7 @@ import type { WebObservation } from './collaboration';
 import { projectStoredObservationChecks } from './observationChecks';
 import { webArchive } from './storage';
 import { webAgentActionLimits, webSampleRunId, type WebAgentAction, type WebEvent, type WebRun } from './shared';
-import { recordedTrajectory, trajectoryPage, trajectoryQuery, trajectoryVersion, trajectoryVersionDetail, trajectoryVersionQuery, type TrajectoryIndex } from './trajectory';
+import { recordedTrajectory, selectTrajectoryChecks, trajectoryPage, trajectoryQuery, trajectoryVersion, trajectoryVersionDetail, trajectoryVersionQuery, type TrajectoryIndex } from './trajectory';
 
 export { webSampleRunId };
 
@@ -60,15 +60,20 @@ export function webSampleResponse(sample: WebSampleFile, operation: string | und
     return trajectory ? { status: 200, body: { trajectory: trajectoryPage(sampleTrajectory(sample), trajectory) } } : { status: 400, body: { error: '轨迹游标无效。' } };
   }
   if (operation === 'trajectory/version') {
-    const wanted = trajectoryVersionQuery(query), version = wanted && trajectoryVersion(sampleTrajectory(sample), wanted.taskId, wanted.commit);
-    if (!version) return { status: wanted ? 404 : 400, body: { error: wanted ? '这个版本没有记录或已超出保留范围。' : '版本参数无效。' } };
-    return { status: 200, body: { version: trajectoryVersionDetail(version, sequence => sample.observations.find(item => item.sequence === sequence)) } };
+    const index = sampleTrajectory(sample);
+    const wanted = trajectoryVersionQuery(query), version = wanted && trajectoryVersion(index, wanted.taskId, wanted.commit);
+    if (!wanted) return { status: 400, body: { error: '版本参数无效。' } };
+    const checks = version && selectTrajectoryChecks(version, wanted.taskVersion, wanted.receiptId, wanted.checkAt);
+    if (!version || !checks?.length) return { status: 404, body: { error: '这个版本没有记录或已超出保留范围。' } };
+    return { status: 200, body: { version: trajectoryVersionDetail(index, version,
+      sequence => sample.observations.find(item => item.sequence === sequence), wanted.taskVersion, checks) } };
   }
   const newestFirst = [...sample.observations].reverse();
   const source = /^tasks\/([^/]+)\/source$/u.exec(operation);
   if (source) {
-    const taskId = decodeURIComponent(source[1]), version = query.get('version') ?? undefined;
-    const found = newestFirst.flatMap(item => item.sources).find(item => item.taskId === taskId && (version === undefined || item.taskVersion === version));
+    const taskId = decodeURIComponent(source[1]), version = query.get('version'), commit = query.get('commit');
+    const found = newestFirst.flatMap(item => item.sources).find(item => item.taskId === taskId &&
+      (version === null || item.taskVersion === version) && (commit === null || item.commit === commit));
     return found ? { status: 200, body: { source: found } } : { status: 404, body: { error: '该任务版本没有已保存的源码。' } };
   }
   const check = /^checks\/([^/]+)$/u.exec(operation);

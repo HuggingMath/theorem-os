@@ -71,7 +71,7 @@ describe('one recoverable draft replacement', () => {
     expect(reloaded.current?.draft).toEqual(original);
   });
   it('stores the full editable draft independently of autosave and restores it in a fresh controller', () => {
-    const saved = storage(), before = draft(), recovery = new DraftRecovery(() => saved);
+    const saved = storage(), before = draft({ autoExplain: false, explanationLanguage: 'en' }), recovery = new DraftRecovery(() => saved);
     saved.values.set(taskDraftStorageKey, 'unrelated autosave');
     recovery.remember(before, draft({ task: 'Replacement task' }), 'template');
     expect(recovery.current).toEqual({ draft: before, reason: 'template', persisted: true });

@@ -567,13 +567,14 @@ export abstract class CooperationInputs extends CooperationPlanning {
       return;
     }
     if (value.kind === 'progress') {
-      const search = details.searchCheckpoint && retainProofSearchCheckpoint({
+      const searchAssignment = details.searchCheckpoint && this.proofSearchAssignment(action);
+      const search = searchAssignment && retainProofSearchCheckpoint({
+        ...searchAssignment,
         projectRoot: path.join(worker.worktree, this.input.state.problem.projectRelative),
-        runDirectory: path.dirname(this.lead.worktree), reference: details.searchCheckpoint,
-        scope: this.proofSearchScope(action),
+        runDirectory: path.dirname(this.lead.worktree), reference: details.searchCheckpoint!,
         workerId: worker.id, assignmentKey,
       });
-      const latestSearch = search && latestProofSearchRecord(this.archive.proofSearchRecords?.[search.taskId], search);
+      const latestSearch = search && latestProofSearchRecord(this.archive.proofSearchRecords?.[action.task.id], search);
       if (details.mathematicalGap) bindMathematicalGap(details.mathematicalGap, node.task, this.archive,
         { problemReceiptDigest: this.input.state.problem.receiptDigest, environmentDigest: this.input.state.environmentDigest });
       this.reportBlockers(node.task, value.blockers);
@@ -581,7 +582,7 @@ export abstract class CooperationInputs extends CooperationPlanning {
         ...this.dependencies(node.task).filter(dependency => !['integrated', 'completed'].includes(dependency.status)).map(dependency => dependency.task.id)])] as string[];
       if (value.needsDecision === true) this.wakeLead('progress-decision-requested');
       if (latestSearch) {
-        (this.archive.proofSearchRecords ??= {})[latestSearch.taskId] = latestSearch;
+        (this.archive.proofSearchRecords ??= {})[action.task.id] = latestSearch;
         this.input.emit('proof_search_checkpoint_saved', { taskId: latestSearch.taskId, taskDigest: latestSearch.taskDigest,
           workerId: worker.id, basisDigest: latestSearch.basisDigest, generation: latestSearch.generation,
           checkpoint: latestSearch.checkpoint, proofAcceptance: 'not-accepted' });

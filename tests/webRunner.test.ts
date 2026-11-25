@@ -7,6 +7,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { readWebConfig, webDefaults } from '../apps/web/config';
 import { DockerWebRunner, parseWorkerMessage, webPrivateImagePaths } from '../apps/web/runner';
 import { webProofMessageSink } from '../apps/web/proofJournal';
+import { standaloneObservationFrame } from '../apps/web/observationSources';
+import { loadWebSample } from '../apps/web/sample';
 import { createWebHostDisconnectWatchdog, webWorkerHeartbeatMs } from '../apps/web/workerDisconnect';
 import { writeMathJsonDurable } from '../src/math/mathRuntimeIo';
 import type { WorkerExplanationInput, WorkerExplanationMessage, WorkerInput, WorkerMessage } from '../apps/web/shared';
@@ -63,6 +65,10 @@ async function main() {
   } else if (args[0] === 'wait') {
     while (!fs.existsSync(path.join(root, 'journal', 'terminal.json'))) await new Promise(resolve => setTimeout(resolve, 10));
     process.stdout.write('0\\n');
+  } else if (args[0] === 'exec') {
+    let input = ''; for await (const chunk of process.stdin) input += chunk;
+    if (JSON.parse(input).type !== 'capture' || !args.includes('--observation-source-refs')) process.exit(1);
+    process.stdout.write(fs.readFileSync(path.join(root, 'capture.json')));
   } else if (args[0] === 'cp') fs.cpSync(path.join(root, 'journal'), args[2], { recursive: true });
   else if (args[0] !== 'create' && args[0] !== 'rm') process.exitCode = 1;
 }
@@ -81,17 +87,30 @@ main().catch(() => process.exit(1));
       status: 'candidate', workerId: 'solver', capturedAt: '2026-11-24T03:00:00.000Z' } } as const;
     const terminal = { type: 'result', result: { status: 'evaluated_passed', proof: artifact.artifact.source,
       report: { evaluator: { status: 'passed' } } } } as const;
+    const observation = { ...loadWebSample()!.observations.find(item => item.sources.length)!, webRunId: request.id };
+    const receipt = { id: 'capture', status: 'captured', observation };
+    const frame = standaloneObservationFrame(observation);
+    fs.writeFileSync(path.join(root, 'capture.json'), JSON.stringify({ ...receipt, observation: frame.observation, sourceBlobs: frame.sourceBlobs }));
     vi.stubEnv('PATH', root);
-    const run = new DockerWebRunner(config).run(request, message => messages.push(message), controller.signal);
+    const runner = new DockerWebRunner(config);
+    const run = runner.run(request, message => messages.push(message), controller.signal);
     try {
       sink(artifact);
       await vi.waitFor(() => expect(fs.readFileSync(callsPath, 'utf8')).toContain('["wait",'));
       expect(fs.readFileSync(callsPath, 'utf8')).not.toContain('["rm",');
+      expect(await runner.command(request.id, { type: 'capture' })).toEqual(receipt);
+      fs.writeFileSync(path.join(root, 'capture.json'), JSON.stringify(receipt));
+      expect(await runner.command(request.id, { type: 'capture' })).toEqual(receipt);
+      const privateSource = `\n-- ${request.input.apiKey}`;
+      sink({ type: 'observation', observation: { ...observation,
+        sources: observation.sources.map(source => ({ ...source, source: source.source + privateSource })) } });
+      expect(fs.readFileSync(path.join(journal, 'observation.json'), 'utf8')).not.toContain(request.input.apiKey);
       sink(terminal);
       await run;
-      expect(messages).toEqual([artifact, terminal]);
+      expect(messages).toEqual([{ type: 'observation', observation: { ...observation,
+        sources: observation.sources.map(source => ({ ...source, source: source.source + '\n-- [REDACTED]' })) } }, artifact, terminal]);
       const calls = fs.readFileSync(callsPath, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]);
-      expect(calls.map(args => args[0])).toEqual(['create', 'start', 'wait', 'cp', 'rm']);
+      expect(calls.map(args => args[0])).toEqual(['create', 'start', 'wait', 'exec', 'exec', 'cp', 'rm']);
       expect(calls[0]).toContain('type=volume,destination=/var/theoremos-proof');
       expect(calls[0]).toContain('THEOREMOS_WORKER_JOURNAL=/var/theoremos-proof');
     } finally {
@@ -298,6 +317,10 @@ async function main() {
     while (!fs.existsSync(path.join(root, 'approve'))) await new Promise(resolve => setTimeout(resolve, 10));
     process.stdout.write(JSON.stringify({ type: 'progress', event: 'plan_approval_wait_ended', message: 'Approved' }) + '\\n');
     process.stdout.write(JSON.stringify({ type: 'result', result: { status: 'incomplete', proof: '', report: {} } }) + '\\n');
+  } else if (args[0] === 'exec') {
+    let input = ''; for await (const chunk of process.stdin) input += chunk;
+    if (JSON.parse(input).type !== 'capture') process.exit(1);
+    process.stdout.write(fs.readFileSync(path.join(root, 'capture.json')));
   } else if (args[0] === 'rm') fs.rmSync(path.join(root, 'container'), { force: true });
   else process.exit(1);
 }
@@ -313,6 +336,11 @@ main().catch(() => process.exit(1));
           providerId: config.providers[0].id, apiKey: 'sk-offline-fixture', source: 'theorem goal : True := by sorry',
           task: 'Offline human review fixture', maxRunSeconds, workers: 2, planApproval },
       };
+      const observation = { ...loadWebSample()!.observations[0]!, webRunId: request.id };
+      const libraryRestart = { previousSolverRunId: 'solver-first', solverRunId: observation.solverRunId, round: 1 };
+      const frame = standaloneObservationFrame(observation);
+      fs.writeFileSync(path.join(root, 'capture.json'), JSON.stringify({ id: 'capture', status: 'captured',
+        libraryRestart, observation: frame.observation, sourceBlobs: frame.sourceBlobs }));
       let waiting!: () => void;
       const ready = new Promise<void>(resolve => { waiting = resolve; }), messages: WorkerMessage[] = [];
       complete = new DockerWebRunner(config).run(request, message => {
@@ -332,7 +360,11 @@ main().catch(() => process.exit(1));
       expect(calls.filter(args => args[0] === 'rm')).toHaveLength(1);
       expect(fs.existsSync(path.join(root, 'container'))).toBe(false);
       expect(messages.map(message => message.type === 'progress' ? message.event : message.type)).toEqual(decision === 'approve'
-        ? ['plan_approval_wait_started', 'plan_approval_wait_ended', 'result'] : ['plan_approval_wait_started']);
+        ? ['plan_approval_wait_started', 'plan_approval_wait_ended', 'result'] : ['plan_approval_wait_started', 'library_restart', 'observation']);
+      if (decision === 'cancel') {
+        expect(messages.slice(-2)).toEqual([{ type: 'library_restart', ...libraryRestart }, { type: 'observation', observation }]);
+        expect(calls.map(args => args[0])).toEqual(['create', 'start', 'exec', 'rm']);
+      }
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       fs.writeFileSync(path.join(root, 'approve'), 'cleanup');
