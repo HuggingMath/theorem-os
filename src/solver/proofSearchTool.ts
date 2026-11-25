@@ -51,7 +51,8 @@ export async function runProofSearchTool(input: { projectRoot: string; request: 
   const constraints = path.join(context.project, '.lake/source-constraints.json');
   if (fs.existsSync(constraints)) assertSolverProjectSources(JSON.parse(readMathText(constraints)) as SolverSourceConstraints, context.project);
   const request = proofSearchRequestSchema.parse(input.request);
-  if (!request.resume && context.record) request.resume = context.record.checkpoint;
+  const implicitResume = !request.resume && context.record;
+  if (implicitResume) request.resume = implicitResume.checkpoint;
   const queueCheckpoint = (reference: SearchCheckpointReference) => {
     const event = { kind: 'progress', id: reference.digest,
       summary: 'Saved advisory proof-search state; candidate proofs require independent verification.',
@@ -64,6 +65,7 @@ export async function runProofSearchTool(input: { projectRoot: string; request: 
   };
   const result = await searchLeanBranches({ projectRoot: context.project, file: context.task.proofPath!,
     theoremName: context.task.theoremName!, type: context.task.type!, scope: context.scope, request,
+    restartStaleImplicitResume: Boolean(implicitResume && context.scope.taskId === context.assignment.taskId),
     ...(context.independentSearch && context.record ? { retainedInput: {
       basisDigest: context.record.basisDigest, checkpointDigest: context.record.checkpoint.digest } } : {}),
     signal: input.signal, env: input.env, onCheckpoint: queueCheckpoint });

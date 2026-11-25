@@ -1119,7 +1119,8 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
         result.status === 'failed' && ((result.sorryCount ?? 0) > 0 || result.error === 'Lean exited with status 1.'));
       if (!repairable || !this.retryTaskLocally(node, proof.commit)) this.wakeLead('task-check-failed');
     }
-    this.input.emit('task_checked', { taskId: node.task.id, passed: proof.passed, conditional: Boolean(proof.conditions?.length), commit: proof.commit });
+    this.input.emit('task_checked', { taskId: node.task.id, passed: proof.passed, conditional: Boolean(proof.conditions?.length),
+      commit: proof.commit, taskDigest: proof.taskDigest });
     this.changed();
   }
   /** Keep canonical failures authoritative, while draining all checks before a caller releases its workspace. */

@@ -7,6 +7,8 @@ import { proofSearchCheckpointSchema, searchLeanBranches, type ProofSearchCheckp
   type SearchCheckpointReference } from '../src/math/leanProofSearch';
 import type { ProofSearchSession } from '../src/math/pantographSession';
 import { projectProofSearchRecord, retainProofSearchCheckpoint } from '../src/solver/proofSearchRecords';
+import { runProofSearchTool } from '../src/solver/proofSearchTool';
+import { assignmentDeliveryFile, taskVersion } from '../src/solver/tasks';
 
 const boundary = vi.hoisted(() => ({ projection: vi.fn(), retainedProjection: vi.fn(), backend: vi.fn(), open: vi.fn() }));
 vi.mock('../src/math/leanSearchProjection', () => ({
@@ -190,6 +192,53 @@ describe('proof-search runtime persistence with fake Lean boundaries', () => {
     expect(output.dispose).toHaveBeenCalledTimes(1);
     expect(fs.readFileSync(path.join(project, target.file), 'utf8')).toBe(changedSource);
     expect(readCheckpoint(project, first.reference)).toEqual(first.checkpoint);
+  });
+
+  it('starts a fresh worker search on changed source only if no resume or old node was requested', async () => {
+    const helper = { id: scope.taskId, kind: 'lemma' as const, objective: 'Prove helper', revision: 0, proofPath: target.file,
+      theoremName: target.theoremName, type: target.type, dependsOn: [] };
+    const identity = { ...scope, taskDigest: taskVersion(helper) };
+    boundary.projection.mockReturnValue(projection(project));
+    boundary.open.mockResolvedValue(session());
+    const first = await search({ scope: identity });
+    const assignment = { taskId: identity.taskId, taskDigest: identity.taskDigest, workerId: 'owner', seedCommit: 'seed' };
+    const firstCheckpoint = readCheckpoint(project, first.checkpoint!);
+    const record = retainProofSearchCheckpoint({ projectRoot: project, runDirectory: directory, reference: first.checkpoint!,
+      scope: identity, workerId: assignment.workerId, assignmentKey: assignmentDeliveryFile(assignment) });
+    const projected = projectProofSearchRecord({ record, scope: identity, projectRoot: project, runDirectory: directory })!;
+    fs.writeFileSync(path.join(project, 'COOPERATION.json'), JSON.stringify({
+      researchDelivery: { assignment, projectRelative: '.', ownedFiles: [target.file], ...identity }, tasks: [{ task: helper }],
+      proofSearchRecords: { [helper.id]: projected },
+    }));
+    const changedSource = sources[0]!.source + '-- edited helper inputs\n';
+    fs.writeFileSync(path.join(project, target.file), changedSource);
+    const changedFiles = [{ file: target.file, digest: mathDigest(changedSource) }, sourceFiles[1]!];
+    const changedProjection = projection(project, { sourceFiles: changedFiles,
+      sourceDigest: mathDigest(canonicalMathJson(changedFiles)), projectionDigest: mathDigest('changed projection'),
+      replaySources: [{ file: target.file, source: changedSource }, sources[1]!] });
+    clearBoundaryCalls();
+    boundary.projection.mockReturnValue(changedProjection);
+    const fake = session();
+    boundary.open.mockResolvedValue(fake);
+    const run = (request: unknown) => runProofSearchTool({ projectRoot: project, env, request });
+    const request = { branches: [{ tactics: ['intro n', 'rfl'] }] };
+    await expect(run({ ...request, resume: projected.checkpoint })).resolves.toMatchObject({
+      status: 'stale', reason: 'proof_search_stale_basis',
+    });
+    await expect(run({ branches: [{ from: firstCheckpoint.nodes[1]!.id, tactics: ['rfl'] }] })).resolves.toMatchObject({
+      status: 'stale', reason: 'proof_search_stale_basis',
+    });
+    expect(boundary.open).not.toHaveBeenCalled();
+    clearBoundaryCalls();
+    const next = await run(request);
+    expect(next).toMatchObject({ status: 'candidate', proofAcceptance: 'not-accepted', sourceBinding: 'current-worker-source',
+      counters: { issued: 2, completed: 2, replay: 0 } });
+    expect(next.basis).not.toBe(first.basis);
+    expect(boundary.projection).toHaveBeenCalledTimes(1);
+    expect(boundary.retainedProjection).not.toHaveBeenCalled();
+    expect(boundary.open).toHaveBeenCalledTimes(1);
+    expect(readCheckpoint(project, first.checkpoint!)).toEqual(firstCheckpoint);
+    expect(readCheckpoint(project, next.checkpoint!).replaySources?.[0]?.source).toBe(changedSource);
   });
 
   it.each([

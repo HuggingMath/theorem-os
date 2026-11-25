@@ -12,6 +12,7 @@ import { WebStorage } from '../apps/web/storage';
 import type { WorkerInput, WorkerMessage } from '../apps/web/shared';
 import { webWorkerFixture } from './helpers/webWorkerBridge';
 import { mathDigest } from '../src/math/mathRuntimeIo';
+import { hashMathFormalSourceDeclaration } from '../src/math/leanSource';
 import { webGuidanceSchema } from '../apps/web/collaborationValidation';
 import { parseWorkerMessage } from '../apps/web/runner';
 import type { WebObservation } from '../apps/web/collaboration';
@@ -111,6 +112,44 @@ describe('isolated Web worker bridge', () => {
     expect(messages.filter(message => message.type === 'catalog')).toHaveLength(1);
   });
 
+  it('keeps every target source when its shared file would exceed the expanded frame budget', async () => {
+    const f = fixture(), webRunId = 'web-fixture';
+    const tasks = Array.from({ length: 20 }, (_, index) => ({ ...f.goal, id: `goal-${index}`,
+      theoremName: `Original.target${index}`, dependsOn: [] }));
+    const source = 'namespace Original\n' + tasks.map((_, index) => `theorem target${index} : True := by sorry\n`).join('') +
+      'end Original\n/- ' + 'a'.repeat(850_000) + ' -/\n';
+    fs.writeFileSync(path.join(f.project, 'Submission.lean'), source);
+    const commit = f.commit();
+    f.state.problem.targets = tasks.map(task => ({ proofPath: task.proofPath!, theoremName: task.theoremName,
+      declarationHash: hashMathFormalSourceDeclaration(source, task.theoremName)! }));
+    f.state.cooperation!.canonicalCommit = commit;
+    f.state.cooperation!.tasks = tasks.map(task => ({ task, status: 'pending', attempts: 0 }));
+    f.state.cooperation!.history = [];
+    f.save();
+
+    const journal = path.join(f.directory, 'journal');
+    fs.mkdirSync(journal);
+    let wire = '';
+    const sink = webProofMessageSink(new Writable({
+      write(chunk: Buffer, _encoding, done) { wire = chunk.toString('utf8'); done(); },
+    }), '', { directory: journal, webRunId });
+    const bridge = createWebWorkerBridge({ webRunId, directory: f.directory, output: f.output, onMessage(message, frame) {
+      if (message.type === 'observation') sink(message, frame);
+    } });
+    const { observation } = await bridge.capture();
+    expect(observation.coverage.sources).toBe('recorded');
+    expect(observation.sources.map(item => item.taskId)).toEqual(tasks.map(task => task.id));
+    expect(Object.values(JSON.parse(wire).sourceBlobs)).toEqual([source]);
+    const stream = { runId: webRunId, sources: new Map<string, string>() };
+    expect(parseWorkerMessage(wire, stream)).toEqual({ type: 'observation', observation });
+    f.state.turns++; f.save();
+    const next = await bridge.capture();
+    expect(JSON.parse(wire).sourceBlobs).toEqual({});
+    expect(parseWorkerMessage(wire, stream)).toEqual({ type: 'observation', observation: next.observation });
+    const backup = JSON.parse(fs.readFileSync(path.join(journal, 'observation.json'), 'utf8')).messages[0];
+    expect(parseWorkerMessage(JSON.stringify(backup))).toEqual({ type: 'observation', observation: next.observation });
+  });
+
   it('reports each original target verdict when a shared Lean check only partially passes, including in retained observations', async () => {
     const f = fixture(), firstTarget = f.state.problem.targets[0]!;
     const secondTarget = { ...firstTarget, theoremName: 'Original.second', declarationHash: mathDigest('second declaration') };
@@ -126,14 +165,15 @@ describe('isolated Web worker bridge', () => {
       { task: f.goal, status: 'pending', attempts: 0 }, { task: second, status: 'pending', attempts: 0 },
     ];
     f.state.cooperation!.history = [];
-    f.state.check = { commit, sourceDigest, passed: false, verification: {
+    const check = f.state.workers![0]!.check = { commit, sourceDigest, passed: false, verification: {
       ...verification, status: 'failed', results: [secondReceipt, firstReceipt],
     } };
     f.save();
 
-    const { observation } = await createWebWorkerBridge({
+    const bridge = createWebWorkerBridge({
       webRunId: 'web-fixture', directory: f.directory, output: f.output,
-    }).capture();
+    });
+    const { observation } = await bridge.capture();
     expect(observation.acceptance).toBe('not-assessed');
     expect(observation.checks).toMatchObject([
       { taskId: f.goal.id, taskVersion: taskVersion(f.goal), id: firstReceipt.receiptId, commit, sourceDigest,
@@ -142,6 +182,8 @@ describe('isolated Web worker bridge', () => {
       { taskId: second.id, taskVersion: taskVersion(second), id: secondReceipt.receiptId, commit, sourceDigest,
         record: { theoremName: secondTarget.theoremName, status: 'failed', passed: false, error: secondReceipt.error } },
     ]);
+    f.state.check = check; f.save();
+    expect((await bridge.capture()).observation.checks).toEqual(observation.checks);
 
     const legacy = { ...observation, checks: observation.checks.flatMap(({ record: { originalProblemPassed: _batch, ...record }, ...check }) =>
       [f.goal, second].map(task => ({ ...check, taskId: task.id, taskVersion: taskVersion(task), record: { ...record, passed: false } }))) };

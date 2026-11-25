@@ -185,6 +185,8 @@ export type LeanProofSearchStatus = 'candidate' | 'exhausted' | 'budget-exhauste
 export async function searchLeanBranches(input: {
   projectRoot: string; file: string; theoremName: string; type: string; scope: LeanProofSearchScope;
   request: unknown; env?: NodeJS.ProcessEnv; signal?: AbortSignal;
+  /** An ordinary worker search may start at the current root if its implicit resume has a different basis. */
+  restartStaleImplicitResume?: boolean;
   /** Only a host-scoped independent nextCheck may replay the explicitly retained source instead of live owned files. */
   retainedInput?: { basisDigest: string; checkpointDigest: string };
   onCheckpoint?: (reference: SearchCheckpointReference) => void;
@@ -236,10 +238,15 @@ export async function searchLeanBranches(input: {
       };
       if (request.resume) {
         checkpoint = readCheckpoint(project, request.resume);
-        validateCheckpoint(checkpoint, basis);
-        if (checkpoint.generation < latest) requireLatestResume();
-      } else if (latest >= 0) requireLatestResume();
-      else {
+        if (input.restartStaleImplicitResume && !input.retainedInput && !request.branches.some(branch => branch.from) &&
+            canonicalMathJson(checkpoint.basis) !== canonicalMathJson(basis)) checkpoint = undefined;
+        else {
+          validateCheckpoint(checkpoint, basis);
+          if (checkpoint.generation < latest) requireLatestResume();
+        }
+      }
+      if (!checkpoint) {
+        if (latest >= 0) requireLatestResume();
         checkpoint = emptyProofSearchCheckpoint(basis);
         const replaySources = projection!.replaySources;
         if (replaySources.reduce((size, item) => size + Buffer.byteLength(item.file) + Buffer.byteLength(item.source), 0) > 2_000_000)

@@ -91,6 +91,7 @@ const inputSchema = z.object({
 // A question about one recorded version; its code and Lean's output are read here, never taken from the request.
 const explainSchema = z.object({
   taskId: z.string().min(1).max(200), commit: z.string().regex(/^[A-Za-z0-9]{1,128}$/u),
+  taskVersion: z.string().min(1).max(200).optional(),
   question: z.string().trim().min(1).max(webExplainLimits.question),
   turns: z.array(z.object({ question: z.string().min(1).max(webExplainLimits.question),
     answer: z.string().min(1).max(webExplainLimits.answer) }).strict()).max(webExplainLimits.turns).default([]),
@@ -1044,14 +1045,21 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             throw new HttpError(503, '当前运行镜像不支持个人专家资料。请移除专家资产或更新运行镜像。');
           if (input.nativeTeamPreferredProfiles?.length && !readiness.nativeTeamPreferences) throw new HttpError(503, '当前运行镜像不支持角色偏好。清空偏好后仍可使用原生团队。');
           const from = input.continueFrom as WebContinuation | undefined;
-          const saved = from && jobs.get(owner, from.runId) ? trajectories.version(owner, from.runId, from.taskId, from.commit)?.source : undefined;
-          if (from && !saved) throw new HttpError(404, '这个版本的代码没有记录或已超出保留范围。');
-          if (from && saved && (['taskVersion', 'sourceDigest', 'environmentDigest', 'file'] as const).some(field => from[field] !== undefined && from[field] !== saved[field]))
+          const previousRun = from ? jobs.get(owner, from.runId) : undefined;
+          const saved = from && previousRun ? from.taskVersion
+            ? storage.getTaskSource(owner, from.runId, from.taskId, from.taskVersion, from.commit)
+            : trajectories.version(owner, from.runId, from.taskId, from.commit)?.source : undefined;
+          if (from && !saved) {
+            if (previousRun && from.taskVersion && trajectories.version(owner, from.runId, from.taskId, from.commit)?.source)
+              throw new HttpError(409, '续跑来源的固定版本与保存记录不一致，请重新选择。');
+            throw new HttpError(404, '这个版本的代码没有记录或已超出保留范围。');
+          }
+          if (from && saved && (['sourceDigest', 'environmentDigest', 'file'] as const).some(field => from[field] !== undefined && from[field] !== saved[field]))
             throw new HttpError(409, '续跑来源的固定版本与保存记录不一致，请重新选择。');
           const approved = input.formalizationId ? formalizations.confirmed(owner, input.formalizationId) : undefined;
           if (approved && (input.source !== approved.evidence.candidate.source || input.environment !== approved.evidence.request.environment))
             throw new HttpError(409, 'Lean 原题或环境已改变，请重新形式化确认，或作为普通 Lean 题目创建。');
-          if (from && jobs.get(owner, from.runId)?.formalizationId !== input.formalizationId)
+          if (from && previousRun?.formalizationId !== input.formalizationId)
             throw new HttpError(409, '继续研究必须保留原运行的形式化来源。');
           // Only a new run costs allowance; a replayed request above already returned the run it created.
           admitWork();
@@ -1210,7 +1218,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         if (operation === 'trajectory/version' && request.method === 'GET') {
           const query = trajectoryVersionQuery(url.searchParams);
           if (!query) throw new HttpError(400, '版本参数无效。');
-          const version = trajectories.version(owner, run.id, query.taskId, query.commit);
+          const version = trajectories.version(owner, run.id, query.taskId, query.commit, query.taskVersion);
           if (!version) throw new HttpError(404, '这个版本没有记录或已超出保留范围。');
           json(response, 200, { version }); return;
         }
@@ -1221,7 +1229,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (!provider) throw new HttpError(409, '这次运行的模型服务已不在配置中。');
           const apiKey = parsed.data.apiKey || heldKey(session, provider);
           if (!apiKey) throw new HttpError(400, '请填写 API Key。');
-          const version = trajectories.version(owner, run.id, parsed.data.taskId, parsed.data.commit);
+          const version = trajectories.version(owner, run.id, parsed.data.taskId, parsed.data.commit, parsed.data.taskVersion);
           if (!version) throw new HttpError(404, '这个版本没有记录或已超出保留范围。');
           const feedback = failedFeedback(version.checks);
           if (!feedback) throw new HttpError(409, '这个版本没有未通过的 Lean 检查可以解释。');

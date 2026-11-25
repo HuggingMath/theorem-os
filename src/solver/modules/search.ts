@@ -51,14 +51,17 @@ export function selectedTaskRoute(node: TaskRecord, tasks: readonly TaskRecord[]
   priority?: ReturnType<typeof createProofRoutePriority>): ProofRoute | undefined {
   if (!node.alternativeRoutes?.length) return;
   const assigned = node.alternativeRoutes?.find(route => route.id === node.assignment?.routeId);
-  // An active proof or delivery keeps its mathematical inputs. A pending draft
-  // may resume on another freshly checked branch when its old inputs fail.
-  if (assigned && node.status !== 'pending') return assigned;
+  const recoveringFailure = node.status === 'blocked' && node.feedback?.startsWith('math_task_repeated_failed_input\n');
+  // Keep the route fixed during proof and delivery. A blocked failure can
+  // reconsider its inputs when a freshly checked route is available.
+  if (assigned && node.status !== 'pending' && !recoveringFailure) return assigned;
   const routes = openRoutes(node), ready = routes.filter(route => dispatchRouteReady(route, tasks));
+  const readyRoute = ready.find(route => route.id === assigned?.id) ?? ready[0];
+  if (readyRoute || recoveringFailure && assigned) return readyRoute ?? assigned;
   const compare = (priority ?? createProofRoutePriority(tasks)).compareRoutes;
   const ranked = routes.toSorted((a, b) => compare(a, b) ||
     Number(b.id === node.assignment?.routeId) - Number(a.id === node.assignment?.routeId));
-  return ready.find(route => route.id === node.assignment?.routeId) ?? ready[0] ?? ranked[0];
+  return ranked[0];
 }
 export function plannedTaskDependencyIds(node: TaskRecord, tasks: readonly TaskRecord[]): readonly string[] {
   const route = selectedTaskRoute(node, tasks);

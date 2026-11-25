@@ -64,62 +64,12 @@ async function openPanel(page: Page) {
   await panel(page).locator('[data-problem-draft-title]').waitFor();
 }
 async function save(page: Page, title: string): Promise<ResearchAccountDraftResult<ProblemDraftValue>> {
-  if (await panel(page).count()) {
-    await openPanel(page); await panel(page).locator('[data-problem-draft-title]').fill(title);
-    const response = page.waitForResponse(response => response.url() === `${origin}/api/research/personal/drafts` && response.request().method() === 'POST');
-    await panel(page).locator('[data-save-problem-draft]').click();
-    const result = await response; assert.equal(result.status(), 201, await result.text());
-    await panel(page).locator('[data-save-problem-draft]:enabled').waitFor();
-    return (await result.json()).item;
-  }
-  assert.equal(await panel(page).count(), 0);
-  if (await page.locator('body[data-entry=lean]').count()) {
-    const task = await page.locator('#task').inputValue();
-    await page.waitForFunction(expected => {
-      try { return JSON.parse(sessionStorage.getItem('theorem-os.web-draft.v1') || '{}')?.draft?.task === expected; } catch { return false; }
-    }, task);
-  } else {
-    const text = await page.locator('#formalize-original').inputValue();
-    await page.waitForFunction(expected => Object.entries(sessionStorage).some(([k, v]) => {
-      if (!k.startsWith('theorem-os.chat-draft.') || k.endsWith('.quotes') || k.endsWith('.position')) return false;
-      try { return JSON.parse(v).text === expected; } catch { return false; }
-    }), text);
-  }
-  return await page.evaluate(async savedTitle => {
-    const session = await (await fetch('/api/session')).json();
-    const owner = session.draftOwner;
-    const mode = document.body.dataset.entry === 'lean' ? 'lean' : 'natural';
-    let value: ProblemDraftValue;
-    if (mode === 'lean') {
-      const stored = JSON.parse(sessionStorage.getItem('theorem-os.web-draft.v1') || '{}').draft || {};
-      const { autoExplain: _ae, explanationLanguage: _el, continueFrom: _cf, formalization: _fm, problemBudget: _pb, ...leanDraft } = stored;
-      value = { mode: 'lean', draft: leanDraft };
-    } else {
-      const chatKey = Object.keys(sessionStorage).find(key => key.startsWith('theorem-os.chat-draft.') && !key.endsWith('.quotes') && !key.endsWith('.position'));
-      const stored = chatKey ? JSON.parse(sessionStorage.getItem(chatKey) || '{}') : {};
-      value = { mode: 'natural', text: stored.text ?? '', settings: stored.settings };
-    }
-    const bindingKey = `theorem-os.problem-draft.${owner}.${mode}`;
-    const binding = JSON.parse(sessionStorage.getItem(bindingKey) || 'null') || { draftKey: crypto.randomUUID(), revision: 0, title: '' };
-    const sig = (v: unknown, t: string) => JSON.stringify([t, v], (_k, x) => x && typeof x === 'object' && !Array.isArray(x)
-      ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => a.localeCompare(b))) : x);
-    const response = await fetch('/api/research/personal/drafts', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-csrf-token': session.csrfToken },
-      body: JSON.stringify({
-        requestId: crypto.randomUUID(), expectedRevision: binding.revision,
-        scope: { kind: 'problem', draftKey: binding.draftKey }, value, summary: savedTitle,
-        deviceId: 'test-device', deviceName: 'Desktop browser', clientUpdatedAt: new Date().toISOString(),
-      }),
-    });
-    if (!response.ok) throw new Error(await response.text());
-    const item = (await response.json()).item;
-    sessionStorage.setItem(bindingKey, JSON.stringify({
-      draftKey: binding.draftKey, revision: item.version.revision, title: savedTitle,
-      draftId: item.draft.id, versionId: item.version.id, savedSignature: sig(value, savedTitle),
-    }));
-    return item;
-  }, title);
+  await openPanel(page); await panel(page).locator('[data-problem-draft-title]').fill(title);
+  const response = page.waitForResponse(response => response.url() === `${origin}/api/research/personal/drafts` && response.request().method() === 'POST');
+  await panel(page).locator('[data-save-problem-draft]').click();
+  const result = await response; assert.equal(result.status(), 201, await result.text());
+  await panel(page).locator('[data-save-problem-draft]:enabled').waitFor();
+  return (await result.json()).item;
 }
 async function chooseVersion(page: Page, item: ResearchAccountDraftResult, click = true) {
   const current = new URL(page.url());
@@ -163,7 +113,7 @@ try {
   checks.push('Original text and settings survive multiple example replacements and refresh.');
 
   phase = 'natural-account-save';
-  assert.equal(await panel(page).count(), 0, 'Authenticated home hides idle cloud-draft panel');
+  assert.equal(await panel(page).getAttribute('open'), null, 'A typed problem offers a collapsed save control');
   await page.locator('#formalize-key').fill('sk-disposable-key');
   const natural = await save(page, '待完成的归纳证明'); assert.equal(natural.version.value.mode, 'natural');
   await page.goto(`${origin}/?accountDraft=${natural.draft.id}&draftVersion=${natural.version.id}`);
@@ -176,7 +126,7 @@ try {
   assert.equal(await panel(other).count(), 0);
   await chooseVersion(other, natural); await waitOriginal(other, original);
   assert.equal(new URL(other.url()).searchParams.has('accountDraft'), false);
-  assert.equal(await panel(other).count(), 0, 'Restoring hides the explicit recovery drawer');
+  assert.equal(await panel(other).getAttribute('open'), null, 'Restoring closes the preview and keeps the save control');
   await settings(other);
   assert.equal(await other.locator('#formalize-model').inputValue(), 'original-model'); assert.equal(await other.locator('#formalize-environment').inputValue(), 'mathlib');
   assert.equal(await other.locator('#formalize-key').inputValue(), '');
@@ -253,7 +203,7 @@ try {
   await linked.screenshot({ path: path.join(output, 'desktop-zh-original-recovery.png'), fullPage: true });
   await chooseVersion(linked, natural); await waitOriginal(linked, original);
   assert.equal(new URL(linked.url()).searchParams.has('accountDraft'), false);
-  assert.equal(await panel(linked).count(), 0);
+  assert.equal(await panel(linked).getAttribute('open'), null);
   checks.push('A draft link survives login and refresh, opens a preview, and restores only after an explicit click.');
   await noOverflow(linked);
 

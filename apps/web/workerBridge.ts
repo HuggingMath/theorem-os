@@ -18,7 +18,7 @@ import type { WebCheckReceipt, WebCommand, WebCommandResult, WebObservation, Web
 import type { WorkerMessage } from './shared';
 import { projectWebDeclarationArtifacts } from './declarationArtifacts';
 import { projectWebNativeTeam } from './nativeTeamObservation';
-import { compactObservation, type WorkerObservationFrame } from './observationSources';
+import { maxWorkerObservationBytes, standaloneObservationFrame, type WorkerObservationFrame } from './observationSources';
 
 export const webActiveRunFile = '/work/active-run.json';
 const activeRunSchema = z.object({ schema: z.literal('theorem-os.web-active-run.v1'),
@@ -32,7 +32,6 @@ const metaSchema = z.object({ schema: z.literal('theorem-os.web-bridge.v1'), web
 }).strict();
 type BridgeMeta = z.infer<typeof metaSchema>;
 const maxSourceBytes = 4 * 1024 * 1024, maxSourcesBytes = 6 * 1024 * 1024, maxChecksBytes = 2 * 1024 * 1024;
-const maxMessageBytes = 15 * 1024 * 1024;
 const oid = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
 const childOf = (directory: string, file: string) => path.isAbsolute(file) && file.startsWith(directory + path.sep);
 const relativePath = (file: string) => file && !path.isAbsolute(file) && !file.includes('\\') &&
@@ -107,6 +106,7 @@ function sourceProjection(state: SolverRunState, directory: string) {
   const sources: WebTaskSource[] = [], checks: WebCheckReceipt[] = [];
   let sourceBytes = 0, checkBytes = 0, sourcePartial = false, checkPartial = false;
   const sourceIds = new Set<string>(), checkIds = new Set<string>();
+  const sourceTexts = new Set<string>();
   const roots = runRoots(state, directory), snapshots = new Map<string, ReturnType<typeof committedOwnedSources>>();
   const snapshot = (commit: string) => {
     let value = snapshots.get(commit);
@@ -123,11 +123,14 @@ function sourceProjection(state: SolverRunState, directory: string) {
       const source = selected.files[file], dependencySources = Object.entries(selected.files)
         .filter(([dependency]) => dependency !== file && dependency.endsWith('.lean'))
         .map(([file, source]) => ({ file, source }));
-      const bytes = Buffer.byteLength(source) + dependencySources.reduce((sum, dependency) => sum + Buffer.byteLength(dependency.source), 0);
+      const newTexts = [...new Set([source, ...dependencySources.map(dependency => dependency.source)])]
+        .filter(text => !sourceTexts.has(text));
+      const bytes = newTexts.reduce((sum, text) => sum + Buffer.byteLength(text), 0);
       if (sourceBytes + bytes > maxSourcesBytes) { sourcePartial = true; return; }
       sources.push({ taskId: node.task.id, taskVersion: version, commit, sourceDigest: selected.digest,
         environmentDigest: state.environmentDigest, file, source, scope: 'owned-file',
         ...(dependencySources.length ? { dependencySources } : {}) });
+      for (const text of newTexts) sourceTexts.add(text);
       sourceBytes += bytes; sourceIds.add(key);
     } catch { sourcePartial = true; }
   };
@@ -176,10 +179,13 @@ function sourceProjection(state: SolverRunState, directory: string) {
     }
     if (commit) addSource(node, commit); else sourcePartial = true;
   }
-  if (state.check) for (const node of state.cooperation?.tasks ?? []) if (node.task.kind === 'goal') {
+  const wholeChecks = [state.check, ...(state.workers ?? []).map(worker => worker.check)]
+    .filter((proof): proof is ProofCheck => proof !== undefined);
+  for (const node of state.cooperation?.tasks ?? []) if (node.task.kind === 'goal') {
     const target = state.problem.targets.find(item => item.proofPath === node.task.proofPath && item.theoremName === node.task.theoremName);
-    if (target && state.check.verification.results.some(receipt =>
-      receipt.proofPath === target.proofPath && receipt.theoremName === target.theoremName)) addProof(node, state.check, target);
+    if (!target) continue;
+    for (const proof of wholeChecks) if (proof.verification.results.some(receipt =>
+      receipt.proofPath === target.proofPath && receipt.theoremName === target.theoremName)) addProof(node, proof, target);
   }
   if (!state.cooperation?.tasks.length && state.problem.targets.length) sourcePartial = true;
   return { sources, checks, coverage: { sources: sourcePartial ? 'partial' as const : 'recorded' as const,
@@ -232,19 +238,26 @@ export function createWebWorkerBridge(options: {
       if (state.cooperation?.planVersion && state.cooperation.tasks.length) plan = exportRunPlan(state);
       const payload = { inspection, snapshot: inspection.snapshot, plan, ...projection, declarations,
         guidance: readHumanGuidance(stateFile, state.runId), deliveries: state.cooperation?.deliveries ?? [], history };
-      const contentDigest = mathDigest(canonicalMathJson(payload));
+      let observation: WebObservation = { schema: 'theorem-os.web-observation.v1', webRunId: options.webRunId,
+        solverRunId: state.runId, sequence: 0, observedAt: new Date().toISOString(), evidence: 'recorded-not-replayed',
+        acceptance: 'not-assessed', ...payload };
+      let frame = standaloneObservationFrame(observation);
+      const contentDigest = mathDigest(canonicalMathJson({ ...frame.observation, observedAt: '' }));
       const changed = restarted || previous?.contentDigest !== contentDigest;
       const sequence = (previous?.sequence ?? 0) + Number(changed);
       if (restarted) messages.push({ type: 'library_restart', previousSolverRunId: previous!.solverRunId,
         solverRunId: state.runId, round: options.libraryRestart!.round });
-      let observation: WebObservation = { schema: 'theorem-os.web-observation.v1', webRunId: options.webRunId,
-        solverRunId: state.runId, sequence, observedAt: new Date().toISOString(), evidence: 'recorded-not-replayed',
-        acceptance: 'not-assessed', ...payload };
-      if (options.apiKey && canonicalMathJson(observation).includes(options.apiKey)) {
-        observation = JSON.parse(JSON.stringify(observation).replaceAll(JSON.stringify(options.apiKey).slice(1, -1), '[REDACTED]'));
+      observation.sequence = sequence;
+      frame.observation.sequence = sequence;
+      let frameJson = JSON.stringify(frame);
+      const secret = options.apiKey && JSON.stringify(options.apiKey).slice(1, -1);
+      if (secret && frameJson.includes(secret)) {
+        observation = JSON.parse(JSON.stringify(observation).replaceAll(secret, '[REDACTED]'));
         observation.coverage.sources = 'partial'; observation.coverage.checks = 'partial';
+        frame = standaloneObservationFrame(observation);
+        frameJson = JSON.stringify(frame);
       }
-      if (Buffer.byteLength(canonicalMathJson(observation)) > maxMessageBytes) throw new Error('web_observation_too_large');
+      if (Buffer.byteLength(frameJson) > maxWorkerObservationBytes) throw new Error('web_observation_too_large');
       const meta: BridgeMeta = { schema: 'theorem-os.web-bridge.v1', webRunId: options.webRunId, solverRunId: state.runId,
         libraryRound: options.libraryRestart?.round ?? previous?.libraryRound ?? 0,
         sequence, contentDigest, observations: [...(restarted ? [] : previous?.observations ?? []),
@@ -258,11 +271,11 @@ export function createWebWorkerBridge(options: {
           const imported = importKnowledgeRuns([stateFile], { includeFindings: true });
           if (buildRunInspection(readRunInspection(options.output).state).snapshot.stateDigest !== inspection.snapshot.stateDigest)
             throw new Error('web_catalog_state_changed');
-          const base = fs.existsSync(catalogFile) ? validateTheoremKnowledge(JSON.parse(readMathText(catalogFile, maxMessageBytes))) : undefined;
+          const base = fs.existsSync(catalogFile) ? validateTheoremKnowledge(JSON.parse(readMathText(catalogFile, maxWorkerObservationBytes))) : undefined;
           const candidate = buildTheoremKnowledge(imported.candidates, base, imported.findings);
           const text = canonicalMathJson(candidate);
           if (options.apiKey && text.includes(options.apiKey)) throw new Error('web_catalog_secret_redacted');
-          if (Buffer.byteLength(text) > maxMessageBytes) throw new Error('web_catalog_too_large');
+          if (Buffer.byteLength(text) > maxWorkerObservationBytes) throw new Error('web_catalog_too_large');
           const digest = mathDigest(text);
           if (digest !== previous?.catalogDigest) { writeMathJsonDurable(catalogFile, candidate); catalog = candidate; }
           meta.catalogKey = key; meta.catalogDigest = digest;
@@ -274,27 +287,23 @@ export function createWebWorkerBridge(options: {
         }
       }
       if (input.includeCatalog && !catalog && fs.existsSync(catalogFile)) {
-        catalog = validateTheoremKnowledge(JSON.parse(readMathText(catalogFile, maxMessageBytes)));
+        catalog = validateTheoremKnowledge(JSON.parse(readMathText(catalogFile, maxWorkerObservationBytes)));
       }
       lease.assertHeld();
       if (!previous || canonicalMathJson(previous) !== canonicalMathJson(meta)) writeMathJsonDurable(metaFile, meta);
       if (changed || input.force) messages.push({ type: 'observation', observation });
       if (catalog) messages.push({ type: 'catalog', catalog });
-      return { observation, ...(catalog ? { catalog } : {}) };
+      return { frame, result: { observation, ...(catalog ? { catalog } : {}) } };
     });
     for (const message of messages) {
       if (!options.onMessage) break;
       if (message.type !== 'observation') { options.onMessage(message); continue; }
-      const current = new Set<string>();
-      const sourceBlobs: Record<string, string> = {};
-      const observation = compactObservation(message.observation, (digest, source) => {
-        current.add(digest);
-        if (!emittedSources.has(digest)) sourceBlobs[digest] = source;
-      });
-      options.onMessage(message, { type: 'observation', observation, sourceBlobs });
-      emittedSources = current;
+      const blobs = Object.entries(result.frame.sourceBlobs);
+      const sourceBlobs = Object.fromEntries(blobs.filter(([digest]) => !emittedSources.has(digest)));
+      options.onMessage(message, { ...result.frame, sourceBlobs });
+      emittedSources = new Set(blobs.map(([digest]) => digest));
     }
-    return result;
+    return result.result;
   }
   return { capture };
 }

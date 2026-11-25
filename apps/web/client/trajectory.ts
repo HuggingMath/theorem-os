@@ -1,4 +1,4 @@
-import type { WebEvent, WebRunStatus } from '../shared';
+import type { WebEvent, WebEventDetails, WebRunStatus } from '../shared';
 import {
   trajectoryLimits, type TrajectoryCheck, type TrajectoryContext, type TrajectoryDelivery, type TrajectoryEdit, type TrajectoryGuidance,
   type TrajectoryIndex, type TrajectoryPage, type TrajectoryPlan, type TrajectoryPlanItem, type TrajectoryVersion,
@@ -45,7 +45,7 @@ export type TrajectoryStep = { at: number } & (
   | { kind: 'problem'; targets: string[] }
   | { kind: 'plan'; plan: TrajectoryPlan; first: boolean; workerId?: string }
   | { kind: 'attempt'; taskId: string; workerId?: string; number: number; outcome: TrajectoryOutcome; ref?: TrajectoryRef;
-      reused: boolean; integrated: boolean; previous?: TrajectoryVersion; note?: string }
+      reused: boolean; integrated: boolean; previous?: TrajectoryRef; note?: string }
   | { kind: 'proof'; assembled: boolean; workerId?: string; number: number; outcome: TrajectoryOutcome; ref?: TrajectoryRef }
   | { kind: 'recheck'; results: RecheckResult[] }
   | { kind: 'edit'; edit: TrajectoryEdit; plan?: TrajectoryPlan; results: RecheckResult[] }
@@ -106,8 +106,8 @@ export function proofDeliveryLookup(deliveries: Iterable<TrajectoryDelivery>) {
 /**
  * The run as mathematical steps, oldest first: reading the problem, the plan and its revisions, each Agent's attempt at
  * each task with its Lean outcome and the version it checked, human edits and guidance, reviews, the assembled proof
- * and the final acceptance. Outcomes come from the events; checks are matched to them by task and time to find the
- * code, and checked versions no event accounts for become attempts of their own.
+ * and the final acceptance. Outcomes come from the events; checks match the recorded commit when available.
+ * The time window distinguishes repeated checks and supports older events without a commit.
  */
 export function buildTrajectory(input: TrajectoryInput): TrajectoryStep[] {
   const { data } = input, targets = data.context.targets;
@@ -127,10 +127,11 @@ export function buildTrajectory(input: TrajectoryInput): TrajectoryStep[] {
     return found;
   };
   /** Match the batch outcome and prefer a receipt that explains why it passed or failed. */
-  const claimAssembly = (at: number, passed: boolean) => {
-    const found = claim(at, slot => slot.check.originalProblemPassed === passed && slot.check.passed === passed) ??
-      claim(at, slot => slot.check.originalProblemPassed === passed) ??
-      claim(at, slot => slot.check.originalProblemPassed === undefined && slot.check.passed === passed &&
+  const atCommit = (slot: Slot, commit?: string) => commit === undefined || slot.version.commit === commit;
+  const claimAssembly = (at: number, passed: boolean, commit?: string) => {
+    const found = claim(at, slot => atCommit(slot, commit) && slot.check.originalProblemPassed === passed && slot.check.passed === passed) ??
+      claim(at, slot => atCommit(slot, commit) && slot.check.originalProblemPassed === passed) ??
+      claim(at, slot => atCommit(slot, commit) && slot.check.originalProblemPassed === undefined && slot.check.passed === passed &&
         (!targets.length || targets.every(name => slot.check.theorems.includes(name))));
     // Older pages may still have a complete copy of the same batch under each goal.
     if (found && found.check.originalProblemPassed === undefined) {
@@ -141,10 +142,12 @@ export function buildTrajectory(input: TrajectoryInput): TrajectoryStep[] {
     }
     return found;
   };
-  const forTask = (slot: Slot, taskId: string, passed?: boolean) => slot.version.taskId === taskId &&
+  const forTask = (taskId: string, details: WebEventDetails, passed?: boolean) => (slot: Slot) =>
+    slot.version.taskId === taskId && atCommit(slot, details.commit) &&
+    (details.taskDigest === undefined || slot.check.taskVersion === details.taskDigest) &&
     slot.check.originalProblemPassed === undefined && (passed === undefined || slot.check.passed === passed);
-  const latestCheck = (taskId: string, at: number) => {
-    for (let position = firstAt(at + 1) - 1; position >= 0; position--) if (forTask(slots[position]!, taskId)) return slots[position];
+  const latestCheck = (at: number, accept: (slot: Slot) => boolean) => {
+    for (let position = firstAt(at + 1) - 1; position >= 0; position--) if (accept(slots[position]!)) return slots[position];
   };
   const refOf = (slot: Slot | undefined): TrajectoryRef | undefined => slot && { version: slot.version, check: slot.check };
   const deliveryFor = proofDeliveryLookup(data.deliveries.values());
@@ -167,10 +170,11 @@ export function buildTrajectory(input: TrajectoryInput): TrajectoryStep[] {
     const reused = event.type !== 'task_checked';
     let passed = details.passed, slot: Slot | undefined;
     if (reused) {
-      // A reused check is the latest recorded one of the task; it is not claimed again.
-      slot = latestCheck(taskId, at);
-      passed ??= event.type === 'task_failure_check_reused' ? false : slot?.check.passed;
-    } else slot = claim(at, item => forTask(item, taskId, passed));
+      // A reused check refers to an earlier receipt without consuming it again.
+      if (event.type === 'task_failure_check_reused') passed ??= false;
+      slot = latestCheck(at, forTask(taskId, details, passed));
+      passed ??= slot?.check.passed;
+    } else slot = claim(at, forTask(taskId, details, passed));
     if (passed === undefined) return;
     const ref = refOf(slot), outcome: TrajectoryOutcome = passed ? details.conditional ? 'conditional' : 'passed' : 'failed';
     const previous = lastAttempt.get(taskId);
@@ -179,17 +183,17 @@ export function buildTrajectory(input: TrajectoryInput): TrajectoryStep[] {
       outcome, ref, reused, integrated: false, note: noteOf(taskId, ref) }));
   };
   const integrated = (event: WebEvent, at: number) => {
-    const taskId = event.details?.taskId;
+    const details = event.details ?? {}, taskId = details.taskId;
     if (!taskId) return;
     // Integrating checks the task on the main line; that check belongs to this step, not to a new attempt.
-    claim(at, item => forTask(item, taskId, true));
+    claim(at, forTask(taskId, details, true));
     const step = lastAttempt.get(taskId);
     if (step) step.integrated = true;
   };
   const recheck = (event: WebEvent, at: number) => {
-    const taskId = event.details?.taskId, passed = event.details?.passed;
+    const details = event.details ?? {}, { taskId, passed } = details;
     if (!taskId) return;
-    const slot = claim(at, item => forTask(item, taskId, passed));
+    const slot = claim(at, forTask(taskId, details, passed));
     const result: RecheckResult = { taskId, passed: passed ?? slot?.check.passed ?? false, ref: refOf(slot),
       ...(event.type === 'task_conditional_recheck_finished' ? { conditional: true } : {}) };
     const last = steps.at(-1);
@@ -204,7 +208,7 @@ export function buildTrajectory(input: TrajectoryInput): TrajectoryStep[] {
     // Rechecking an unchanged candidate repeats the last outcome; only a different result is a step.
     if (event.details?.reused && (!lastProof || lastProof.outcome === outcome)) { assembly = undefined; return; }
     lastProof = add<StepOf<'proof'>>({ kind: 'proof', at, assembled: assembly !== undefined, workerId: event.details?.workerId ?? assembly?.workerId,
-      number: 0, outcome, ref: refOf(claimAssembly(at, passed)) });
+      number: 0, outcome, ref: refOf(claimAssembly(at, passed, event.details?.commit)) });
     assembly = undefined;
   };
   const evaluate = (event: WebEvent, at: number) => {
@@ -272,14 +276,15 @@ export function buildTrajectory(input: TrajectoryInput): TrajectoryStep[] {
   }
 
   const ordered = steps.map((step, position) => ({ step, position })).sort((a, b) => a.step.at - b.step.at || a.position - b.position).map(item => item.step);
-  const attempts = new Map<string, number>(), versions = new Map<string, TrajectoryVersion>();
+  const attempts = new Map<string, number>(), versions = new Map<string, TrajectoryRef>();
   let proofs = 0;
   for (const step of ordered) {
     if (step.kind === 'attempt') {
       step.number = (attempts.get(step.taskId) ?? 0) + 1; attempts.set(step.taskId, step.number);
       const previous = versions.get(step.taskId);
-      if (step.ref && previous && previous.commit !== step.ref.version.commit) step.previous = previous;
-      if (step.ref) versions.set(step.taskId, step.ref.version);
+      if (step.ref && previous && (previous.version.commit !== step.ref.version.commit ||
+        previous.check?.taskVersion !== step.ref.check?.taskVersion)) step.previous = previous;
+      if (step.ref) versions.set(step.taskId, step.ref);
     } else if (step.kind === 'proof' && !step.assembled) step.number = ++proofs;
   }
 

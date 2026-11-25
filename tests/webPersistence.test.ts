@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 import { buildTheoremKnowledge, type KnowledgeCandidate, type KnowledgeRouteFindingCandidate } from '../src/solver/theoremKnowledge';
-import type { WebObservation, WebTaskSource } from '../apps/web/collaboration';
+import type { WebNativeTeam, WebObservation, WebTaskSource, WebTeamProof } from '../apps/web/collaboration';
 import type { WebRun } from '../apps/web/shared';
 import { readWebArchiveObservations, WebStorage, type StoredWebArchive } from '../apps/web/storage';
 import { WebKnowledgeService } from '../apps/web/knowledgeService';
@@ -178,6 +178,35 @@ describe('durable web evidence and registered research configuration without mod
     const loaded = new WebStorage(root).getArchive('alice', saved.id, identity.id)!;
     expect(loaded).toEqual(legacy);
     expect(readWebArchiveObservations(loaded)).toEqual({ run: saved, observations: [frame] });
+  });
+
+  it('deduplicates native delivery and adoption source in v2, and reads older v2 files with inline team proof material', () => {
+    const store = new WebStorage(), saved = run();
+    const source = 'theorem native_result : True := by trivial\n/-' + 'z'.repeat(110_000) + '-/\n';
+    const checkedSource = '-- Exact checked projection\n' + source;
+    const proof: WebTeamProof = { commit: taskSource.commit, sourceDigest: mathDigest(source),
+      environmentDigest: taskSource.environmentDigest, sources: [{ file: taskSource.file, source }],
+      declarations: [{ file: taskSource.file, name: 'native_result', checkedSource, receipts: [] }] };
+    const nativeTeam: WebNativeTeam = { schema: 'theorem-os.web-native-team.v1', runId: 'solver-old', maxAgents: 3,
+      memberCount: 1, taskCount: 3, taskOmissions: 0, tasks: [], findings: [],
+      deliveries: Array.from({ length: 2 }, (_, index) =>
+        ({ id: `delivery-${index}`, taskId: `task-${index}`, memberId: 'engineer', references: [], proof })),
+      adoptions: [{ id: 'adoption', deliveryId: 'delivery-0', targetId: 'lead', status: 'completed', proof }] };
+    const frames = Array.from({ length: 66 }, (_, index) => {
+      const frame = observation(index + 1);
+      return { ...frame, sources: [], inspection: { ...frame.inspection, nativeTeam } };
+    });
+    for (const frame of frames) store.saveObservation('alice', frame);
+    saved.observation = frames.at(-1);
+    store.saveRun('alice', saved);
+    const archive = store.exportRun('alice', saved);
+    expect(archive.sourceBlobs).toEqual({ [mathDigest(source)]: source, [mathDigest(checkedSource)]: checkedSource });
+    expect(Buffer.byteLength(JSON.stringify(archive))).toBeLessThan(1_000_000);
+    expect(readWebArchiveObservations(archive)).toEqual({ run: saved, observations: frames });
+
+    const olderFrame = { ...archive.observations[0], inspection: frames[0].inspection };
+    const olderArchive = { ...archive, run: { ...archive.run, observation: olderFrame }, observations: [olderFrame], sourceBlobs: {} };
+    expect(readWebArchiveObservations(olderArchive)).toEqual({ run: { ...saved, observation: frames[0] }, observations: [frames[0]] });
   });
 
   it('merges checked declarations and advisory findings into immutable owner-bound catalogs with reproducible worker pins', () => {

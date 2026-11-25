@@ -26,33 +26,9 @@ const browser=await startBrowser(service.server,port);
 const panel=(page:Page)=>page.locator('[data-problem-account-drafts]:visible');
 async function openPanel(page:Page){if(await page.locator('#formalize-settings[open]:visible').count())await page.locator('#formalize-settings > summary').click();if(await panel(page).getAttribute('open')!=='')await panel(page).locator(':scope > summary').click();await panel(page).locator('[data-problem-draft-title]').waitFor();}
 async function save(page:Page,title:string):Promise<ResearchAccountDraftResult<ProblemDraftValue>>{
- if(await panel(page).count()){
-  await openPanel(page);await panel(page).locator('[data-problem-draft-title]').fill(title);
-  const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/research/personal/drafts'&&r.request().method()==='POST');
-  await panel(page).locator('[data-save-problem-draft]').click();const r=await response;assert.equal(r.status(),201,await r.text());await panel(page).locator('[data-save-problem-draft]:enabled').waitFor();return (await r.json()).item;
- }
- assert.equal(await panel(page).count(),0);
- if(await page.locator('body[data-entry=lean]').count()){
-  const task=await page.locator('#task').inputValue();
-  await page.waitForFunction(expected=>{try{return JSON.parse(sessionStorage.getItem('theorem-os.web-draft.v1')||'{}')?.draft?.task===expected;}catch{return false;}},task);
- }else{
-  const text=await page.locator('#formalize-original').inputValue();
-  await page.waitForFunction(expected=>Object.entries(sessionStorage).some(([k,v])=>{if(!k.startsWith('theorem-os.chat-draft.')||k.endsWith('.quotes')||k.endsWith('.position'))return false;try{return JSON.parse(v).text===expected;}catch{return false;}}),text);
- }
- return await page.evaluate(async savedTitle=>{
-  const session=await(await fetch('/api/session')).json(),owner=session.draftOwner,mode=document.body.dataset.entry==='lean'?'lean':'natural';
-  let value:ProblemDraftValue;
-  if(mode==='lean'){const stored=JSON.parse(sessionStorage.getItem('theorem-os.web-draft.v1')||'{}').draft||{};const{autoExplain:_ae,explanationLanguage:_el,continueFrom:_cf,formalization:_fm,problemBudget:_pb,...leanDraft}=stored;value={mode:'lean',draft:leanDraft};}
-  else{const k=Object.keys(sessionStorage).find(x=>x.startsWith('theorem-os.chat-draft.')&&!x.endsWith('.quotes')&&!x.endsWith('.position'));const stored=k?JSON.parse(sessionStorage.getItem(k)||'{}'):{};value={mode:'natural',text:stored.text??'',settings:stored.settings};}
-  const bindingKey=`theorem-os.problem-draft.${owner}.${mode}`;
-  const binding=JSON.parse(sessionStorage.getItem(bindingKey)||'null')||{draftKey:crypto.randomUUID(),revision:0,title:''};
-  const sig=(v:unknown,t:string)=>JSON.stringify([t,v],(_k,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.entries(x).sort(([a],[b])=>a.localeCompare(b))):x);
-  const reply=await fetch('/api/research/personal/drafts',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrfToken},body:JSON.stringify({requestId:crypto.randomUUID(),expectedRevision:binding.revision,scope:{kind:'problem',draftKey:binding.draftKey},value,summary:savedTitle,deviceId:'test-device',deviceName:'Desktop browser',clientUpdatedAt:new Date().toISOString()})});
-  if(!reply.ok)throw new Error(await reply.text());
-  const item=(await reply.json()).item;
-  sessionStorage.setItem(bindingKey,JSON.stringify({draftKey:binding.draftKey,revision:item.version.revision,title:savedTitle,draftId:item.draft.id,versionId:item.version.id,savedSignature:sig(value,savedTitle)}));
-  return item;
- },title);
+ await openPanel(page);await panel(page).locator('[data-problem-draft-title]').fill(title);
+ const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/research/personal/drafts'&&r.request().method()==='POST');
+ await panel(page).locator('[data-save-problem-draft]').click();const r=await response;assert.equal(r.status(),201,await r.text());await panel(page).locator('[data-save-problem-draft]:enabled').waitFor();return (await r.json()).item;
 }
 async function list(page:Page):Promise<ResearchAccountDraft[]>{return page.evaluate(async()=> (await (await fetch('/api/research/personal/drafts?kind=problem&status=all')).json()).items);}
 async function waitSubmitted(page:Page,draftId:string,submissionId?:string,versionId?:string){
@@ -74,7 +50,7 @@ try{
   const current=await context(language,width),page=await current.newPage();active=page;
   await page.goto(origin);await page.locator('#send-code:enabled').waitFor();await page.locator('#login-email').fill(email);await page.locator('#login-captcha').fill('24680');if(await page.locator('#terms-option').isVisible())await page.locator('#accept-terms').check();await page.locator('#send-code').click();await page.locator('#code-step:visible').waitFor();await page.locator('#login-code').fill(mail.at(-1)!.text.match(/\b\d{6}\b/u)![0]);await page.locator('#verify-code').click();await page.locator('#formalize-original').waitFor();
   await page.locator('#formalize-original').fill(webFormalizationStatement);await openChatModelSettings(page);await page.locator('#formalize-model').fill('fixture-model');await openAdvancedChatSettings(page);await page.locator('#formalize-environment').selectOption('standard');await page.locator('#formalize-settings > summary').click();
-  phase=`refresh-status-${language}`;assert.equal(await panel(page).count(),0);const first=await save(page,'Problem A');await page.goto(`${origin}/?accountDraft=${first.draft.id}&draftVersion=${first.version.id}`);await page.locator('#formalize-original').waitFor();await openPanel(page);
+  phase=`refresh-status-${language}`;const first=await save(page,'Problem A');await page.goto(`${origin}/?accountDraft=${first.draft.id}&draftVersion=${first.version.id}`);await page.locator('#formalize-original').waitFor();await openPanel(page);
   await panel(page).locator('[data-problem-draft-notice]').waitFor();
   await page.locator('#formalize-original').fill(webFormalizationStatement+'\nUse induction.');await panel(page).getByText(/新修改尚未保存到账号|Your new edits are not yet saved to your account/).waitFor();
   await page.screenshot({path:path.join(output,`${language}-${width}-dirty-after-reload.png`),fullPage:true});

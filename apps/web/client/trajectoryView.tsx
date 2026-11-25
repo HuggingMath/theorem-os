@@ -3,9 +3,9 @@ import type { WebContinuation, WebEvent, WebRun } from '../shared';
 import type { WebExplainAnswer, WebExplainTurn } from '../explain';
 import { diagnostics, summarizeGoals, type ReportDiagnostic } from '../report';
 import { formatDuration, readableDuration, stoppedLabel } from '../presentation';
-import type { TrajectoryPage, TrajectoryPlan, TrajectoryPlanItem, TrajectoryVersion, TrajectoryVersionDetail } from '../trajectory';
+import type { TrajectoryPage, TrajectoryPlan, TrajectoryPlanItem, TrajectoryVersionDetail } from '../trajectory';
 import { buildTrajectory, emptyTrajectory, mergeTrajectory, retryRuns, sameWords, stepTasks, trajectoryTally, trajectoryTaskNames, type RecheckResult, type TrajectoryData,
-  type TrajectoryOutcome, type TrajectoryStep } from './trajectory';
+  type TrajectoryOutcome, type TrajectoryRef, type TrajectoryStep } from './trajectory';
 import { readableMessage } from './activityReader';
 import { taskNames } from './agentRoute';
 import { kindLabel as taskKindLabel, tokenText, totalTokens } from './collaborationView';
@@ -80,7 +80,7 @@ type Item = { step: TrajectoryStep; key: string; index: number };
 type Loaded = { status: 'loading' } | { status: 'ready'; revision: number; detail: TrajectoryVersionDetail } | { status: 'failed'; error: string };
 /** Where the key for a question comes from; with none, the panel asks for one and keeps it on this page only. */
 export type ExplainKey = { source: 'saved'; ending: string } | { source: 'server' } | { source: 'remembered' } | { source: 'none' };
-export type ExplainRequest = { taskId: string; commit: string; question: string; turns: WebExplainTurn[]; apiKey?: string };
+export type ExplainRequest = { taskId: string; commit: string; taskVersion?: string; question: string; turns: WebExplainTurn[]; apiKey?: string };
 /** What a reader may do with a run of their own: start a new run from a version, and ask why a version failed. */
 export type OwnRunActions = {
   allowed(run: WebRun): boolean;
@@ -113,6 +113,7 @@ type Ctx = { run: WebRun; state: RunState; names: Map<string, string>; tasks: Ma
 type Content = { title: ComponentChildren; meta?: string[]; badge?: [string, Tone]; body?: ComponentChildren };
 
 const shortName = (name: string) => name.split('.').at(-1) || name;
+const detailKey = ({ version, check }: TrajectoryRef) => check?.taskVersion ? `${version.key}\u0000${check.taskVersion}` : version.key;
 /** The Lean output of a version's check (`ids`, its receipts; none means all), failed receipts first, each output once. */
 function checkEntries(detail: TrajectoryVersionDetail, ids: readonly string[]) {
   const wanted = new Set(ids), checks = detail.checks.filter(check => !wanted.size || wanted.has(check.id))
@@ -490,8 +491,10 @@ export class TrajectoryView {
       && item.outcome === 'passed' && !item.reused && item.ref?.version.source !== undefined);
     const version = step?.ref?.version;
     if (!step || !version) return;
+    const taskVersion = step.ref?.check?.taskVersion;
     const label = `${names.get(step.taskId) ?? step.taskId} · ${t('第 {0} 次', step.number)}`;
-    return { runId: run.id, taskId: version.taskId, commit: version.commit, label: label.slice(0, 200) };
+    return { runId: run.id, taskId: version.taskId, commit: version.commit, label: label.slice(0, 200),
+      ...(taskVersion ? { taskVersion } : {}) };
   }
 
   /** Scrolling up while the run goes on stops following the latest step; scrolling back to the bottom resumes it. */
@@ -935,8 +938,8 @@ export class TrajectoryView {
    */
   private actions(ctx: Ctx, step: StepOf<'attempt'> | StepOf<'proof'>) {
     const version = step.ref?.version, saved = version?.source !== undefined, own = this.own;
-    const checkedVersion = version && ctx.run.observation?.checks.find(check => check.taskId === version.taskId && check.commit === version.commit
-      && step.ref?.check?.receiptIds.includes(check.id))?.taskVersion;
+    const checkedVersion = step.ref?.check?.taskVersion ?? (version && ctx.run.observation?.checks.find(check => check.taskId === version.taskId && check.commit === version.commit
+      && step.ref?.check?.receiptIds.includes(check.id))?.taskVersion);
     const label = step.kind === 'attempt' ? `${ctx.tasks.get(step.taskId) ?? step.taskId} · ${t('第 {0} 次', step.number)}`
       : [step.assembled ? t('组装完整证明') : t('完整证明'), ctx.proofs > 1 && !step.assembled ? t('第 {0} 次', step.number) : ''].filter(Boolean).join(' · ');
     const buttons = [
@@ -946,7 +949,8 @@ export class TrajectoryView {
         && <button type="button" class="text-button" data-action="open-source">{t('完整源码')}<Icon name="arrow-up-right" /></button>,
       version && saved && own?.allowed(ctx.run) && <button type="button" class="text-button" data-focus-key={`${ctx.key}-continue`}
         data-trajectory-continue title={t('用这道题开一次新运行，把这一版的代码交给每个 Agent 参考')}
-        onClick={() => own.start(ctx.run, { runId: ctx.run.id, taskId: version.taskId, commit: version.commit, label: label.slice(0, 200) })}>
+        onClick={() => own.start(ctx.run, { runId: ctx.run.id, taskId: version.taskId, commit: version.commit, label: label.slice(0, 200),
+          ...(checkedVersion ? { taskVersion: checkedVersion } : {}) })}>
         <Icon name="git-branch-plus" />{t('从这一版继续')}</button>,
       version && saved && own?.allowed(ctx.run) && step.kind === 'attempt' && step.outcome === 'passed' && !step.reused && <a class="text-button" data-save-library
         href={`library.html?${new URLSearchParams({ create: '1', fromRun: ctx.run.id, task: version.taskId, commit: version.commit, ...(checkedVersion ? { taskVersion: checkedVersion } : {}) })}`}>
@@ -961,7 +965,7 @@ export class TrajectoryView {
     if (step.kind === 'delivery') return step.delivery.finding && step.delivery.finding !== step.delivery.summary ? ['finding'] : [];
     if (step.kind !== 'attempt' && step.kind !== 'proof') return [];
     const version = step.ref?.version, saved = version?.source !== undefined, failed = Boolean(version) && step.outcome === 'failed';
-    return [saved && 'code', saved && step.kind === 'attempt' && step.previous?.source !== undefined && 'diff',
+    return [saved && 'code', saved && step.kind === 'attempt' && step.previous?.version.source !== undefined && 'diff',
       failed && 'feedback', failed && this.asks(run) && 'ask'].filter((mode): mode is Mode => Boolean(mode));
   }
   private asks(run: WebRun) { return Boolean(this.own?.explain && this.own.allowed(run)); }
@@ -997,15 +1001,15 @@ export class TrajectoryView {
       subtitle = [step.delivery.taskId ? base.tasks.get(step.delivery.taskId) ?? step.delivery.taskId : '', elapsed(step.at - origin)].filter(Boolean).join(' · ');
       body = <p class="trajectory-finding">{step.delivery.finding}</p>;
     } else if (step.kind === 'attempt' || step.kind === 'proof') {
-      const version = step.ref!.version;
+      const ref = step.ref!;
       title = step.kind === 'attempt' ? <code class="trajectory-task">{base.tasks.get(step.taskId) ?? step.taskId}</code> : step.assembled ? t('组装完整证明') : t('完整证明');
       subtitle = [step.kind === 'attempt' ? t('第 {0} 次', step.number) : '', outcomeText(step.outcome, step.ref?.check?.headline), elapsed(step.at - origin)].filter(Boolean).join(' · ');
       // A failed step's code carries Lean's messages under their lines.
       const failed = step.outcome === 'failed' ? step.ref?.check?.receiptIds ?? [] : undefined;
-      body = panel.mode === 'code' ? this.code(ctx, version, step.kind === 'attempt' ? step.taskId : undefined, failed)
-        : panel.mode === 'diff' && step.kind === 'attempt' && step.previous ? this.diff(ctx, step.previous, version)
-          : panel.mode === 'ask' ? this.ask(ctx, version)
-            : this.feedback(ctx, version, step.ref?.check?.receiptIds ?? [], modes.includes('ask'));
+      body = panel.mode === 'code' ? this.code(ctx, ref, step.kind === 'attempt' ? step.taskId : undefined, failed)
+        : panel.mode === 'diff' && step.kind === 'attempt' && step.previous ? this.diff(ctx, step.previous, ref)
+          : panel.mode === 'ask' ? this.ask(ctx, ref)
+            : this.feedback(ctx, ref, ref.check?.receiptIds ?? [], modes.includes('ask'));
     } else return null;
     return <SideViewer id="trajectory-viewer" title={title} subtitle={subtitle} focusKey={`trajectory-viewer-${panel.key}`} onClose={close}
       modes={modes.map(mode => ({ id: mode, label: modeLabels[mode], current: mode === panel.mode, select: select(mode) }))}>
@@ -1088,24 +1092,26 @@ export class TrajectoryView {
   }
 
   /** A version's code and receipts, fetched once and again only when the server has more checks of it. */
-  private need(ctx: Ctx, version: TrajectoryVersion): Loaded {
-    const versions = ctx.state.versions, key = version.key, cached = versions.get(key);
+  private need(ctx: Ctx, ref: TrajectoryRef): Loaded {
+    const { version, check } = ref;
+    const versions = ctx.state.versions, key = detailKey(ref), cached = versions.get(key);
     if (cached && (cached.status !== 'ready' || cached.revision >= version.revision)) return cached;
     versions.delete(key); versions.set(key, { status: 'loading' });
     for (const old of versions.keys()) { if (versions.size <= limits.versions) break; versions.delete(old); }
     const query = new URLSearchParams({ task: version.taskId, commit: version.commit });
+    if (check?.taskVersion) query.set('taskVersion', check.taskVersion);
     void this.api<{ version: TrajectoryVersionDetail }>(`/api/runs/${encodeURIComponent(ctx.run.id)}/trajectory/version?${query}`)
       .then(({ version: detail }) => { versions.set(key, { status: 'ready', revision: version.revision, detail }); },
         error => { versions.set(key, { status: 'failed', error: errorText(error) }); })
       .finally(() => { if (this.run?.id === ctx.run.id) this.render(); });
     return { status: 'loading' };
   }
-  private pending(ctx: Ctx, loaded: Loaded, version: TrajectoryVersion) {
+  private pending(ctx: Ctx, loaded: Loaded, ref: TrajectoryRef) {
     if (loaded.status === 'loading') return <div class="skeleton-block" aria-busy="true"><span class="skeleton-code" aria-hidden="true">{[86, 62, 74, 40, 68].map(width => <i key={width} style={{ width: `${width}%` }} />)}</span>
       <p class="trajectory-loading">{t('正在读取…')}</p></div>;
     if (loaded.status === 'failed') return <p class="trajectory-error" role="status">{t('读取失败：{0}', loaded.error)}
       <button type="button" class="text-button" data-focus-key={`${ctx.key}-retry`}
-        onClick={() => { ctx.state.versions.delete(version.key); this.render(); }}>{t('重试')}</button></p>;
+        onClick={() => { ctx.state.versions.delete(detailKey(ref)); this.render(); }}>{t('重试')}</button></p>;
   }
 
   /**
@@ -1114,14 +1120,14 @@ export class TrajectoryView {
    * step's code (`failed`, the receipts of its check) has Lean's messages under the lines they are about, and above the
    * code a link to each of those lines.
    */
-  private code(ctx: Ctx, version: TrajectoryVersion, taskId?: string, failed?: readonly string[]) {
-    const loaded = this.need(ctx, version);
-    if (loaded.status !== 'ready') return this.pending(ctx, loaded, version);
+  private code(ctx: Ctx, ref: TrajectoryRef, taskId?: string, failed?: readonly string[]) {
+    const loaded = this.need(ctx, ref);
+    if (loaded.status !== 'ready') return this.pending(ctx, loaded, ref);
     const source = loaded.detail.source;
     if (!source) return <p class="trajectory-note">{t('这一版的代码没有保存')}</p>;
     const marks = failed ? versionMarks(loaded.detail, failed) : undefined;
     const signature = marks ? JSON.stringify([...marks.lines]) : '';
-    const key = `${version.key}\u0000${source.sourceDigest}\u0000${signature}`;
+    const key = `${detailKey(ref)}\u0000${source.sourceDigest}\u0000${signature}`;
     if (ctx.state.code?.key !== key) {
       const text = source.source.replace(/\r\n?/gu, '\n'), lines = text.split('\n'), gaps = new Map<number, number>();
       const below = new Map<number, ComponentChildren>();
@@ -1216,13 +1222,13 @@ export class TrajectoryView {
     this.render();
   }
 
-  private diff(ctx: Ctx, before: TrajectoryVersion, after: TrajectoryVersion) {
+  private diff(ctx: Ctx, before: TrajectoryRef, after: TrajectoryRef) {
     const old = this.need(ctx, before), current = this.need(ctx, after);
     if (old.status !== 'ready') return this.pending(ctx, old, before);
     if (current.status !== 'ready') return this.pending(ctx, current, after);
     const a = old.detail.source, b = current.detail.source;
     if (!a || !b) return <p class="trajectory-note">{t('有一版的代码没有保存，无法对比')}</p>;
-    const key = `${a.sourceDigest}\u0000${b.sourceDigest}\u0000${ctx.state.folded}`;
+    const key = `${detailKey(before)}\u0000${detailKey(after)}\u0000${a.sourceDigest}\u0000${b.sourceDigest}\u0000${ctx.state.folded}`;
     if (ctx.state.comparison?.key !== key) ctx.state.comparison = { key, value: compareSources(a.source, b.source, ctx.state.folded) };
     const comparison = ctx.state.comparison.value;
     if (comparison.status === 'identical') return <p class="trajectory-note">{comparison.lineEndingsChanged ? t('仅换行格式不同') : t('源码内容相同')}</p>;
@@ -1242,9 +1248,9 @@ export class TrajectoryView {
    * The Lean output of the step's check, failed receipts first; identical outputs of several theorems are shown once.
    * Where a message names a line the code view marks, its location is a link to that line.
    */
-  private feedback(ctx: Ctx, version: TrajectoryVersion, ids: readonly string[], askable = false) {
-    const loaded = this.need(ctx, version);
-    if (loaded.status !== 'ready') return this.pending(ctx, loaded, version);
+  private feedback(ctx: Ctx, ref: TrajectoryRef, ids: readonly string[], askable = false) {
+    const loaded = this.need(ctx, ref);
+    if (loaded.status !== 'ready') return this.pending(ctx, loaded, ref);
     const entries = checkEntries(loaded.detail, ids), source = loaded.detail.source, marks = source ? versionMarks(loaded.detail, ids) : undefined;
     // Lean's wording is often the hard part; the panel offers to have the run's model explain it.
     const hint = askable && <p class="trajectory-ask-hint"><span>{t('看不懂这段输出？')}</span>
@@ -1275,11 +1281,11 @@ export class TrajectoryView {
     this.render();
     this.root?.querySelector<HTMLElement>('#trajectory-viewer [data-ask-question]')?.focus({ preventScroll: true });
   }
-  private thread(ctx: Ctx, version: TrajectoryVersion) {
-    const asks = ctx.state.asks;
-    let thread = asks.get(version.key);
+  private thread(ctx: Ctx, ref: TrajectoryRef) {
+    const asks = ctx.state.asks, key = detailKey(ref);
+    let thread = asks.get(key);
     if (thread) return thread;
-    asks.set(version.key, thread = { turns: [], draft: t('这一步为什么没通过？应该怎么改？') });
+    asks.set(key, thread = { turns: [], draft: t('这一步为什么没通过？应该怎么改？') });
     for (const [key, old] of asks) { if (asks.size <= limits.asks) break; if (!old.pending) asks.delete(key); }
     return thread;
   }
@@ -1289,12 +1295,12 @@ export class TrajectoryView {
    * pays for, outside the run's budget, and the run never sees it. The thread stays on this page until it is left;
    * each question carries the last few answers with it.
    */
-  private ask(ctx: Ctx, version: TrajectoryVersion) {
-    const explain = this.own!.explain!, key = explain.key(ctx.run), thread = this.thread(ctx, version), pending = thread.pending;
+  private ask(ctx: Ctx, ref: TrajectoryRef) {
+    const explain = this.own!.explain!, key = explain.key(ctx.run), thread = this.thread(ctx, ref), pending = thread.pending;
     const id = `trajectory-ask-${ctx.index}`;
     const submit = (event: Event) => {
       event.preventDefault();
-      if (pending) pending.controller.abort(); else void this.send(ctx, version, thread, event.currentTarget as HTMLFormElement);
+      if (pending) pending.controller.abort(); else void this.send(ctx, ref, thread, event.currentTarget as HTMLFormElement);
     };
     return <div class="trajectory-ask">
       <p class="trajectory-ask-cost"><Icon name="circle-help" />
@@ -1323,7 +1329,7 @@ export class TrajectoryView {
         </form>
     </div>;
   }
-  private async send(ctx: Ctx, version: TrajectoryVersion, thread: AskThread, form: HTMLFormElement) {
+  private async send(ctx: Ctx, { version, check }: TrajectoryRef, thread: AskThread, form: HTMLFormElement) {
     const explain = this.own?.explain, question = thread.draft.trim(), run = ctx.run;
     if (!explain || !question || thread.pending) return;
     const source = explain.key(run).source, typed = this.typedKeys.get(run.providerId) ?? '';
@@ -1338,6 +1344,7 @@ export class TrajectoryView {
     this.render();
     try {
       const answer = await explain.ask(run, { taskId: version.taskId, commit: version.commit, question,
+        ...(check?.taskVersion ? { taskVersion: check.taskVersion } : {}),
         turns: thread.turns.slice(-explainLimits.turns).map(turn => ({ question: turn.question, answer: turn.answer })),
         ...(source === 'none' ? { apiKey: typed } : {}) }, controller.signal);
       thread.turns.push({ question, answer: answer.answer, ...(answer.truncated ? { truncated: true } : {}), ...(answer.usage ? { usage: answer.usage } : {}) });

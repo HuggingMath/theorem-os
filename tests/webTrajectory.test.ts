@@ -5,6 +5,7 @@ import type { WebEvent, WebRun } from '../apps/web/shared';
 import { checkHeadline, recordedTrajectory, trajectoryPage, trajectoryQuery, trajectoryVersionQuery, WebTrajectories, type TrajectoryPage } from '../apps/web/trajectory';
 import { buildTrajectory, emptyTrajectory, mergeTrajectory, retryRuns, sameWords, stepTasks, trajectoryTally, trajectoryTaskNames, type TrajectoryStep } from '../apps/web/client/trajectory';
 import { withFailedAttempt } from '../scripts/web-trajectory-fixture';
+import { translateWebProgress } from '../apps/web/progress';
 
 const sample = loadWebSample()!;
 const first = (index = recordedTrajectory(sample.events, sample.observations)) => trajectoryPage(index, { after: 0, since: 0 });
@@ -138,7 +139,24 @@ describe('web trajectory steps', () => {
     expect(failed).toMatchObject({ taskId: 'goal_2', number: 1, outcome: 'failed', integrated: false });
     expect(failed!.ref!.check).toMatchObject({ passed: false, headline: 'The rfl tactic failed.', receiptIds: ['lean-failed-attempt'] });
     expect(passed).toMatchObject({ taskId: 'goal_2', number: 2, outcome: 'passed', integrated: true });
-    expect(passed!.previous?.commit).toBe(failed!.ref!.version.commit);
+    expect(passed!.previous?.version.commit).toBe(failed!.ref!.version.commit);
+  });
+
+  it.each(['commit', 'task revision'] as const)('matches overlapping failed attempts by their recorded %s', identity => {
+    const data = emptyTrajectory(), at = Date.UTC(2026, 9, 22);
+    const firstCommit = 'a'.repeat(40), keptCommit = identity === 'commit' ? 'b'.repeat(40) : firstCommit;
+    const keptVersion = 'c'.repeat(64), firstVersion = identity === 'task revision' ? 'd'.repeat(64) : keptVersion;
+    data.events = [[firstCommit, firstVersion], [keptCommit, keptVersion]].map(([commit, taskDigest], index) => {
+      const event = translateWebProgress({ event: 'task_checked', taskId: 'goal', passed: false, commit, taskDigest })!;
+      return { type: event.event, message: event.message, details: event.details, at: new Date(at + 700 * index).toISOString(), sequence: index + 1 };
+    });
+    data.versions.set(keptCommit, { key: keptCommit, taskId: 'goal', commit: keptCommit, firstAt: at + 650, revision: 1,
+      checks: [{ at: at + 650, passed: false, status: 'failed', receiptIds: ['kept-receipt'], theorems: ['Goal'],
+        observation: 1, taskVersion: keptVersion, headline: 'type mismatch' }] });
+    const [firstAttempt, lastAttempt] = of(buildTrajectory({ data, status: 'running', createdAt: new Date(at).toISOString() }), 'attempt');
+    expect(firstAttempt).toMatchObject({ number: 1, outcome: 'failed', ref: undefined });
+    expect(lastAttempt).toMatchObject({ number: 2, outcome: 'failed',
+      ref: { version: { commit: keptCommit }, check: { taskVersion: keptVersion, receiptIds: ['kept-receipt'] } } });
   });
 
   it('takes a task\'s consecutive attempts as one entry, where the last of them stands', () => {

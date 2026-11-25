@@ -5,8 +5,8 @@ import { canonicalMathJson, mathDigest, syncMathDirectory, writeMathFrozen } fro
 import type { WebArchive, WebCheckReceipt, WebCommandResult, WebObservation, WebTaskSource } from './collaboration';
 import type { WebAccountIdentity, WebAgentAction, WebEvent, WebExplanation, WebRun, WorkerExplanationCheckpoint } from './shared';
 import type { WebShareSnapshot } from './share';
-import { compactObservation, hydrateObservation, observationCompactor,
-  type CompactWebObservation, type CompactWebTaskSource } from './observationSources';
+import { archiveObservationCompactor, compactObservation, hydrateArchiveObservation, hydrateObservation,
+  type ArchivedWebObservation, type CompactWebObservation, type CompactWebTaskSource } from './observationSources';
 import { projectStoredObservationChecks } from './observationChecks';
 
 export type WebCreation = { schema: 'theorem-os.web-creation.v1'; requestId: string; digest: string };
@@ -31,11 +31,11 @@ type ArchiveRecords = {
 type StoredWebArchiveV1 = ArchiveRecords & ArchiveEvidence & { schema: 'theorem-os.web-archive.v1'; commands: WebCommandResult[] };
 export type StoredWebArchiveV2 = ArchiveRecords & {
   schema: 'theorem-os.web-archive.v2';
-  run: Omit<WebRun, 'observation'> & { observation?: CompactWebObservation };
-  observations: CompactWebObservation[];
+  run: Omit<WebRun, 'observation'> & { observation?: ArchivedWebObservation };
+  observations: ArchivedWebObservation[];
   sources: CompactWebTaskSource[];
   sourceBlobs: Record<string, string>;
-  commands: (Omit<WebCommandResult, 'observation'> & { observation?: CompactWebObservation })[];
+  commands: (Omit<WebCommandResult, 'observation'> & { observation?: ArchivedWebObservation })[];
 };
 export type StoredWebArchive = StoredWebArchiveV1 | StoredWebArchiveV2;
 
@@ -63,7 +63,7 @@ export function webArchive(run: WebRun, records: { observations: WebObservation[
   actions: WebAgentAction[]; commands: WebCommandResult[] }, catalogDigest?: string): StoredWebArchiveV2 {
   const { events, actions, commands } = records;
   const sourceBlobs: Record<string, string> = {};
-  const referenceSources = observationCompactor((digest, source) => { sourceBlobs[digest] = source; });
+  const referenceSources = archiveObservationCompactor((digest, source) => { sourceBlobs[digest] = source; });
   const compact = (frame: WebObservation) => referenceSources(projectStoredObservationChecks(frame));
   const observations = records.observations.map(compact);
   const { observation, ...runFields } = run;
@@ -98,7 +98,7 @@ export function webArchive(run: WebRun, records: { observations: WebObservation[
 export function readWebArchiveObservations(archive: StoredWebArchive): Pick<ArchiveEvidence, 'run' | 'observations'> {
   if (archive.schema === 'theorem-os.web-archive.v1') return { run: archive.run, observations: archive.observations };
   const { observation, ...run } = archive.run;
-  const hydrate = (frame: CompactWebObservation) => hydrateObservation(frame, digest => archive.sourceBlobs[digest]);
+  const hydrate = (frame: ArchivedWebObservation) => hydrateArchiveObservation(frame, digest => archive.sourceBlobs[digest]);
   return { run: { ...run, ...(observation ? { observation: hydrate(observation) } : {}) },
     observations: archive.observations.map(hydrate) };
 }

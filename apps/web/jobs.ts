@@ -143,20 +143,20 @@ export class WebJobs {
     if (this.list(owner).length >= webLimits.maxRuns)
       throw new Error(`已达到 ${webLimits.maxRuns} 条运行记录的上限。请先下载需要的档案，删除已结束的记录后重试。`);
     const now = new Date().toISOString();
-    const pinnedDigest = input.knowledgeDigest === undefined
+    const knowledgeDigest = input.knowledgeDigest === undefined
       ? continuation ? this.get(owner, continuation.runId)?.knowledgeDigest : this.knowledge.latestReusableCatalog(owner)?.digest
-      : input.knowledgeDigest ?? undefined;
-    if (pinnedDigest && !this.knowledge.getCatalog(owner, pinnedDigest))
+      : input.knowledgeDigest;
+    if (knowledgeDigest && !this.knowledge.getCatalog(owner, knowledgeDigest))
       throw new WebStorageError(404, '所选知识目录不存在或不属于当前会话。');
     const pinnedInput: WebRunInput = { ...input, environment: input.environment ?? 'standard',
       autoExplain: input.autoExplain ?? true, explanationLanguage: input.explanationLanguage ?? 'zh' };
     if (researchConfiguration && !input.nativeTeamCapacity) pinnedInput.modulePlan = structuredClone(researchConfiguration.modulePlan);
     if (input.researchMode === 'skill') pinnedInput.skillLoading ??= webDefaultSkillLoading(provider);
-    if (pinnedDigest) pinnedInput.knowledgeDigest = pinnedDigest;
+    if (knowledgeDigest) pinnedInput.knowledgeDigest = knowledgeDigest;
     else delete pinnedInput.knowledgeDigest;
     const { apiKey, knowledgeDigest: _selectedKnowledgeDigest, ...visible } = pinnedInput;
     const environment = input.environment ?? 'standard';
-    const run: WebRun = { ...clean(visible, apiKey), ...(pinnedDigest ? { knowledgeDigest: pinnedDigest } : {}),
+    const run: WebRun = { ...clean(visible, apiKey), ...(knowledgeDigest !== undefined ? { knowledgeDigest } : {}),
       environment, id: crypto.randomUUID(),
       title: '', status: 'queued',
       phase: 'queued', createdAt: now, updatedAt: now, timings: {}, events: [], modules: {} };
