@@ -1,13 +1,16 @@
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
-import { ownedSourceDigest } from './cooperativeProof';
+import { inspectLeanDeclarationRegions, startsLeanSourceCommand } from '../math/leanSource';
+import { isSimpleLeanName, maskLeanCommentsAndStrings } from '../math/leanSyntax';
+import { declarationStartWithDoc, ownedSourceDigest } from './cooperativeProof';
 import { deliveryInputFields } from './cooperationShared';
 import { MAX_RESEARCH_NOTES_BYTES, type DeliveryRecord } from './deliveries';
 import { mathematicalGapVisible } from './mathematicalGaps';
 import { taskDependencyRecords } from './modules/search';
 import { captureObligationSnapshot } from './obligationProgress';
 import { committedSource, git, type SolverProblem } from './problem';
-import type { CheckpointCandidate } from './researchEvidence';
+import { checkpointCandidate, type CheckpointCandidate } from './researchEvidence';
 import { captureResearchBasis } from './researchRecords';
+import { researchSourceTasks, scopedResearchSources } from './researchSources';
 import { routeBlockerBasis } from './routeControl';
 import { taskGroup, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
 
@@ -38,14 +41,25 @@ function visibleDeliveries(input: CheckpointInput) {
   });
 }
 
+function scopedProgressEvidence(record: DeliveryRecord) {
+  const { summary: _summary, ...fields } = deliveryInputFields(record);
+  const artifactDigest = record.artifacts?.artifacts.length ? checkpointCandidate('', record.artifacts).digest : undefined;
+  if (!artifactDigest && !fields.evidenceRefs.length && !fields.findingDigest && !fields.lemmaRequests?.length &&
+      !fields.mathematicalGap && !fields.checkOutcome && !fields.sourceUses?.length && !fields.searchCheckpoint) return;
+  return { ...fields, artifactDigest };
+}
+
 /** Keep scheduling identity identical during live recovery and cold continuation. */
-export function researchCheckpointLocalInputDigest(input: CheckpointInput) {
+export function researchCheckpointLocalInputDigest(input: CheckpointInput, legacyProgress = false) {
   const dependencies = taskDependencyRecords(input.task, input.tasks);
   const relevant = new Set([input.task.id, ...dependencies.map(node => node.task.id)]);
-  const deliveries = [...new Set(visibleDeliveries(input).filter(record => relevant.has(record.taskId ?? '') ||
-    record.dependencies.some(reference => reference.taskId === input.task.id)).map(record => canonicalMathJson({
-    ...deliveryInputFields(record), findingDigest: record.findingDigest,
-  })))].sort();
+  const scopedCheck = !legacyProgress && input.tasks.some(node => node.task.id === input.task.id && node.nextCheckId);
+  const deliveries = [...new Set(visibleDeliveries(input).flatMap(record => {
+    if (!relevant.has(record.taskId ?? '') && !record.dependencies.some(reference => reference.taskId === input.task.id)) return [];
+    // Keep progress prose visible to workers, but don't treat a handoff summary as new check evidence.
+    const fields = scopedCheck && record.kind === 'progress' ? scopedProgressEvidence(record) : deliveryInputFields(record);
+    return fields ? [canonicalMathJson(fields)] : [];
+  }))].sort();
   return mathDigest(canonicalMathJson({ taskDigest: taskVersion(input.task),
     basis: routeBlockerBasis(input.task, input.tasks, input.environmentDigest, input.problemReceiptDigest),
     dependencies: captureObligationSnapshot(dependencies, { environmentDigest: input.environmentDigest }).digest,
@@ -63,17 +77,74 @@ export function researchCheckpointInputDigest(input: CheckpointInput & {
       { environmentDigest: input.environmentDigest }).digest, deliveries }));
 }
 
-/** Intermediate review notes belong to one reviewer and the exact inspected inputs, never a verdict. */
-export function feasibilityReviewInputDigest(input: CheckpointInput & {
+type FeasibilityReviewInput = CheckpointInput & {
   problem: SolverProblem; worktree: string; canonicalCommit: string;
   retrievalDigest?: string; knowledgeDigest?: string;
-}) {
+};
+
+/** Intermediate review notes belong to one reviewer and the exact inspected inputs, never a verdict. */
+export function feasibilityReviewInputDigest(input: FeasibilityReviewInput) {
   return mathDigest(canonicalMathJson({ workerId: input.workerId, basis: captureResearchBasis(input.task, {
     problemReceiptDigest: input.problemReceiptDigest, environmentDigest: input.environmentDigest,
     retrievalDigest: input.retrievalDigest, knowledgeDigest: input.knowledgeDigest,
     sourceDigest: ownedSourceDigest(input.problem, input.worktree, input.canonicalCommit),
     tasks: input.tasks, deliveries: input.deliveries,
   }) }));
+}
+
+/** Carry provisional notes onto a new seed only for a recognizable, independent source addition. */
+export function resumableFeasibilityReviewInput(input: FeasibilityReviewInput,
+  saved: { feasibilityInputDigest?: string; canonicalCommit?: string; seedCommit?: string }): string | undefined {
+  if (!saved.feasibilityInputDigest) return;
+  const current = feasibilityReviewInputDigest(input);
+  if (saved.feasibilityInputDigest === current) return current;
+  if (!saved.seedCommit || !saved.canonicalCommit || saved.canonicalCommit === input.canonicalCommit) return;
+  try {
+    // Recompute the saved identity with today's task, evidence and environment.
+    // A changed dependency or knowledge input must still start a fresh review.
+    if (saved.feasibilityInputDigest !== feasibilityReviewInputDigest({ ...input, canonicalCommit: saved.canonicalCommit })) return;
+    const { problem, worktree, task, tasks } = input;
+    const sources = (commit: string) => Object.fromEntries(problem.ownedFiles.map(file =>
+      [file, committedSource(worktree, commit, `${problem.projectRelative}/${file}`)]));
+    const previous = sources(saved.seedCommit);
+    const next = scopedResearchSources(problem, task, sources(input.canonicalCommit), researchSourceTasks(tasks));
+    const changed = problem.ownedFiles.filter(file => previous[file] !== next[file]);
+    if (!changed.length) return current;
+    // Without explicit inspection inputs, we cannot distinguish new evidence from
+    // an unrelated declaration in the reviewer's visible source.
+    if (!task.dependsOn.length) return;
+    const dependencies = taskDependencyRecords(task, tasks);
+    const ids = new Set(dependencies.map(node => node.task.id));
+    const names = new Set([...Object.values(previous),
+      canonicalMathJson([task, dependencies.map(node => ({ task: node.task, finding: node.finding })),
+        input.deliveries.filter(record => record.taskId && ids.has(record.taskId) && record.status !== 'superseded')])]
+      .flatMap(text => text.match(/[\p{L}\p{M}\p{N}_'?!]+/gu) ?? []));
+    if (changed.every(file => file.endsWith('.lean') && !Object.hasOwn(problem.frozenFiles ?? {}, file) &&
+        onlyNewPlainLemmas(previous[file]!, next[file]!, names))) return current;
+  } catch {
+    // An unavailable prior seed or an ambiguous source scope cannot establish equivalence.
+  }
+}
+
+function onlyNewPlainLemmas(before: string, after: string, knownNames: ReadonlySet<string>): boolean {
+  let reconstructed = '', cursor = 0;
+  const regions = inspectLeanDeclarationRegions(after);
+  const visible = maskLeanCommentsAndStrings(after);
+  for (const [index, region] of regions.entries()) {
+    const start = after.lastIndexOf('\n', region.startOffset - 1) + 1;
+    const name = region.name.split('.').at(-1)!;
+    if (!isSimpleLeanName(region.name) || knownNames.has(name) ||
+        after.slice(start, region.startOffset).trim() ||
+        !/^(?:theorem|lemma)\s/u.test(after.slice(region.startOffset, region.bodyOffset)) ||
+        declarationStartWithDoc(after, region.startOffset, index ? regions[index - 1]!.endOffset : 0) !== start) continue;
+    // Declaration regions are indentation based. Do not erase a following
+    // command just because it used greater indentation than the lemma.
+    if (visible.slice(region.bodyOffset, region.endOffset).split('\n').slice(1)
+      .some(line => startsLeanSourceCommand(line.trimStart()))) continue;
+    reconstructed += after.slice(cursor, start);
+    cursor = region.endOffset;
+  }
+  return cursor > 0 && reconstructed + after.slice(cursor) === before;
 }
 
 export const researchCheckpointOutputDigest = (problem: SolverProblem, worktree: string, commit: string) =>

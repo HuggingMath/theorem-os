@@ -1,4 +1,4 @@
-import { readMathJson, writeMathJsonDurable } from '../math/mathRuntimeIo';
+import { createMathJsonCheckpointWriter, readMathJson } from '../math/mathRuntimeIo';
 import { personalExpertSetSchema, type PersonalExpertSet } from './personalExperts';
 import { agentTeamStateSchema, writerProcessSchema, type AgentTeamState } from './agentTeamState';
 import type { SolverProblem } from './problem';
@@ -107,6 +107,7 @@ export type SolverRunState = {
   knowledgeDigest?: string;
   libraryCatalogDigest?: string;
   continuationDigest?: string;
+  pendingContinuationSource?: string;
   knowledgeRetrievals?: { dropped: number; observations: KnowledgeRetrievalObservation[] };
   knowledgeUses?: (KnowledgeUse & { workerId: string; commit: string })[];
   model: string;
@@ -328,6 +329,7 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
   problem: z.object({ workspace: z.string(), receiptDigest: z.string() }).passthrough(),
   taskDigest: z.string(), buildDigest: z.string(), environmentDigest: z.string(), evaluatorDigest: z.string(),
   continuationDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  pendingContinuationSource: z.string().min(1).optional(),
   providerProfile: z.string().optional(), providerProfileDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
   agentHarness: z.object({ id: z.enum(['codex', 'claude-code', 'opencode', 'cli']), executable: z.string().min(1),
     executableDigest: z.string().regex(/^[a-f0-9]{64}$/u), profile: z.string().min(1),
@@ -450,9 +452,10 @@ export const readSolverRunState = (file: string): SolverRunState => {
   if (!parsed.success) throw new Error(`math_resume_state_invalid:${parsed.error.issues[0]?.path.join('.')}`);
   return parsed.data as unknown as SolverRunState;
 };
+const writeRunCheckpoint = createMathJsonCheckpointWriter();
 export const writeSolverRunState = (file: string, state: SolverRunState): void => {
   const safeResearch = <T extends Pick<SolverRunState, 'lastFailure'>>(research: T): T => research.lastFailure
     ? { ...research, lastFailure: { ...research.lastFailure, diagnostic: safeFailureDiagnostic(research.lastFailure.diagnostic) } }
     : research;
-  writeMathJsonDurable(file, { ...safeResearch(state), workers: state.workers?.map(safeResearch) });
+  writeRunCheckpoint(file, { ...safeResearch(state), workers: state.workers?.map(safeResearch) });
 };

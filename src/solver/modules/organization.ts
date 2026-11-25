@@ -71,7 +71,7 @@ export function assessTaskResponsibility(node: TaskRecord, worker: Pick<Research
   if (pinned(engineerId)) return { kind: 'blocked', reason: 'engineer' };
   if (pinned(node.task.ownerId)) return { kind: 'blocked', reason: 'owner' };
   if (pinned(node.assignment?.workerId)) return { kind: 'blocked', reason: 'saved-assignment' };
-  if (!node.assignment && pinned(node.task.preferredOwnerId)) {
+  if ((!node.assignment || releasedPin(node, node.assignment.workerId, stopped)) && pinned(node.task.preferredOwnerId)) {
     const busy = tasks.some(peer => peer !== node && peer.status === 'running' &&
       peer.assignment && peer.assignment.workerId === node.task.preferredOwnerId &&
       peer.assignment.taskId === peer.task.id && peer.assignment.taskDigest === taskVersion(peer.task));
@@ -108,10 +108,11 @@ export function assignSharedResearchTask(ready: readonly TaskRecord[], worker: R
   if (!first || eligible.length === 1) return first;
   // An executable original proof can close the problem. Conditional connection checks
   // only test an application and may still need unscreened mathematical research.
-  const connection = (node: TaskRecord) => node.assignment
+  const connection = (node: TaskRecord) => node.assignment && !releasedPin(node, node.assignment.workerId, stopped)
     ? taskConnectionCheckCurrent(node.task, node.assignment, tasks) : freshTaskConnection(node, tasks, groups);
   if (first.task.kind === 'goal' && !connection(first) || !first.attempts && isFeasibilityReview(first.task)) return first;
-  if (first.connectionCheckpoint && first.connectionCheckpoint.basisDigest === first.assignment?.connectionCheck?.basisDigest &&
+  if (first.connectionCheckpoint && !releasedPin(first, first.assignment?.workerId, stopped) &&
+      first.connectionCheckpoint.basisDigest === first.assignment?.connectionCheck?.basisDigest &&
       connection(first)) {
     const inputs = new Set(taskDependencyRecords(first.task, tasks));
     const priority = createProofRoutePriority(tasks, { groups });

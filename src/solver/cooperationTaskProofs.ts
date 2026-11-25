@@ -21,7 +21,7 @@ import { routeBlockerBasis, type BlockerBasis } from './routeControl';
 import { attributeTaskReferences } from './taskReferenceAttribution';
 import { checkpointCandidate } from './researchEvidence';
 import { committedResearchNotesDigest, feasibilityReviewInputDigest, researchCheckpointInputDigest, researchCheckpointLocalInputDigest, researchCheckpointOutputDigest,
-  researchHandoffNotesDigest, UNCHANGED_RESEARCH_CHECKPOINT, type ResearchCheckpoint } from './researchCheckpoints';
+  researchHandoffNotesDigest, resumableFeasibilityReviewInput, UNCHANGED_RESEARCH_CHECKPOINT, type ResearchCheckpoint } from './researchCheckpoints';
 import { savedContextCheckpoint } from './contextCheckpoint';
 import { inspectKnowledgeUses, type KnowledgeUse } from './knowledgeUsage';
 import { checkKnowledgeApplications } from './knowledgeApplications';
@@ -57,21 +57,29 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
   protected pendingProofDeliveryRecords = new WeakSet<DeliveryRecord>();
   abstract interrupted(worker: ResearchWorker, action: CooperativeAction): void;
   abstract rejected(action: CooperativeAction, feedback: string, commit?: string, incomplete?: boolean): void;
-  protected feasibilityInputDigest(task: CooperativeTask, workerId: string) {
+  private feasibilityInput(task: CooperativeTask, workerId: string) {
     const state = this.input.state;
-    return feasibilityReviewInputDigest({ task, workerId, tasks: this.archive.tasks, deliveries: this.archive.deliveries ?? [],
+    return { task, workerId, tasks: this.archive.tasks, deliveries: this.archive.deliveries ?? [],
       problem: state.problem, environmentDigest: state.environmentDigest, problemReceiptDigest: state.problem.receiptDigest,
       retrievalDigest: state.retrievalDigest, knowledgeDigest: state.knowledgeDigest,
-      worktree: this.lead.worktree, canonicalCommit: this.archive.canonicalCommit! });
+      worktree: this.lead.worktree, canonicalCommit: this.archive.canonicalCommit! };
+  }
+  protected feasibilityInputDigest(task: CooperativeTask, workerId: string) {
+    return feasibilityReviewInputDigest(this.feasibilityInput(task, workerId));
   }
   private checkpointInputDigest(task: CooperativeTask, workerId: string) {
     return researchCheckpointInputDigest({ task, workerId, tasks: this.archive.tasks, deliveries: this.archive.deliveries ?? [],
       environmentDigest: this.input.state.environmentDigest, problemReceiptDigest: this.input.state.problem.receiptDigest,
       problem: this.input.state.problem, worktree: this.lead.worktree, canonicalCommit: this.archive.canonicalCommit! });
   }
-  private checkpointLocalInputDigest(task: CooperativeTask, workerId: string) {
+  private checkpointLocalInputDigest(task: CooperativeTask, workerId: string, legacyProgress = false) {
     return researchCheckpointLocalInputDigest({ task, workerId, tasks: this.archive.tasks, deliveries: this.archive.deliveries ?? [],
-      environmentDigest: this.input.state.environmentDigest, problemReceiptDigest: this.input.state.problem.receiptDigest });
+      environmentDigest: this.input.state.environmentDigest, problemReceiptDigest: this.input.state.problem.receiptDigest }, legacyProgress);
+  }
+  private checkpointInputMatches(node: TaskRecord, workerId: string, checkpoint: ResearchCheckpoint, localInputDigest: string) {
+    if (!checkpoint.localInputDigest) return this.checkpointInputDigest(node.task, workerId) === checkpoint.inputDigest;
+    return checkpoint.localInputDigest === localInputDigest || Boolean(node.nextCheckId &&
+      checkpoint.localInputDigest === this.checkpointLocalInputDigest(node.task, workerId, true));
   }
   private checkpointOutputDigests = new Map<string, string>();
   private checkpointOutputDigest(worktree: string, commit: string) {
@@ -297,9 +305,10 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       const node = this.node(taskId), worker = this.input.workers.find(worker => worker.id === node?.assignment?.workerId);
       if (!node || digest(node.task) !== checkpoint.taskDigest) { delete this.archive.researchCheckpoints![taskId]; continue; }
       if (!worker || node.status !== 'blocked' || !node.feedback?.startsWith('math_research_checkpoint_unchanged')) continue;
-      const inputChanged = checkpoint.localInputDigest
-        ? this.checkpointLocalInputDigest(node.task, worker.id) !== checkpoint.localInputDigest
-        : this.checkpointInputDigest(node.task, worker.id) !== checkpoint.inputDigest;
+      const localInputDigest = this.checkpointLocalInputDigest(node.task, worker.id);
+      const inputChanged = !this.checkpointInputMatches(node, worker.id, checkpoint, localInputDigest);
+      // Upgrade a matching old pause before processing the next publication after restore.
+      if (!inputChanged && node.nextCheckId) checkpoint.localInputDigest = localInputDigest;
       // Seeding another responsibility suspends its old draft before the new model session exists.
       // That host-written output cannot advance the paused task, even while its session id is stale.
       const session = this.input.state.workers?.find(record => record.id === worker.id), active = this.active.get(worker.id)?.action;
@@ -449,9 +458,8 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       if (!saved || !current() || node.assignment !== assignment || this.archive.researchDrafts?.[node.task.id] !== draft) return false;
       // Snapshot inspection yields to other publications. Only the inputs still
       // current after that wait may inherit the old unchanged counters.
-      sameCheckpointInput = checkpoint?.taskDigest === digest(node.task) && (checkpoint.localInputDigest
-        ? checkpoint.localInputDigest === this.checkpointLocalInputDigest(node.task, assignment.workerId)
-        : checkpoint.inputDigest === this.checkpointInputDigest(node.task, assignment.workerId));
+      sameCheckpointInput = checkpoint?.taskDigest === digest(node.task) && this.checkpointInputMatches(node, assignment.workerId,
+        checkpoint, this.checkpointLocalInputDigest(node.task, assignment.workerId));
       const canonical = this.archive.canonicalCommit!;
       const canonicalChanged = ownedSourceDigest(problem, this.lead.worktree, canonical) !== saved.canonicalSourceDigest;
       this.suspendResearchDrafts(worker, node.task.id);
@@ -505,9 +513,11 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     if (!draft || assignment.workerId !== worker.id) return false;
     const problem = this.input.state.problem;
     try {
-      if (isFeasibilityReview(node.task) && (!draft.feasibilityInputDigest ||
-          draft.feasibilityInputDigest !== assignment.feasibilityInputDigest ||
-          draft.feasibilityInputDigest !== this.feasibilityInputDigest(node.task, worker.id))) {
+      const feasibility = isFeasibilityReview(node.task);
+      const resumeInput = () => draft.feasibilityInputDigest === assignment.feasibilityInputDigest
+        ? resumableFeasibilityReviewInput(this.feasibilityInput(node.task, worker.id), draft) : undefined;
+      let feasibilityInputDigest = feasibility ? resumeInput() : undefined;
+      if (feasibility && !feasibilityInputDigest) {
         draft.suspended = true;
         this.input.emit('research_draft_restore_failed', { taskId: node.task.id,
           reason: 'math_feasibility_draft_input_changed' });
@@ -519,8 +529,8 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
           node.status !== 'pending' || assignment.workerId !== worker.id || node.task.ownerId && node.task.ownerId !== worker.id ||
           !independentFeasibilityWorker(node, worker, this.archive.tasks, this.archive.groups) ||
           !taskCanStart(node.task, this.archive.tasks, this.archive.groups) || !routeAllowsTask(node.task, this.archive.tasks, this.archive.groups)) return false;
-      // Snapshot inspection yields; input changes during it still require a fresh review.
-      if (isFeasibilityReview(node.task) && draft.feasibilityInputDigest !== this.feasibilityInputDigest(node.task, worker.id)) {
+      // Snapshot inspection yields. Recheck against the latest inputs before restoring.
+      if (feasibility && !(feasibilityInputDigest = resumeInput())) {
         draft.suspended = true;
         this.input.save();
         return false;
@@ -537,7 +547,8 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
         // A connection permission binds the old seed and dispatch, so the normal
         // dispatcher must rebuild it for the restored sources and new identity.
         node.assignment = { ...assignment, assignmentId: crypto.randomUUID(), seedCommit,
-          canonicalCommit: this.archive.canonicalCommit, connectionCheck: undefined };
+          canonicalCommit: this.archive.canonicalCommit, connectionCheck: undefined,
+          ...(feasibility ? { feasibilityInputDigest } : {}) };
       } else {
         // Restore the validated snapshot so its frozen seed remains an ancestor.
         git(worker.worktree, ['reset', '--hard', draft.commit]);
@@ -585,8 +596,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       const inputDigest = this.checkpointInputDigest(node.task, worker.id), outputDigest = this.checkpointOutputDigest(worker.worktree, commit);
       const localInputDigest = this.checkpointLocalInputDigest(node.task, worker.id);
       const candidate = checkpointCandidate(notes, artifacts);
-      const sameInput = previous?.taskDigest === taskDigest && (previous.localInputDigest
-        ? previous.localInputDigest === localInputDigest : previous.inputDigest === inputDigest);
+      const sameInput = previous?.taskDigest === taskDigest && this.checkpointInputMatches(node, worker.id, previous, localInputDigest);
       const count = sameInput && previous.outputDigest === outputDigest
         ? previous.count + 1 : 1;
       const unchangedEvidenceCount = sameInput && previous.candidateOutputDigest === candidate.digest

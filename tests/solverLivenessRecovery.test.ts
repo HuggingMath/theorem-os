@@ -5,6 +5,7 @@ import { mathDigest } from '../src/math/mathRuntimeIo';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/codexSession';
 import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
 import { CooperativeResearch } from '../src/solver/cooperation';
+import { MAX_RESEARCH_NOTES_BYTES } from '../src/solver/deliveries';
 import { IDLE_PEER_WAKE_MS } from '../src/solver/leadInbox';
 import { directSolverModules, type SolverModules } from '../src/solver/modules';
 import { runResearchWorkers } from '../src/solver/research';
@@ -187,13 +188,13 @@ describe('Lead planning liveness across checkpoints and restore', () => {
           kind: 'research', summary, producer: workers[2].id }));
       };
       /** Publish an unchanged complete plan as the Lead's answer to its dispatched planning input. */
-      const answer = async (action = latestLead().assignment) => {
+      const answer = async (action = latestLead().assignment, upsert?: { id: string; objective: string }[]) => {
         const presented = leads().find(message => message.assignment.kind === 'lead' &&
           message.assignment.planNonce === action.planNonce);
         fs.appendFileSync(path.join(workers[0].worktree, leadPlanDeliveryFile(action)!), JSON.stringify({
           kind: 'plan', dispatchNonce: action.planNonce, baseVersion: action.planVersion,
-          tasks: fixture.state.cooperation!.tasks.map(node => node.task),
-          groups: fixture.state.cooperation!.groups!.map(route => route.group),
+          ...(upsert ? { upsert } : { tasks: fixture.state.cooperation!.tasks.map(node => node.task),
+            groups: fixture.state.cooperation!.groups!.map(route => route.group) }),
           researchDecisions: (presented?.researchInputIds ?? []).map(deliveryId => ({ deliveryId,
             outcome: 'decline', reason: 'The current evidence does not establish a sound change to this route.' })),
           ...(presented?.progressReview ? { progressReview: { id: presented.progressReview.id,
@@ -229,6 +230,21 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     };
     return { ...fixture, get state() { return fixture.state; }, set state(value) { fixture.state = value; }, start };
   }
+
+  it('clears peer recovery after the first acknowledged scheduling checkpoint', async () => {
+    const fixtureState = fixture({ seedDecision: false });
+    const peer = fixtureState.state.workers![2];
+    peer.recovery = { phase: 'retrying', reason: 'math_model_request_failed', cycles: 6,
+      startedAt: Date.now() - 2_000_000, nextRetryAt: Date.now(), waitedMs: 1_320_000 };
+    const run = fixtureState.start({ saveResearchProgress: true });
+    try {
+      await run.ready();
+      await vi.advanceTimersByTimeAsync(LEAD_REVISION_MS);
+      expect(run.events.filter(e => e.event === 'turn_checkpoint' && e.details?.workerId === peer.id).length).toBeGreaterThan(1);
+      expect(run.events.filter(e => e.event === 'worker_recovered' && e.details?.workerId === peer.id)).toHaveLength(1);
+      expect(peer.recovery).toMatchObject({ phase: 'recovered', cycles: 6 });
+    } finally { await run.stop(); }
+  });
 
   it('replaces a legacy coordination thread once, preserves its draft and resumes the planning thread', async () => {
     const fixtureState = fixture({ seedDecision: false }), lead = fixtureState.state.workers![0];
@@ -273,6 +289,34 @@ describe('Lead planning liveness across checkpoints and restore', () => {
       item.details?.workerId === lead.id).map(item => item.details!.checkpointAfterMs);
     expect(slices).toEqual(Array(4).fill(LEAD_REVISION_MS));
     expect(fixtureState.check).not.toHaveBeenCalled(); await run.stop();
+  });
+
+  it('saves oversized Lead notes across a checkpoint and accepts the next plan through the dispatch log', async () => {
+    const fixtureState = fixture(), run = fixtureState.start();
+    try {
+      await run.ready();
+      const lead = fixtureState.workers[0], first = run.latestLead().assignment;
+      const notes = path.join(lead.worktree, 'RESEARCH.md');
+      const line = 'Partial mathematical argument.\n';
+      const draft = line.repeat(Math.ceil(MAX_RESEARCH_NOTES_BYTES / Buffer.byteLength(line)) + 1);
+      fs.writeFileSync(notes, draft);
+      await vi.advanceTimersByTimeAsync(LEAD_REVISION_MS);
+      await run.waitForLead(first.planNonce);
+      expect(run.events).toContainEqual(expect.objectContaining({ event: 'lead_checkpoint_saved',
+        details: expect.objectContaining({ reason: 'oversized-notes-draft' }) }));
+      expect(run.events.some(item => item.event === 'worker_failed')).toBe(false);
+      const second = run.latestLead().assignment;
+      const edits = [{ id: 'investigate', objective: 'Check the precise remaining inference.' }];
+      await run.answer(second, edits);
+      run.finishLead(second);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(fixtureState.state.cooperation!.tasks.find(node => node.task.id === 'investigate')?.task.objective)
+        .toBe(edits[0].objective);
+      expect(fixtureState.state.cooperation!.planPublication).toMatchObject({ nonce: second.planNonce, finalized: true });
+      expect(fs.readFileSync(notes, 'utf8')).toBe(draft);
+      expect(run.events.some(item => item.event === 'worker_failed')).toBe(false);
+      expect(fixtureState.check).not.toHaveBeenCalled();
+    } finally { await run.stop(); }
   });
 
   it('waits for hours after an unchanged checkpoint, then wakes for new evidence until a plan answers it', async () => {

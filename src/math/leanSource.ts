@@ -45,7 +45,8 @@ const isLeanNameCharacter = (value: string | undefined): boolean =>
 
 // A structure initializer may place fields in the declaration's column.
 // Command tokens, rather than indentation alone, delimit an empty field list.
-const leanWhereCommand = /^(?:@\[|#|(?:theorem|lemma|def|abbrev|opaque|instance|example|class|structure|inductive|coinductive|axiom|constant|constants|variable|variables|universe|universes|namespace|section|end|mutual|open|export|include|omit|set_option|attribute|local|scoped|noncomputable|private|protected|public|unsafe|partial|nonrec|meta|syntax|macro|elab|notation|infix|infixl|infixr|prefix|postfix|initialize|builtin_initialize|import)(?![\p{L}\p{M}\p{N}_'.?!]))/u;
+export const startsLeanSourceCommand = (text: string): boolean =>
+  /^(?:@\[|#|(?:theorem|lemma|def|abbrev|opaque|instance|example|class|structure|inductive|coinductive|axiom|constant|constants|variable|variables|universe|universes|namespace|section|end|mutual|open|export|include|omit|set_option|attribute|local|scoped|noncomputable|private|protected|public|unsafe|partial|nonrec|meta|syntax|macro|elab|notation|infix|infixl|infixr|prefix|postfix|initialize|builtin_initialize|import)(?![\p{L}\p{M}\p{N}_'.?!]))/u.test(text);
 
 /** `instance` inside `@[…]` or `attribute […]`, or after `deriving`, names an attribute or a derive handler.
  * Read as a declaration, `attribute [instance 1001] a` swallowed the next command up to its `:=`. */
@@ -189,7 +190,7 @@ function* leanSourceDeclarations(source: string, mode: LeanDeclarationIndex = 'n
     if (nextToken === source.length) return true;
     const nextLine = source.lastIndexOf('\n', nextToken - 1) + 1;
     if (nextLine <= whereStart) return false;
-    return leanWhereCommand.test(source.slice(nextToken));
+    return startsLeanSourceCommand(source.slice(nextToken));
   };
 
   const hasEquationArrow = (start: number): boolean => {
@@ -600,7 +601,7 @@ function leanSourceDeclarationRegion(source: string, declaration: LeanSourceDecl
     const boundaryLine = declaration.whereBody ? cleanedSource!.slice(start, end < 0 ? undefined : end) : line;
     if (boundaryLine.trim() && !boundaryLine.trimStart().startsWith('--') &&
         (line.match(/^\s*/u)?.[0].length ?? 0) <= indentation &&
-        (!declaration.whereBody || leanWhereCommand.test(boundaryLine.trimStart()))) {
+        (!declaration.whereBody || startsLeanSourceCommand(boundaryLine.trimStart()))) {
       endOffset = start;
       break;
     }

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/codexSession';
 import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
 import { CooperativeResearch } from '../src/solver/cooperation';
-import { leadResearchInputs } from '../src/solver/contextCompiler';
+import { compileContextSections, leadResearchInputs } from '../src/solver/contextCompiler';
 import { observeGoalProgress } from '../src/solver/goalProgress';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { directSolverModules, type SolverModules } from '../src/solver/modules';
@@ -80,7 +80,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
     const events: { event: string; details?: Record<string, unknown> }[] = [];
     const controller = new AbortController();
     controllers.push(controller);
-    const contextSettings = { instructionsSuffix: '' };
+    const contextSettings = { instructionsSuffix: '', compactedDispatch: false };
     const modules = (open: (options: MathAgentOptions) => Promise<MathAgentSession>): SolverModules => ({
       ...directSolverModules, M1: { ...directSolverModules.M1, open },
       M2: { ...directSolverModules.M2, check, checkTask: check },
@@ -96,6 +96,10 @@ describe('cooperative advisory scheduling checkpoints', () => {
             exactTasks: state.cooperation!.tasks.map(node => node.task), sentinel: 'full-context-exact-types-'.repeat(300) })
             : JSON.stringify(assignment),
           ...(continuation && continuation !== 'custom-full' ? { continuationMessage: JSON.stringify({ ...current, mode: 'short' }) } : {}),
+          ...(contextSettings.compactedDispatch ? { compileCompactedDispatch: () => compileContextSections({
+            instructions: 'Offline scheduling fixture.', inlineManifest: false, mandatory: [{ id: 'compacted', kind: 'continuation',
+              text: JSON.stringify({ ...current, mode: 'compacted', exactTasks: state.cooperation!.tasks.map(node => node.task) }) }],
+          }) } : {}),
           scope: 'original-problem-and-allowed-library', sources: { problemReceiptDigest: problem.receiptDigest },
         };
       } },
@@ -335,7 +339,8 @@ describe('cooperative advisory scheduling checkpoints', () => {
   });
 
   it('pauses the Lead scheduling clock during compaction and resumes its remaining work slice', async () => {
-    const { events, controller, run } = fixture(false, undefined, 'lead');
+    const { events, controller, run, contextSettings } = fixture(false, undefined, 'lead');
+    contextSettings.compactedDispatch = true;
     const held = heldContinuationTurns({ saveNotes: true }), completion = run(held.open, Infinity); void completion.catch(() => {});
     await held.wait(0, completion);
     await vi.advanceTimersByTimeAsync(30_000);
@@ -350,7 +355,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
     await vi.advanceTimersByTimeAsync(1); await held.wait(1, completion);
     expect(held.interrupt).toHaveBeenCalledOnce();
     expect(held.threads).toEqual(['continuation-thread-1', 'continuation-thread-1']);
-    expect(held.messages.map(message => message.mode)).toEqual(['full', 'full']);
+    expect(held.messages.map(message => message.mode)).toEqual(['full', 'compacted']);
     expect(events.some(item => item.event === 'context_compaction_completed')).toBe(true);
     controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
     expect(vi.getTimerCount()).toBe(0);
@@ -867,14 +872,28 @@ describe('cooperative advisory scheduling checkpoints', () => {
     controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
   });
 
-  it.each(['success', 'failure'] as const)('uses native compact between settled turns and restores full task context (%s)', async nativeCompact => {
-    const { state, workers, check, events, controller, run, pulse } = fixture(false, undefined, 'lead');
+  it.each(['success', 'failure', 'changed-plan'] as const)('restores exact task context after native compaction (%s)', async outcome => {
+    const { state, workers, check, events, controller, run, pulse, contextSettings } = fixture(false, undefined, 'lead');
+    const nativeCompact = outcome === 'failure' ? 'failure' : 'success';
+    contextSettings.compactedDispatch = true;
     const held = heldContinuationTurns({ saveNotes: true, highContext: true, nativeCompact });
     const completion = run(held.open, Infinity); void completion.catch(() => {});
     await held.wait(0, completion);
     held.open.mock.calls[0][0].onActivity!({ event: 'reasoning' });
     expect(held.compact).not.toHaveBeenCalled();
     const request = state.workers![0].contextCheckpoint!;
+    if (outcome === 'changed-plan') {
+      const next = CooperativeResearch.prototype.next;
+      vi.spyOn(CooperativeResearch.prototype, 'next').mockImplementation(async function (this: CooperativeResearch, worker, budget) {
+        const action = await next.call(this, worker, budget);
+        if (action?.kind === 'lead') {
+          state.cooperation!.planVersion = 'compaction-revised-plan';
+          state.cooperation!.tasks.find(node => node.task.kind === 'goal')!.task.type = '∀ n : Nat, n = n';
+          action.planVersion = state.cooperation!.planVersion;
+        }
+        return action;
+      });
+    }
     fs.appendFileSync(path.join(workers[0].worktree, held.messages[0].receipt!), JSON.stringify({
       kind: 'checkpoint', requestId: request.requestId,
       notesDigest: mathDigest(fs.readFileSync(path.join(workers[0].worktree, 'RESEARCH.md'))),
@@ -882,7 +901,11 @@ describe('cooperative advisory scheduling checkpoints', () => {
     await pulse(workers[0].id); await vi.advanceTimersByTimeAsync(5_000); await held.wait(1, completion);
     expect(held.compact).toHaveBeenCalledOnce();
     expect(held.threads).toEqual(['continuation-thread-1', nativeCompact === 'success' ? 'continuation-thread-1' : 'continuation-thread-2']);
-    expect(held.messages[1].mode).toBe('full'); expect(held.messages[1].exactTasks).toEqual(state.cooperation!.tasks.map(node => node.task));
+    expect(held.messages[1].mode).toBe(outcome === 'success' ? 'compacted' : 'full');
+    expect(held.messages[1].exactTasks).toEqual(state.cooperation!.tasks.map(node => node.task));
+    const dispatches = events.filter(item => item.event === 'context_dispatched').map(item => item.details);
+    expect(dispatches.map(details => details?.mode)).toEqual(['full', outcome === 'success' ? 'compacted' : 'full']);
+    if (outcome === 'success') expect(dispatches[1]?.messageBytes).toBeLessThan(Number(dispatches[0]?.messageBytes) / 2);
     expect(events.some(item => item.event === 'context_restarted')).toBe(nativeCompact === 'failure');
     expect(events.some(item => item.event === (nativeCompact === 'success' ? 'context_compaction_completed' : 'context_compaction_failed'))).toBe(true);
     expect(state.workers![0].usageAccounting?.startedTurns).toBe(2);

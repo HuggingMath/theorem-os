@@ -2,6 +2,10 @@
 
 本文针对独立 Linux 宿主机上的 Compose 部署。所有路径、域名和镜像名在执行前换成实际值；下面命令不调用付费模型、不发送邮件。`scripts/web-operations.ts` 输出 JSON 摘要，不输出邮箱、题目、密码、Cookie 或 API Key。
 
+条件熵一类的独立长跑可以走 Web 服务的标准求证入口。宿主在 Docker 输出流断开后会等待 worker 停止，再读回磁盘上的最新候选和终验回执。
+
+直接调用 worker 镜像做离线实验时，将输入 JSON 的 `observationSourceRefs` 设为 `true`，由采集器按内容哈希复用重复的 Lean 源码。为每次运行使用独立的命名卷挂载到 `/var/theoremos-proof`，并设置 `THEOREMOS_WORKER_JOURNAL=/var/theoremos-proof`。如需保留求证检查点和工作树，再将另一个命名卷挂载到 `/work`，取代该路径的 tmpfs。保留容器直到读回日志卷中的 `terminal.json` 和 `artifact.json`，可对停止的容器使用 `docker cp`。结果以匹配运行 ID 的终验回执为准。
+
 ## 发布镜像
 
 `Verify TheoremOS` 在面向 `main` 的 pull request 和 `main` 推送上运行，也可手动运行。它以只读仓库权限执行 TypeScript 检查、运行时与网页构建、离线浏览器回归，以及 Lean 4.33.0 和 4.34.1 上的求解器回归。验证和镜像发布均使用 Ubuntu 24.04。

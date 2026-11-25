@@ -19,6 +19,7 @@ import { portfolioPhase2Guidance } from './portfolioExploration';
 
 export const DEFAULT_TASK_CONTEXT_BYTES = 512 * 1024;
 export const DEFAULT_OPTIONAL_TASK_CONTEXT_BYTES = 64 * 1024;
+const COMPACT_OPTIONAL_TASK_CONTEXT_BYTES = 8 * 1024;
 /** Above this size a source is shown compactly: definition bodies are omitted and the statement is cited, not repeated. */
 export const COMPACT_CONTEXT_SOURCE_BYTES = 64 * 1024;
 /** A compact source keeps definition bodies up to this size inline. */
@@ -50,6 +51,8 @@ export type TaskContextInput = Readonly<{
   optional?: readonly ContextSection[];
   /** The same thread already has this frozen problem; still send the new task's exact interfaces. */
   taskSwitch?: boolean;
+  /** The active assignment survived compaction, but its exact inputs must be sent again. */
+  compactedResume?: boolean;
 }>;
 export class TaskContextError extends Error {
   constructor(readonly code: 'math_context_missing_required' | 'math_context_stale_required' |
@@ -140,7 +143,7 @@ export function frozenSourceContext(problem: SolverProblem, file: string, source
 function originalProblemSection(input: TaskContextInput): ContextSection {
   const { problem } = input, statement = problem.contract.formalStatement, bytes = Buffer.byteLength(statement);
   const title = `${input.taskText}\n\nOriginal problem:`, digest = mathDigest(statement);
-  const file = bytes > (compactArchive(input.cooperation) ? 4 * 1024 : COMPACT_CONTEXT_SOURCE_BYTES) && present(problem.baseCommit)
+  const file = bytes > (input.compactedResume || compactArchive(input.cooperation) ? 4 * 1024 : COMPACT_CONTEXT_SOURCE_BYTES) && present(problem.baseCommit)
     ? Object.keys(problem.trustedFiles ?? {}).sort().find(file => problem.trustedFiles[file] === digest) : undefined;
   if (!file) return section('original-problem', 'problem', title, statement);
   return section('original-problem', 'problem', title, { commit: problem.baseCommit, path: sourcePath(problem, file), bytes, sha256: digest,
@@ -357,7 +360,7 @@ function sourceReferences(input: TaskContextInput) {
     retrieval: 'Read full proofs and namespace/section/instance context with git show COMMIT:PATH in this isolated worktree. Source references identify immutable content; they grant no proof acceptance.',
     files: files.map(file => {
       const context = input.frozenContexts![file], declarations = problem.declarations[file] ?? [];
-      if ((input.taskSwitch || compactArchive(input.cooperation)) && Buffer.byteLength(context) > 4 * 1024) {
+      if ((input.compactedResume || compactArchive(input.cooperation)) && Buffer.byteLength(context) > 4 * 1024) {
         return { commit: problem.baseCommit, path: sourcePath(problem, file), contextDigest: problem.sourceStructure?.[file],
           imports: problem.sourceImports?.[file], declarationCount: declarations.length, contextByReference: true };
       }
@@ -386,7 +389,7 @@ function frozenDeclarationOrder(input: TaskContextInput) {
     .map(([file, declarations]) => {
       const names = declarations.map(declaration => declaration.name), context = input.frozenContexts?.[file];
       const byReference = context && Buffer.byteLength(context) >
-        (input.taskSwitch || compactArchive(input.cooperation) ? 4 * 1024 : COMPACT_CONTEXT_SOURCE_BYTES);
+        (input.compactedResume || compactArchive(input.cooperation) ? 4 * 1024 : COMPACT_CONTEXT_SOURCE_BYTES);
       return [file, byReference ? {
         encoding: 'frozen-declaration-order-v1', commit: input.problem.baseCommit, path: sourcePath(input.problem, file),
         declarationCount: names.length, orderDigest: mathDigest(canonicalMathJson(names)),
@@ -514,7 +517,7 @@ function optionalDeliveries(input: TaskContextInput, required: ReadonlySet<strin
   const sections = selected.flatMap(record => {
     // Interfaces and receipts live in mandatory sections. A delivery summary is advisory prose.
     const current = record.taskId ? byId.get(record.taskId) : undefined;
-    if ((compactArchive(input.cooperation) || input.taskSwitch) && !(record.taskId && required.has(record.taskId))) {
+    if ((compactArchive(input.cooperation) || input.taskSwitch || input.compactedResume) && !(record.taskId && required.has(record.taskId))) {
       omitted.push({ id: `delivery:${record.id}:details`, kind: 'delivery', reason: 'advisory-details-by-reference' });
       const file = current?.task.proofPath && sourcePath(input.problem, current.task.proofPath);
       return [{ ...section(`delivery:${record.id}`, 'delivery',
@@ -558,11 +561,13 @@ function optionalDeliveries(input: TaskContextInput, required: ReadonlySet<strin
 export function compileTaskContext(input: TaskContextInput): { message: string; manifest: ContextManifest } {
   const { problem, action } = input;
   const maxBytes = input.maxContextBytes ?? DEFAULT_TASK_CONTEXT_BYTES;
-  const compact = compactArchive(input.cooperation) || input.taskSwitch;
-  const maxOptionalBytes = input.maxOptionalContextBytes ?? (compact ? 8 * 1024 : DEFAULT_OPTIONAL_TASK_CONTEXT_BYTES);
+  const compact = compactArchive(input.cooperation) || input.taskSwitch || input.compactedResume;
+  const optionalBudget = input.maxOptionalContextBytes ??
+    (compact ? COMPACT_OPTIONAL_TASK_CONTEXT_BYTES : DEFAULT_OPTIONAL_TASK_CONTEXT_BYTES);
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new TaskContextError('math_context_invalid_budget', 'maxContextBytes');
-  if (!Number.isSafeInteger(maxOptionalBytes) || maxOptionalBytes < 0)
+  if (!Number.isSafeInteger(optionalBudget) || optionalBudget < 0)
     throw new TaskContextError('math_context_invalid_budget', 'maxOptionalContextBytes');
+  const maxOptionalBytes = input.compactedResume ? Math.min(optionalBudget, COMPACT_OPTIONAL_TASK_CONTEXT_BYTES) : optionalBudget;
   if (!present(problem.receiptDigest) || !present(problem.contract?.formalStatement) || !Array.isArray(problem.contract?.assumptions))
     return missing('frozen-problem');
   const omitted: ContextManifest['omitted'][number][] = [];
@@ -594,6 +599,8 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
   ];
   if (input.taskSwitch) mandatory.push({ id: 'same-route-task-switch', kind: 'continuation',
     text: 'Switch to the assignment below. This thread already has the frozen problem and source rules. The new contract replaces the previous assignment. Read current COOPERATION.json and RESEARCH.md for scoped work and saved evidence.' });
+  if (input.compactedResume) mandatory.push({ id: 'compacted-resume', kind: 'continuation',
+    text: 'Resume the current assignment after thread compaction. Use the frozen problem and exact current interfaces below. Recover the saved argument from RESEARCH.md and retrieve relevant scoped records from COOPERATION.json before using evidence omitted from this message.' });
   if (action) mandatory.push(section('assignment', 'assignment', 'Cooperative assignment:', action));
   if (action?.kind === 'task') mandatory.push({ id: 'task-delivery-log', kind: 'assignment',
     text: 'Current delivery log: ' + assignmentDeliveryFile(action.assignment) });

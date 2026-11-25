@@ -26,8 +26,47 @@ const normalizeJson = (item: unknown, compare: (a: string, b: string) => number)
   throw new Error('math_runtime_invalid_json');
 };
 
-export function canonicalMathJson(value: unknown, compare: (a: string, b: string) => number = (a, b) => a < b ? -1 : a > b ? 1 : 0): string {
+const compareJsonKeys = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
+
+export function canonicalMathJson(value: unknown, compare: (a: string, b: string) => number = compareJsonKeys): string {
   return JSON.stringify(normalizeJson(value, compare));
+}
+
+/** Normalize current data, sharing only detached previous subtrees whose values still match. */
+function checkpointJson(item: unknown, previous: unknown): unknown {
+  if (previous !== undefined && item === previous) return previous;
+  if (Array.isArray(item)) {
+    const prior = Array.isArray(previous) ? previous : undefined;
+    let unchanged = prior?.length === item.length;
+    const values = item.map((entry, index) => {
+      const current = checkpointJson(entry, prior?.[index]);
+      if (current !== prior?.[index]) unchanged = false;
+      return current;
+    });
+    // For a sparse array, a removed value is not visited by map.
+    return unchanged && prior!.every((_, index) => index in values) ? prior : values;
+  }
+  if (item && typeof item === 'object') {
+    const prototype = Object.getPrototypeOf(item);
+    if (prototype !== Object.prototype && prototype !== null) throw new Error('math_runtime_invalid_json');
+    const prior = previous && typeof previous === 'object' && !Array.isArray(previous)
+      ? previous as Record<string, unknown> : undefined;
+    const entries = Object.entries(item);
+    let length = 0;
+    let unchanged = prior !== undefined;
+    for (const pair of entries) {
+      if (pair[1] === undefined) continue;
+      const saved = prior && Object.hasOwn(prior, pair[0]) ? prior[pair[0]] : undefined;
+      const current = checkpointJson(pair[1], saved);
+      if (current !== saved) unchanged = false;
+      pair[1] = current;
+      entries[length++] = pair;
+    }
+    if (unchanged && Object.keys(prior!).length === length) return prior;
+    entries.length = length;
+    return Object.fromEntries(entries.sort(([a], [b]) => compareJsonKeys(a, b)));
+  }
+  return normalizeJson(item, compareJsonKeys);
 }
 
 export const mathDigest = (value: string | Uint8Array): string =>
@@ -53,15 +92,33 @@ export function writeMathJsonDurable(file: string, value: unknown, mode: 0o600 |
   writeMathTextDurable(file, canonicalMathJson(value), mode);
 }
 
+/** Keep one detached checkpoint for frequently saved mutable state. The cached bytes still need the same file identity. */
+export function createMathJsonCheckpointWriter(): (file: string, value: unknown) => void {
+  let last: { file: string; snapshot: unknown; identity: string } | undefined;
+  return (file, value) => {
+    const previous = last?.file === file ? last : undefined;
+    const snapshot = checkpointJson(value, previous?.snapshot);
+    if (previous && snapshot === previous.snapshot && durableFileMatches(file, previous.identity)) return;
+    const identity = replaceMathTextDurable(file, JSON.stringify(snapshot), 0o600);
+    last = { file, snapshot, identity };
+  };
+}
+
+function durableFileMatches(file: string, identity: string): boolean {
+  try { return mathFileIdentity(fs.lstatSync(file, { bigint: true })) === identity; }
+  catch { return false; } // Missing or replaced output must be written again.
+}
+
 /** Atomically replace `file` with `contents`; an unchanged, unreplaced output is not rewritten. */
 export function writeMathTextDurable(file: string, contents: string, mode: 0o600 | 0o400 = 0o600): void {
+  replaceMathTextDurable(file, contents, mode);
+}
+
+function replaceMathTextDurable(file: string, contents: string, mode: 0o600 | 0o400): string {
   const digest = mathDigest(contents);
   const previous = durableWrites.get(file);
-  if (previous?.digest === digest && previous.mode === mode) {
-    try {
-      if (mathFileIdentity(fs.lstatSync(file, { bigint: true })) === previous.identity) return;
-    } catch { /* Missing or replaced output must be written again. */ }
-  }
+  if (previous?.digest === digest && previous.mode === mode && durableFileMatches(file, previous.identity))
+    return previous.identity;
   const temporary = `${file}.${crypto.randomUUID()}.tmp`;
   const descriptor = fs.openSync(
     temporary,
@@ -79,7 +136,9 @@ export function writeMathTextDurable(file: string, contents: string, mode: 0o600
   fs.renameSync(temporary, file);
   syncMathDirectory(path.dirname(file));
   if (durableWrites.size >= 128) durableWrites.delete(durableWrites.keys().next().value!);
-  durableWrites.set(file, { digest, mode, identity: mathFileIdentity(fs.lstatSync(file, { bigint: true })) });
+  const identity = mathFileIdentity(fs.lstatSync(file, { bigint: true }));
+  durableWrites.set(file, { digest, mode, identity });
+  return identity;
 }
 
 export function readMathFile(file: string, maxBytes = Infinity, options: { headOnly?: boolean } = {}) {
