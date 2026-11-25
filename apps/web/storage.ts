@@ -8,6 +8,7 @@ import type { WebShareSnapshot } from './share';
 import { compactObservation, hydrateObservation, observationCompactor,
   type CompactWebObservation, type CompactWebTaskSource } from './observationSources';
 import { projectStoredObservationChecks } from './observationChecks';
+import type { WebPaperDraftJob } from './paperTypes';
 
 export type WebCreation = { schema: 'theorem-os.web-creation.v1'; requestId: string; digest: string };
 type StoredRun = { owner: string; run: WebRun; creation?: WebCreation };
@@ -258,6 +259,13 @@ export class WebStorage {
     if (!share) return;
     this.deleteRecord(['shares', `${digestKey(share.token)}.json`]);
     this.deleteRecord([...this.runPath(owner, runId), 'share.json']);
+  }
+
+  getPaperDraft(owner: string, runId: string, key: string): WebPaperDraftJob | undefined {
+    return this.getRecord([...this.runPath(owner, runId), 'papers', `${key}.json`]);
+  }
+  savePaperDraft(owner: string, runId: string, key: string, draft: WebPaperDraftJob): void {
+    this.saveRecord([...this.runPath(owner, runId), 'papers', `${key}.json`], draft);
   }
 
   saveObservation(owner: string, observation: WebObservation): void {

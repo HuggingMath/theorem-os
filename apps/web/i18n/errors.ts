@@ -1,5 +1,12 @@
 /** Error messages from the server: request checks, session and login, runs, the run environment, explanations, plans and knowledge. */
 export const errors: Record<string, string> = {
+  '只有通过独立验收的运行可以生成论文初稿。': 'Paper drafts can only be generated from independently accepted runs.',
+  '请检查论文初稿的目标定理、语言和 API Key。': 'Check the target theorem, draft language and API key.',
+  '这次运行没有对应的已验收目标定理。': 'This run does not have the selected accepted theorem.',
+  '论文初稿还没有生成。': 'The paper draft has not been generated yet.',
+  '请选择已配置且支持 Responses API 的模型服务商。': 'Select a configured model provider that supports the Responses API.',
+  '请填写模型名称。': 'Enter a model name.',
+  '已有论文初稿正在生成。': 'A paper draft is already being generated.',
   "请输入用户名，不要使用邮箱地址。": "Enter a username, not an email address.",
   "这个用户名已存在。": "This username already exists.",
   "用户名需为 3–32 位，以字母开头，仅包含字母、数字、下划线或连字符。": "Use 3–32 letters, digits, underscores or hyphens for the username, starting with a letter.",

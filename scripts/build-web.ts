@@ -26,7 +26,7 @@ fs.mkdirSync(reports, { recursive: true });
 const contentKeys = scanBundle(bundleSources().filter(file => /\btranslator\s*\(/u.test(fs.readFileSync(file, 'utf8')))).keys;
 const contentEnglish = Object.fromEntries([...contentKeys.keys()].filter(key => en[key]).map(key => [key, en[key]]));
 const bundle = (entries: string[], directory: string, englishOnDemand = false) =>
-  build({ entryPoints: entries.map(entry => path.join(root, `apps/web/client/${entry}.ts`)),
+  build({ entryPoints: entries.map(entry => path.join(root, `apps/web/client/${entry}.${entry === 'paper' ? 'tsx' : 'ts'}`)),
     outdir: directory, chunkNames: 'chunks/[name]-[hash]', splitting: englishOnDemand,
     format: englishOnDemand ? 'esm' : 'iife',
     bundle: true, minify: true, target: 'es2023', platform: 'browser', legalComments: 'eof', logLevel: 'silent',
@@ -42,6 +42,7 @@ for (const entry of ['app', 'login', 'share', 'guide', 'legal', 'formalize', 're
 // Theme runs before CSS. Theme, explain and math are also inlined in standalone reports.
 await bundle(['theme', 'explain', 'math'], output);
 await bundle(['formalization'], reports);
+await bundle(['paper'], output);
 for (const page of ['formalization.html', 'explain.html'])
   fs.copyFileSync(path.join(root, 'apps/web/client', page), path.join(reports, page));
 for (const [source, destination] of [['index.html', 'index.html'], ['login.html', 'login.html'], ['share.html', 'share.html'], ['guide.html', 'guide.html'], ['terms.html', 'terms.html'], ['privacy.html', 'privacy.html'], ['explain.html', 'explain.html'], ['app.css', 'app.css'], ['formalize.html', 'formalize.html'], ['formalize.css', 'formalize.css'], ['research-conversation.css', 'research-conversation.css']])
@@ -56,7 +57,7 @@ for (const [source, destination] of [['index.html', 'index.html'], ['login.html'
     + '\n' + fs.readFileSync(path.join(root, 'apps/web/math.css'), 'utf8'));
   else fs.copyFileSync(path.join(root, 'apps/web/client', source), path.join(output, destination));
 fs.mkdirSync(path.join(output, 'assets/fonts'), { recursive: true });
-for (const file of ['people.html', 'theorems.html', 'library.html', 'workspace.html', 'problem.html', 'invite.html', 'practice.html', 'researchPractice.css'])
+for (const file of ['people.html', 'theorems.html', 'library.html', 'workspace.html', 'problem.html', 'invite.html', 'practice.html', 'researchPractice.css', 'paper.html', 'paper.css'])
   fs.copyFileSync(path.join(root, 'apps/web/client', file), path.join(output, file));
 fs.writeFileSync(path.join(output, 'research.css'), ['research.css', 'collaborationFlow.css', 'researchCollections.css', 'researchWorkspace.css', 'researchProblem.css', 'researchLibraryTrials.css', 'researchCandidateContinuity.css', 'researchJourney.css', 'researchInlineActions.css', 'researchPersonal.css', 'researchBudget.css']
   .map(file => fs.readFileSync(path.join(root, 'apps/web/client', file), 'utf8')).join('\n'));

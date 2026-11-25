@@ -1,3 +1,6 @@
+import type { WebSession } from '../shared';
+import { draftOwnerStorageKey, webDraftOwner } from './ownedDrafts';
+
 /**
  * Opt-in memory of one API Key for the current tab. It lives in sessionStorage, so closing the tab clears it, and it only
  * answers for the provider and address it was entered for; a key typed for one endpoint is never offered to another.
@@ -7,6 +10,14 @@ type KeyStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 // Reading window.sessionStorage itself throws where storage is blocked.
 type StorageSource = () => KeyStorage;
 type Remembered = { providerId: string; baseUrl: string; apiKey: string };
+
+/** Standalone pages share tab credentials only with the workbench owner who saved them. */
+export function ownedTabKeyStorage(session?: WebSession): StorageSource {
+  return () => {
+    if (!session || sessionStorage.getItem(draftOwnerStorageKey) !== webDraftOwner(session)) throw new Error('tab_key_owner_unavailable');
+    return sessionStorage;
+  };
+}
 
 function read(storage: StorageSource): Remembered | undefined {
   try {

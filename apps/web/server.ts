@@ -26,7 +26,10 @@ import { shareSnapshot, webShareToken, type WebShareLink } from './share';
 import { productStatus, readProductBuild } from './productStatus';
 import { loadWebSample, webSampleResponse, webSampleRunId, type WebSampleFile } from './sample';
 import { PrecheckSuperseded, WebPrechecker } from './precheck';
-import { proofOutline, verificationKit } from './verificationKit';
+import { proofOutline, verificationKit, zip } from './verificationKit';
+import { WebPaperDrafts } from './paperDrafts';
+import type { WebPaperOverview } from './paperTypes';
+import { paperTemplate } from '../../src/math/paperDraft';
 import { acceptedEncoding, sendStatic } from './staticFiles';
 import { webFunnel } from './funnel';
 import { completionMail, mailsCompletion, planApprovalMail } from './completionMail';
@@ -129,6 +132,9 @@ const conversationSchema = z.object({ formalizationId: z.string().uuid().optiona
 const conversationMessageSchema = z.object({ text: z.string().trim().min(1).max(webConversationLimits.question),
   requestId: inputSchema.shape.requestId,
   apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default('') }).strict();
+const paperQuery = z.object({ target: z.string().min(1).max(512).optional(), language: z.enum(['en', 'zh']).default('en') });
+const paperRequest = paperQuery.extend({ providerId: inputSchema.shape.providerId.optional(), model: inputSchema.shape.model.optional(),
+  apiKey: conversationMessageSchema.shape.apiKey }).strict();
 // Explanation roles accept only these Codex efforts (src/runtime/sub2api.ts).
 const explanationEffort = (effort: WebEffort): 'low' | 'high' | 'max' =>
   effort === 'low' ? 'low' : effort === 'medium' || effort === 'high' ? 'high' : 'max';
@@ -230,6 +236,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   const admission = new WebSessionAdmission(Boolean(config.auth));
   // null disables the sample; omitted loads the one shipped with the image.
   const sample = options.sample === undefined ? loadWebSample() : options.sample ?? undefined;
+  const papers = new WebPaperDrafts(storage);
   const knowledge = new WebKnowledgeService(storage);
   const registry = new WebModuleRegistry(storage);
   const sessions = new Map<string, Session>(storage.listSessions().map(session => [session.id, session]));
@@ -697,7 +704,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           json(response, 200, { profiles: webTeamProfiles() }); return;
         }
         const newWork = request.method === 'POST' && (['/api/runs', '/api/formalizations', '/api/precheck'].includes(url.pathname)
-          || /^\/api\/runs\/[^/]+\/(?:explain|explanations)$/u.test(url.pathname)
+          || /^\/api\/runs\/[^/]+\/(?:explain|explanations|paper)$/u.test(url.pathname)
           || /^\/api\/formalizations\/[^/]+\/research$/u.test(url.pathname));
         // Body reads and readiness checks yield. Recheck admission immediately before dispatch so a pending
         // submission cannot start work after logout, suspension, account deletion or maintenance activation.
@@ -1185,6 +1192,59 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         const run = jobs.get(owner, match[1]);
         if (!run) throw new HttpError(404, '运行不存在或不属于当前会话。');
         const operation = match[2];
+        if (operation === 'paper' || operation === 'paper/download') {
+          const creating = operation === 'paper' && request.method === 'POST';
+          if (!creating && request.method !== 'GET') throw new HttpError(405, '请求方法不受支持。');
+          const proof = run.result?.proof;
+          if (run.status !== 'completed' || run.result?.status !== 'evaluated_passed' || !proof)
+            throw new HttpError(409, '只有通过独立验收的运行可以生成论文初稿。');
+          const parsed = paperRequest.safeParse(creating ? await readBody() : {
+            target: url.searchParams.get('target') ?? undefined, language: url.searchParams.get('language') ?? undefined,
+          });
+          if (!parsed.success) throw new HttpError(400, '请检查论文初稿的目标定理、语言和 API Key。');
+          const targets = (proofOutline(run)?.declarations ?? []).filter(item => item.role === 'target');
+          const selected = parsed.data.target ? targets.find(item => item.name === parsed.data.target) : targets[0];
+          if (!selected) throw new HttpError(400, '这次运行没有对应的已验收目标定理。');
+          const { name: target, type: statement } = selected, { language } = parsed.data;
+          const job = papers.get(owner, run, target, language);
+          if (operation === 'paper/download') {
+            if (!job?.draft) throw new HttpError(404, '论文初稿还没有生成。');
+            const content = zip([{ name: 'template.tex', content: job.draft.template }, { name: 'main.tex', content: job.draft.main }]);
+            response.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Length': content.length,
+              'Content-Disposition': `attachment; filename="paper-${run.id.slice(0, 8)}-${language}.zip"`, 'Cache-Control': 'no-store' });
+            response.end(content); return;
+          }
+          const providers = providersFor(session).filter(provider => webProviderHarness(provider) === 'codex');
+          const defaultProvider = providers.find(provider => provider.id === job?.providerId)
+            ?? providers.find(provider => provider.id === run.providerId)
+            ?? providers.find(provider => provider.id === SUB2API_PROVIDER.id) ?? providers[0];
+          const defaultModel = (provider: WebProvider) => {
+            if (job?.providerId === provider.id && job.model) return job.model;
+            if (run.providerId === provider.id) return run.model;
+            if (provider.id === SUB2API_PROVIDER.id || provider.id === 'openai') return providerModel(provider);
+            return '';
+          };
+          if (creating) {
+            admitWork();
+            const provider = parsed.data.providerId ? providers.find(item => item.id === parsed.data.providerId) : defaultProvider;
+            if (!provider) throw new HttpError(409, '请选择已配置且支持 Responses API 的模型服务商。');
+            const model = parsed.data.model ?? defaultModel(provider);
+            if (!model) throw new HttpError(400, '请填写模型名称。');
+            const apiKey = parsed.data.apiKey || heldKey(session, provider);
+            if (!apiKey) throw new HttpError(400, '请填写 API Key。');
+            const reuseResearchModel = provider.id === run.providerId && model === run.model && (!run.harness || run.harness === 'codex');
+            const effort = reuseResearchModel ? run.effort : provider.id === SUB2API_PROVIDER.id ? 'high' : 'none';
+            json(response, 202, { job: papers.start(owner, run, { target, statement, proof, language, template: paperTemplate },
+              { providerId: provider.id, baseUrl: provider.baseUrl, apiKey, model,
+                effort: effort === 'none' ? null : effort }) }); return;
+          }
+          const savedKeys = savedKeysFor(session), serverKeys = serverKeysFor(session);
+          const overview: WebPaperOverview = { title: run.title, target, targets: targets.map(item => item.name), language,
+            defaultProviderId: defaultProvider?.id, providers: providers.map(provider => ({ id: provider.id, name: provider.name,
+              defaultModel: defaultModel(provider), key: savedKeys.some(key => key.providerId === provider.id) ? 'saved'
+                : serverKeys?.includes(provider.id) ? 'server' : 'required' })), job };
+          json(response, 200, overview); return;
+        }
         if (operation === 'observation' && request.method === 'GET') {
           json(response, 200, { observation: run.observation ?? null }); return;
         }
@@ -1382,7 +1442,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     prechecker?.close();
     for (const streams of runStreams.values()) for (const stop of streams) stop();
     server.closeIdleConnections();
-    const closed = await Promise.allSettled([jobs.close(), research.close(), explanations.close(), formalizations.close(), conversations.close(), new Promise<void>(resolve => server.close(() => resolve()))]);
+    const closed = await Promise.allSettled([jobs.close(), research.close(), explanations.close(), papers.close(), formalizations.close(), conversations.close(), new Promise<void>(resolve => server.close(() => resolve()))]);
     for (const result of closed) if (result.status === 'rejected') throw result.reason;
   };
   return { server, jobs, research, explanations, formalizations, conversations, storage, knowledge, registry, auth, close };

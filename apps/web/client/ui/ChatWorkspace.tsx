@@ -252,7 +252,14 @@ function TaskMessage(props: ChatThreadProps) {
       <p class="chat-math-empty">{t('原题含义审核尚未通过，暂未生成讲解。')}</p>}
     {mathematicsSummary && <ChatMathematicalSummary work={mathematicsSummary} />}
     {!accepted && props.mathematics && !compactMathematics && <ChatMathematicalProgress work={props.mathematics} onTask={taskId => props.onArtifact('roadmap', { taskId })} />}
-    {accepted && <div class="research-conversation-artifacts"><button type="button" class="chat-result-primary" data-research-artifact="source" disabled={!proof} onClick={() => props.onArtifact('source')}><Icon name="file-code-2" /><span>{t('查看验收证明')}</span><Icon name="arrow-up-right" /></button></div>}
+    {accepted && run && <div class="research-conversation-artifacts">
+      <button type="button" class="chat-result-primary" data-research-artifact="source" disabled={!proof} onClick={() => props.onArtifact('source')}><Icon name="file-code-2" /><span>{t('查看验收证明')}</span><Icon name="arrow-up-right" /></button>
+      {!props.sample && run.result?.proof && <a class="chat-result-primary" data-chat-paper href={`paper.html?${new URLSearchParams({ run: run.id,
+        ...(props.conversation ? { chat: props.conversation.id } : {}),
+        ...(new URLSearchParams(location.search).has('lang') ? { lang: locale } : {}) })}`}>
+        <Icon name="file-pen" /><span>{tx('论文初稿', 'Paper draft')}</span><Icon name="arrow-up-right" />
+      </a>}
+    </div>}
     {showPlanProgress && <div class="chat-plan-progress" data-chat-plan-progress>
       <span>{t('已完成 {0}/{1}', planTasks.filter(task => task.tone === 'done').length, planTasks.length)}</span>
       <button type="button" class="text-button" data-chat-open-live-plan onClick={props.onOpenLivePlan}>
@@ -398,6 +405,7 @@ export type ChatComposerProps = {
   cost?: Pick<ResearchStartCostProps, 'owner' | 'account' | 'request'>;
   checkingConnection: boolean; connection?: { status: 'available' | 'unknown' | 'error'; message: string }; onCheckConnection(): void;
   keyManagement?: { busy: boolean; ending?: string; notice?: string; onSave(): void; onDelete(): void };
+  tabKeyMemory?: { remembered: boolean; notice?: string; onChange(value: boolean): void };
   guidanceAction?: { ready: boolean; onOpen(): void };
   participation: 'guided' | 'automatic'; onParticipation(value: 'guided' | 'automatic'): void; participationLocked: boolean;
   submissionRecovery?: { busy: boolean; onRecover(): void; onPrepareEdited(): void };
@@ -603,6 +611,12 @@ function ChatComposer(props: ChatComposerProps) {
               </div>
               <p class="field-note">{t('保存后加密存入你的账号，可随时删除。')}</p>
               {props.keyManagement.notice && <p class="field-note" id="chat-key-notice" role="status">{props.keyManagement.notice}</p>}
+            </div>}
+            {props.tabKeyMemory && <div class="chat-tab-key-memory">
+              <label><input type="checkbox" checked={props.tabKeyMemory.remembered}
+                disabled={!props.apiKey.trim() && !props.tabKeyMemory.remembered} onChange={event => props.tabKeyMemory?.onChange(event.currentTarget.checked)} />
+                {t('在此标签页记住')}</label>
+              {props.tabKeyMemory.notice && <p class="field-note" role="status">{props.tabKeyMemory.notice}</p>}
             </div>}
             <div class="chat-connection-check"><button type="button" class="button" id="check-model-connection" onClick={props.onCheckConnection}
               title={t('通过模型列表检查连接')}
