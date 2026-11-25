@@ -21,8 +21,7 @@ worker 还通过 `scripts/build-pantograph.ts` 从固定 Pantograph commit `0ee7
 ```bash
 git clone https://github.com/HuggingMath/theorem-os.git
 cd theorem-os
-THEOREMOS_SOURCE_COMMIT=$(git rev-parse HEAD) docker compose -f apps/web/compose.yml build worker web
-THEOREMOS_SOURCE_COMMIT=$(git rev-parse HEAD) docker compose -f apps/web/compose.yml --profile build-tex build tex
+THEOREMOS_SOURCE_COMMIT=$(git rev-parse HEAD) docker compose -f apps/web/compose.yml build worker web tex
 docker compose -f apps/web/compose.yml up -d web
 docker compose -f apps/web/compose.yml ps
 ```
@@ -36,7 +35,7 @@ bun scripts/web-operations.ts images --commit "$THEOREMOS_IMAGE_TAG"
 docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml up -d --no-build web
 ```
 
-`THEOREMOS_IMAGE_TAG` 必须指定完整提交 SHA，web、worker 与 tex 使用同一版本；没有默认 `main`。CI 先通过测试，只有三个镜像均发布成功后才生成配对发布产物。维护、排空、备份恢复、监控和回滚命令见[运维指南](web-operations.md)；首轮用户试用见[任务与反馈表](web-release-trial.md)。runner 以 `--pull=never` 创建运行容器，因此 worker 和 tex 镜像需要先拉取到本机。GHCR 包首次发布后默认私有；需要匿名拉取时，在仓库 Packages 设置中把三个包改为 Public。
+`THEOREMOS_IMAGE_TAG` 必须指定完整提交 SHA，web、worker 与 tex 使用同一版本；没有默认 `main`。CI 先通过测试，三个镜像均发布成功后才上传发布产物。维护、排空、备份恢复、监控和回滚命令见[运维指南](web-operations.md)；首轮用户试用见[任务与反馈表](web-release-trial.md)。runner 以 `--pull=never` 创建运行容器，因此 worker 和 tex 镜像需要先拉取到本机。GHCR 包首次发布后默认私有；需要匿名拉取时，在仓库 Packages 设置中把三个包改为 Public。
 
 浏览器打开 <http://127.0.0.1:8787>，首页显示问题输入框；不预填例题，也不要求先导入原题。TheoremOS 数学环境与 high 是默认值。输入框的「设置」可填写 Key；账号已有 Key 时直接使用。首页的输入框在页面中部，设置向下展开，不盖住标题和输入框，屏幕太矮时滚到可见；对话中的输入框在底部，设置向上展开。在输入框里打字时边框加粗为 2 像素，颜色与静止边框、页面和输入框底色的对比度都在 3:1 以上（浅色 3.68 / 5.05 / 5.42，深色 3.65 / 6.42 / 5.94）。新对话清空输入，普通刷新保留当前标签页的草稿，顶部 Logo 和「新对话」均回到首页。
 
@@ -556,7 +555,7 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 
 ### 部署来源
 
-在干净检出中运行 `THEOREMOS_SOURCE_COMMIT=$(git rev-parse HEAD) docker compose -f apps/web/compose.yml build worker web`，一次给两张镜像传入同一提交。两个镜像都带 `org.opencontainers.image.revision` 标签，Web 的 `/healthz` 和前端 `build-info.json` 也记录提交。部署后在同一检出目录运行 `scripts/web-deploy-record.sh <THEOREMOS_WEB_PUBLIC_URL> >> deploys.jsonl`（服务只接受该地址的 Host），一行记录提交、工作区是否干净、Web/worker 镜像 ID 与标签、容器实际镜像，以及线上与镜像内 `app.js` 的 SHA-256。`clean` 检查受控变更和未跟踪文件（不含 Git 忽略文件）；false 时该提交不能代表部署内容。构建应核对忽略文件是否进入 Docker 上下文。记录只采样 `app.js`，不覆盖全部静态资源，也不验证实际运行的 worker 容器。回滚使用部署前打的镜像标签，回滚后同样记录一行。
+在干净检出中运行 `THEOREMOS_SOURCE_COMMIT=$(git rev-parse HEAD) docker compose -f apps/web/compose.yml build worker web tex`，给三个镜像传入同一提交。三个镜像都带 `org.opencontainers.image.revision` 标签，Web 的 `/healthz` 和前端 `build-info.json` 也记录提交。部署后在同一检出目录运行 `scripts/web-deploy-record.sh <THEOREMOS_WEB_PUBLIC_URL> >> deploys.jsonl`（服务只接受该地址的 Host），一行记录提交、工作区是否干净、web、worker 和 tex 的镜像 ID 与标签、运行中的 Web 容器镜像，以及线上与镜像内 `app.js` 的 SHA-256。`clean` 检查受控变更和未跟踪文件（不含 Git 忽略文件）；false 时该提交不能代表部署内容。构建应核对忽略文件是否进入 Docker 上下文。记录只采样 `app.js`，不覆盖全部静态资源，也不验证实际运行的 worker 容器。回滚使用部署前打的镜像标签，回滚后同样记录一行。
 
 ### 发布清单
 

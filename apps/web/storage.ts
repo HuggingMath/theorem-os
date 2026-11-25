@@ -9,7 +9,7 @@ import type { WebShareSnapshot } from './share';
 import { archiveObservationCompactor, compactObservation, hydrateArchiveObservation, hydrateObservation,
   type ArchivedWebObservation, type CompactWebObservation, type CompactWebTaskSource } from './observationSources';
 import { projectStoredObservationChecks } from './observationChecks';
-import type { WebPaperDraftJob } from './paperTypes';
+import { paperDraftActive, type WebPaperDraftJob } from './paperTypes';
 
 export type WebCreation = { schema: 'theorem-os.web-creation.v1'; requestId: string; digest: string };
 type StoredRun = { owner: string; run: WebRun; creation?: WebCreation };
@@ -291,6 +291,20 @@ export class WebStorage {
   }
   savePaperDraft(owner: string, runId: string, key: string, draft: WebPaperDraftJob): void {
     this.saveRecord([...this.runPath(owner, runId), 'papers', `${key}.json`], draft);
+  }
+
+  interruptPaperDrafts(): void {
+    for (const owner of this.listRecords(['owners'])) {
+      const runs = ['owners', owner, 'runs'];
+      for (const run of this.listRecords(runs)) {
+        const papers = [...runs, run, 'papers'];
+        for (const file of this.listRecords(papers).filter(file => /^[a-f0-9]{64}\.json$/u.test(file))) {
+          const location = [...papers, file];
+          const job = this.getRecord<WebPaperDraftJob>(location);
+          if (job && paperDraftActive(job.status)) this.saveRecord(location, { ...job, status: 'error', error: 'interrupted' });
+        }
+      }
+    }
   }
 
   saveObservation(owner: string, observation: WebObservation): void {

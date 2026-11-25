@@ -12,6 +12,7 @@ import { keyMemoryStorageKey } from '../apps/web/client/keyMemory';
 import { draftOwnerStorageKey } from '../apps/web/client/ownedDrafts';
 import { paperStructureIssues, paperTemplate } from '../src/math/paperDraft';
 import { freePort, startBrowser } from './web-scenario';
+import { localOperations, maintenanceFile } from './web-operations';
 
 declare const Bun: { serve(options: { hostname: string; port: number; fetch(request: Request): Promise<Response> }): { port: number; stop(force?: boolean): void } };
 
@@ -32,12 +33,15 @@ const first = '\\begin{theorem}\nFor every natural number $n$, $0+n=n$.\n\\end{t
 const revised = first.replace('By recursion.', 'Induct on $n$. The base case follows from $0+0=0$. The recursive definition gives $0+(n+1)=(0+n)+1=n+1$.');
 const calls: Array<{ instructions: string; model: string; reasoning?: { effort: string }; input: Array<{ content: string }> }> = [];
 const review = JSON.stringify({ findings: [{ line: 5, message: 'Spell out the base case and inductive step.' }] });
+let releaseFirstCall!: () => void;
+const firstCallGate = new Promise<void>(resolve => { releaseFirstCall = resolve; });
 const provider = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
   if (new URL(request.url).pathname !== '/custom/v1/responses') return new Response(null, { status: 404 });
   if (request.headers.get('authorization') !== 'Bearer fixture-paper-key') return new Response(null, { status: 401 });
   const call = await request.json() as typeof calls[number];
   calls.push(call);
   const answer = [first, review, revised, '{"findings":[]}'][calls.length - 1];
+  if (calls.length === 1) await firstCallGate;
   return Response.json({ status: 'completed', output: [{ content: [{ type: 'output_text', text: answer }] }] });
 } });
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;
@@ -85,12 +89,24 @@ try {
   assert.equal(await name.inputValue(), 'my-model/v1');
   assert.equal(await dialog.getByLabel('API Key').count(), 0);
   assert.equal(calls.length, 0);
-  await page.getByRole('button', { name: '开始生成', exact: true }).click();
+  const [started] = await Promise.all([
+    page.waitForResponse(response => response.url() === `${origin}/api/runs/${id}/paper` && response.request().method() === 'POST'),
+    page.getByRole('button', { name: '开始生成', exact: true }).click(),
+  ]);
+  assert.equal(started.status(), 202);
+  assert.equal((await started.json()).job.status, 'writing');
+  maintenanceFile(temporary, true);
+  assert.deepEqual(localOperations(temporary).queues.paper, { running: 1, queued: 0 });
+  const deleting = await context.request.delete(`${origin}/api/runs/${id}`, { headers: { 'X-CSRF-Token': session.csrfToken } });
+  assert.equal(deleting.status(), 409);
+  releaseFirstCall();
   await page.getByRole('link', { name: '下载 LaTeX 源稿' }).waitFor().catch(async () => {
     assert.fail(`Draft did not complete after ${calls.length} provider calls. ${await page.locator('main').innerText()}`);
   });
   await page.reload();
   await page.getByText('模型审阅完成', { exact: true }).waitFor();
+  assert.deepEqual(localOperations(temporary).queues.paper, { running: 0, queued: 0 });
+  maintenanceFile(temporary, false);
   assert.match(await page.getByLabel('main.tex', { exact: true }).innerText(), /Induct on/);
   assert.equal(calls.length, 4);
   assert.deepEqual(calls.map(item => item.model), Array(4).fill('my-model/v1'));
@@ -115,6 +131,7 @@ try {
   assert.equal(paperStructureIssues('\\ref{missing}\n\\usepackage{x}\n\\begin{proof}').length, 3);
   console.log('Paper draft inherits the research model and effort, reuses the tab key for the same provider, and persists the draft.');
 } finally {
+  releaseFirstCall();
   await browser.close();
   await service.close();
   provider.stop(true);

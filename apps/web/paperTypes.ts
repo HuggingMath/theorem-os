@@ -16,6 +16,10 @@ export type WebPaperDraftJob = {
   error?: string;
 };
 
+export function paperDraftActive(status: unknown): status is PaperPhase {
+  return status === 'writing' || status === 'reviewing' || status === 'revising';
+}
+
 export type WebPaperProvider = {
   id: string;
   name: string;

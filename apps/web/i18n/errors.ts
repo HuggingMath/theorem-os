@@ -7,6 +7,7 @@ export const errors: Record<string, string> = {
   '请选择已配置且支持 Responses API 的模型服务商。': 'Select a configured model provider that supports the Responses API.',
   '请填写模型名称。': 'Enter a model name.',
   '已有论文初稿正在生成。': 'A paper draft is already being generated.',
+  '这次运行的论文初稿正在生成，请等待结束。': 'A paper draft for this run is being generated. Wait for it to finish.',
   'PDF 编译任务较多，请稍后重试。': 'Too many PDF compilations are running. Try again shortly.',
   'PDF 编译环境尚未配置。': 'The PDF compilation environment is not configured.',
   'PDF 编译超时，请稍后重试。': 'PDF compilation timed out. Try again shortly.',

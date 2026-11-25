@@ -2,7 +2,7 @@ import { render } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { locale, localeTag, localizeMessage } from '../i18n';
 import type { WebSession } from '../shared';
-import type { WebPaperOverview, WebPaperDraftJob } from '../paperTypes';
+import { paperDraftActive, type WebPaperOverview, type WebPaperDraftJob } from '../paperTypes';
 import type { PaperDraft } from '../../../src/math/paperDraft';
 import { Icon, Spinner } from './ui/Icon';
 import { rememberedKey, ownedTabKeyStorage } from './keyMemory';
@@ -20,7 +20,7 @@ const phaseText = {
   reviewing: tx('正在独立审阅', 'Reviewing the draft'),
   revising: tx('正在按意见修订', 'Revising the draft'),
 };
-const active = (job?: WebPaperDraftJob) => !!job && job.status !== 'done' && job.status !== 'error';
+const active = (job?: WebPaperDraftJob) => paperDraftActive(job?.status);
 const readError = tx('无法读取论文初稿。', 'Could not load the paper draft.');
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {

@@ -3,21 +3,27 @@ import { mathDigest } from '../../src/math/mathRuntimeIo';
 import { paperTemplate, type PaperLanguage } from '../../src/math/paperDraft';
 import { generatePaperDraft, type PaperSource } from '../../src/solver/paperDraft';
 import { askProvider, WebExplainError, type WebExplainCall } from './explain';
-import type { WebPaperDraftJob } from './paperTypes';
+import { paperDraftActive, type WebPaperDraftJob } from './paperTypes';
 import type { WebRun } from './shared';
 import { WebStorage, WebStorageError } from './storage';
 
 export class WebPaperDrafts {
-  private readonly active = new Map<string, { id: string; controller: AbortController; done: Promise<void> }>();
+  private readonly active = new Map<string, { id: string; runId: string; controller: AbortController; done: Promise<void> }>();
 
-  constructor(private readonly storage: WebStorage) {}
+  constructor(private readonly storage: WebStorage) {
+    this.storage.interruptPaperDrafts();
+  }
+
+  counts() { return { running: this.active.size, queued: 0 }; }
+
+  isGenerating(owner: string, runId: string) { return this.active.get(owner)?.runId === runId; }
 
   private key(target: string, language: PaperLanguage) { return mathDigest(JSON.stringify([target, language])); }
 
   get(owner: string, run: WebRun, target: string, language: PaperLanguage): WebPaperDraftJob | undefined {
     const job = this.storage.getPaperDraft(owner, run.id, this.key(target, language));
     if (!job || !run.result?.proof || job.leanSha256 !== mathDigest(run.result.proof)) return;
-    if (job.status === 'done' || job.status === 'error' || this.active.get(owner)?.id === job.id) return job;
+    if (!paperDraftActive(job.status) || this.active.get(owner)?.id === job.id) return job;
     return { ...job, status: 'error', error: 'interrupted' };
   }
 
@@ -56,7 +62,7 @@ export class WebPaperDrafts {
         : error instanceof WebExplainError ? error.message : error instanceof Error && error.message === 'paper_draft_invalid_structure' ? 'invalid_structure' : 'generation_failed' }))
       .catch(() => { /* A storage outage leaves the last durable checkpoint available for a retry. */ })
       .finally(() => this.active.delete(owner));
-    this.active.set(owner, { id: job.id, done, controller });
+    this.active.set(owner, { id: job.id, runId: run.id, done, controller });
     return job;
   }
 

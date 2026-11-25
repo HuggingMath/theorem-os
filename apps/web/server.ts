@@ -673,7 +673,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             try { disk = operations.disk(); } catch { /* ready reports an inaccessible data volume. */ }
             json(response, 200, { maintenance: operations.maintenance, ready, ...(disk ? { disk } : {}), failures: operations.failures(),
               queues: { research: jobs.counts(), formalization: formalizations.counts(), explanation: explanations.counts(),
-                precheck: prechecker?.counts() ?? { running: 0, queued: 0 }, conversation: explainer.counts() } }); return;
+                precheck: prechecker?.counts() ?? { running: 0, queued: 0 }, conversation: explainer.counts(), paper: papers.counts() } }); return;
           }
           if (url.pathname === '/api/admin/maintenance' && request.method === 'PUT') {
             const enabled = objectBody(await readBody()).enabled;
@@ -1268,6 +1268,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           };
           if (creating) {
             admitWork();
+            if (!jobs.get(owner, run.id)) throw new HttpError(404, '运行不存在或不属于当前会话。');
             const provider = parsed.data.providerId ? providers.find(item => item.id === parsed.data.providerId) : defaultProvider;
             if (!provider) throw new HttpError(409, '请选择已配置且支持 Responses API 的模型服务商。');
             const model = parsed.data.model ?? defaultModel(provider);
@@ -1431,6 +1432,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         if (match[2] === 'cancel' && request.method === 'POST') { json(response, 200, { run: jobs.cancel(owner, run.id) }); return; }
         if (!match[2] && request.method === 'DELETE') {
           if (explanations.active(owner, run.id)) throw new HttpError(409, '这次运行的证明讲解正在生成，请先取消或等待结束。');
+          if (papers.isGenerating(owner, run.id)) throw new HttpError(409, '这次运行的论文初稿正在生成，请等待结束。');
           const removed = jobs.remove(owner, run.id);
           if (removed === 'active') throw new HttpError(409, '排队中或运行中的任务不能删除，请先取消或等待结束。');
           if (removed === 'missing') throw new HttpError(404, '运行不存在或不属于当前会话。');

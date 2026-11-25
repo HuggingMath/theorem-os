@@ -10,7 +10,7 @@
 
 `Verify TheoremOS` 在面向 `main` 的 pull request 和 `main` 推送上运行，也可手动运行。它以只读仓库权限执行 TypeScript 检查、运行时与网页构建、离线浏览器回归，以及 Lean 4.33.0 和 4.34.1 上的求解器回归。验证和镜像发布均使用 Ubuntu 24.04。
 
-推送 `v*` 标签或运行 `gh workflow run images.yml --ref main` 会触发 `Publish workbench images`。发布流程在同一提交上调用上述验证，通过后分别构建和推送 web、worker、tex。三个镜像都使用完整源码 SHA 作为 GHCR 标签，并写入 OCI revision 和 `THEOREMOS_SOURCE_COMMIT`。Web 前端的 `build-info.json` 也记录这个 SHA。三张镜像均推送成功后，流程才上传 `image-release-<SHA>`，其中 `image-release.json` 记录提交及三个 registry digest。
+推送 `v*` 标签或运行 `gh workflow run images.yml --ref main` 会触发 `Publish workbench images`。发布流程在同一提交上调用上述验证，通过后分别构建和推送 web、worker、tex。三个镜像都使用完整源码 SHA 作为 GHCR 标签，并写入 OCI revision。Web 和 worker 还设置 `THEOREMOS_SOURCE_COMMIT`，Web 前端的 `build-info.json` 也记录这个 SHA。三张镜像均推送成功后，流程才上传 `image-release-<SHA>`，其中 `image-release.json` 记录提交及三个 registry digest。
 
 本地可执行同一组无模型求解器回归，包含协作回放脚本的研究决策协议检查。Linux CI 与 Worker 构建使用 `scripts/install-elan.sh` 安装固定的 elan 4.2.4，校验官方发布包 SHA-256，并通过 Lean 的发布 JSON 获取工具链，避免旧版 elan 抓取 GitHub 发布页面失败。先安装相应 elan 工具链，再显式选择版本，避免机器上较新的 Lean 候选版替代实际支持的版本：
 
@@ -19,15 +19,15 @@ THEOREMOS_TEST_LEAN_VERSION=4.33.0 bun run test:solver-reliability
 THEOREMOS_TEST_LEAN_VERSION=4.34.1 bun run test:solver-reliability
 ```
 
-发布流程不更新 `main` 或版本号镜像别名。单张镜像构建成功不表示版本已可部署。先在 GitHub Actions 确认整个工作流成功并下载对应构建产物，再拉取同一 SHA 的两个镜像：
+发布流程不更新 `main` 或版本号镜像别名。单张镜像构建成功不表示版本已可部署。先在 GitHub Actions 确认整个工作流成功并下载对应构建产物，再拉取同一 SHA 的三个镜像：
 
 ```bash
 export THEOREMOS_IMAGE_TAG=<完整的40位提交SHA>
-docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml pull worker web
+docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml pull worker web tex
 bun scripts/web-operations.ts images --commit "$THEOREMOS_IMAGE_TAG"
 ```
 
-`images` 只检查本机已存在的镜像，核对两端源码提交并输出实际 image ID；不自动拉取、启动或替换服务。未设置 `THEOREMOS_IMAGE_TAG` 时 GHCR Compose 拒绝解析。源码构建仍可使用 `compose.yml`，构建时显式传入 `THEOREMOS_SOURCE_COMMIT`。
+`images` 检查本机的 web、worker 和 tex 镜像，核对三个镜像的源码提交并输出各自的 image ID。未设置 `THEOREMOS_IMAGE_TAG` 时 GHCR Compose 拒绝解析。从源码部署时，用 `compose.yml` 的 `build worker web tex` 构建三个镜像，显式传入 `THEOREMOS_SOURCE_COMMIT`。
 
 ## 维护与排空
 
@@ -42,7 +42,7 @@ docker exec theorem-os-web-1 bun scripts/web-operations.ts wait-drained \
   --base-url https://workbench.example.org --timeout-seconds 28800
 ```
 
-`wait-drained` 每 5 秒报告运行中和排队任务的数量。它同时读取持久运行、形式化、讲解、对话记录，并通过 Docker 核对预检查及遗留 worker。维护尚未开启或超时仍有任务时返回非零，不取消任务。默认超时一小时；长证明讲解可以使用上面的八小时等待。
+`wait-drained` 每 5 秒报告运行中和排队任务的数量。它同时读取持久运行、形式化、讲解、对话和论文初稿任务记录，并通过 Docker 核对预检查及遗留 worker。维护尚未开启或超时仍有任务时返回非零，不取消任务。默认超时一小时；长证明讲解可以使用上面的八小时等待。
 
 本地模式面向一台宿主机只运行一套 TheoremOS 的部署，容器名以 `theoremos-web-`、`theoremos-formalize-`、`theoremos-explain-`、`theoremos-check-` 开头。多个部署共享宿主机时使用管理 API 模式核对各实例，并分别核对实例的容器。
 
@@ -215,7 +215,7 @@ bun scripts/web-operations.ts capacity --research-concurrency 1 \
 
 ## 切换版本与回滚
 
-完成镜像配对检查、排空、备份和隔离恢复验收后，记录当前运行镜像，再启动已经拉取的 SHA 对：
+完成三个镜像的版本检查、排空、备份和隔离恢复验收后，记录当前部署，再通过 Compose 启动新版本：
 
 ```bash
 scripts/web-deploy-record.sh https://workbench.example.org >> /private/theoremos-deploys.jsonl
