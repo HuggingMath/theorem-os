@@ -696,7 +696,7 @@ function ChatComposer(props: ChatComposerProps) {
       {showResearch && <ResearchOverview key={props.home.overview.owner} {...props.home.overview} />}
     </details>}
     </div>}
-    {props.problemDrafts && <div key={props.problemDrafts.owner} hidden={!props.problemDrafts.account && !props.problemDrafts.target}>
+    {props.problemDrafts?.target && <div key={props.problemDrafts.owner}>
       <ProblemDraftPanel {...props.problemDrafts} />
     </div>}
   </div>;

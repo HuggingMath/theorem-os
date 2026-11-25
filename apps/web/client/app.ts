@@ -1297,7 +1297,7 @@ function selectedProblemLibraries() {
 }
 function renderAccountProblemDraft() {
   const session = state.session;
-  const show = Boolean(session && draftReady && researchEntry === 'lean' && state.composing && !currentRun());
+  const show = Boolean(session && draftReady && researchEntry === 'lean' && state.composing && !currentRun() && problemDraftTarget);
   problemDraftHost.hidden = !show;
   renderProblemDraftPanel(problemDraftHost, show && session ? {
     owner: ownerOfSession(session), account: Boolean(session.account), value: leanProblemDraft(captureDraft(), selectedProblemLibraries()),
