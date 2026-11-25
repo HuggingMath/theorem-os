@@ -230,6 +230,8 @@ try {
       await actor.locator('#proof-instructions').evaluate((node, open) => { (node as HTMLDetailsElement).open = open; }, instructionsOpen);
     }
     const lean = 'theorem simple_fixture : True := by\n  sorry\n'; await actor.locator('#source').fill(lean);
+    assert.equal(await actor.locator('[data-problem-account-drafts]:visible').count(), 0,
+      'Lean draft mode keeps cloud-draft panels hidden unless restoring a link');
     await actor.reload(); await actor.locator('#source:visible').waitFor();
     assert.equal(await actor.locator('#source').inputValue(), lean);
     await actor.locator('#open-natural-language').click(); await actor.locator('#formalize-original').waitFor();

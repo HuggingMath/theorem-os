@@ -159,6 +159,17 @@ const productTarget = new URLSearchParams(productEntrySearch);
 const problemDraftId = productTarget.get('accountDraft'), problemDraftVersion = productTarget.get('draftVersion');
 let problemDraftTarget = problemDraftId && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(problemDraftId)
   ? { id: problemDraftId, ...(problemDraftVersion && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(problemDraftVersion) ? { version: problemDraftVersion } : {}) } : undefined;
+function clearProblemDraftTarget(replaceAddress = true) {
+  problemDraftTarget = undefined;
+  productTarget.delete('accountDraft');
+  productTarget.delete('draftVersion');
+  if (!replaceAddress) return;
+  const address = new URL(location.href);
+  if (!address.searchParams.has('accountDraft') && !address.searchParams.has('draftVersion')) return;
+  address.searchParams.delete('accountDraft');
+  address.searchParams.delete('draftVersion');
+  history.replaceState(null, '', address);
+}
 let productEntryHandled = false;
 let libraryProposalHandled = false;
 let libraryTrialHandled = false;
@@ -391,7 +402,10 @@ function syncNaturalResearch() {
 async function openNaturalResearch(reset = false) {
   if (state.submitting) return;
   closeHistoryDialog();
-  if (reset && state.session) resetProblemDraftBinding(ownerOfSession(state.session), 'lean');
+  if (reset) {
+    clearProblemDraftTarget(false);
+    if (state.session) resetProblemDraftBinding(ownerOfSession(state.session), 'lean');
+  }
   chooseEntry('natural'); startDraft();
   await naturalPage;
   chatWorkspace?.home(reset);
@@ -1297,7 +1311,7 @@ function selectedProblemLibraries() {
 }
 function renderAccountProblemDraft() {
   const session = state.session;
-  const show = Boolean(session && draftReady && researchEntry === 'lean' && state.composing && !currentRun());
+  const show = Boolean(session && draftReady && researchEntry === 'lean' && state.composing && !currentRun() && problemDraftTarget);
   problemDraftHost.hidden = !show;
   renderProblemDraftPanel(problemDraftHost, show && session ? {
     owner: ownerOfSession(session), account: Boolean(session.account), value: leanProblemDraft(captureDraft(), selectedProblemLibraries()),
@@ -1314,8 +1328,7 @@ async function restoreProblemDraft(value: ProblemDraftValue, beforeApply: () => 
   if (!state.session || ownerOfSession(state.session) !== owner || state.submitting || currentRun() || draftRevision !== revision || researchEntry !== entry
     || original !== undefined && original !== JSON.stringify(chatWorkspace?.problemDraft())) throw new Error(t('读取期间原题已修改，请重新选择恢复。'));
   beforeApply();
-  problemDraftTarget = undefined; productTarget.delete('accountDraft'); productTarget.delete('draftVersion');
-  const address = new URL(location.href); address.searchParams.delete('accountDraft'); address.searchParams.delete('draftVersion'); history.replaceState(null, '', address);
+  clearProblemDraftTarget();
   formalizationLink = null;
   if (value.mode === 'natural') {
     chooseEntry('natural'); startDraft(false, 'replace'); chatWorkspace!.restoreProblemDraft(value);
@@ -2545,7 +2558,7 @@ function startDraft(reset = false, address: 'push' | 'replace' = 'push') {
   element('#open-draft-preview').setAttribute('aria-expanded', 'false');
   moduleView?.update(undefined, moduleInput());
   state.panelSignature = ''; draftPreviewSignature = '';
-  if (reset) { if (state.session) resetProblemDraftBinding(ownerOfSession(state.session), 'lean'); submissionIdentity.clear(); resetForm(); }
+  if (reset) { clearProblemDraftTarget(false); if (state.session) resetProblemDraftBinding(ownerOfSession(state.session), 'lean'); submissionIdentity.clear(); resetForm(); }
   renderRunList(); renderDetail(true); setMobileView('compose');
   if (leaving && !historyQuery.matches) animateEntrance(element('.workspace'), 'workspace');
 }
