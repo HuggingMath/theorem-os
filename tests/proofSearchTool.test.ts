@@ -8,7 +8,7 @@ import type { DeliveryRecord } from '../src/solver/deliveries';
 import { bindMathematicalGap } from '../src/solver/mathematicalGaps';
 import type { MathematicalGap } from '../src/solver/mathematicalGapContract';
 import type { NextCheckRecord } from '../src/solver/nextCheckContract';
-import { proposedNextChecks } from '../src/solver/nextChecks';
+import { currentNextCheck, proposedNextChecks } from '../src/solver/nextChecks';
 import type { ProofSearchRecord } from '../src/solver/proofSearchRecords';
 import { proofSearchToolContext, runProofSearchTool } from '../src/solver/proofSearchTool';
 import { assignmentDeliveryFile, taskVersion, type CooperativeTask, type TaskAssignment, type TaskRecord } from '../src/solver/tasks';
@@ -155,25 +155,42 @@ describe('proof-search worker tool without Lean or model execution', () => {
     expect(call.request).toMatchObject({ resume: f.record.checkpoint });
     expect(call.request).not.toMatchObject({ resume: { path: '/previous-worker/checkpoint.json' } });
     expect(call.retainedInput).toEqual({ basisDigest: f.check.scope.executionBasisDigest, checkpointDigest: f.record.checkpoint.digest });
+    expect(call.history).toBe(f.check.id);
     expect(call.scope.taskId).toBe(helper.id);
     expect(f.assignment.taskId).not.toBe(helper.id);
   });
 
-  it('does not authorize retained-source replay for an independent check without executionBasisDigest', async () => {
+  it('starts a new independent search without the owner checkpoint, then resumes only its own history', async () => {
     const f = nextCheckFixture(false);
     expect(f.check.scope.executionBasisDigest).toBeUndefined();
     await runProofSearchTool({ projectRoot: f.project, request: request() });
     const call = backend.search.mock.calls[0]![0] as SearchInput;
     expect(call.scope.taskId).toBe(helper.id);
-    expect(call.request).toMatchObject({ resume: f.record.checkpoint });
+    expect(call.request).not.toHaveProperty('resume');
     expect(call.retainedInput).toBeUndefined();
+    expect(call.history).toBe(f.check.id);
+    const own = { ...f.record, history: f.check.id, workerId: f.assignment.workerId,
+      assignmentKey: assignmentDeliveryFile(f.assignment), checkpoint: { ...f.record.checkpoint, digest: 'd'.repeat(64) } };
+    f.context.proofSearchRecords[helper.id] = own;
+    f.write();
+    await runProofSearchTool({ projectRoot: f.project, request: request() });
+    expect(backend.search.mock.calls[1]![0]).toMatchObject({ request: { resume: own.checkpoint }, history: f.check.id });
+    expect((backend.search.mock.calls[1]![0] as SearchInput).retainedInput).toBeUndefined();
   });
 
-  it('rejects an obsolete nextCheck continuation instead of granting its old target scope', async () => {
+  it('rejects a projected record that cannot resume the host-pinned next check', async () => {
     const f = nextCheckFixture(true);
     f.context.proofSearchRecords[helper.id] = { ...f.record, basisDigest: '0'.repeat(64) }; f.write();
     await expect(runProofSearchTool({ projectRoot: f.project, request: request() })).rejects.toThrow(/proof_search_/u);
     expect(backend.search).not.toHaveBeenCalled();
+  });
+
+  it('keeps a pinned check current independently of the owner history', () => {
+    const f = nextCheckFixture(true);
+    const seed = f.check.proofSearchSeed;
+    expect(seed).toEqual(f.record);
+    f.context.proofSearchRecords[helper.id] = { ...f.record, basisDigest: '0'.repeat(64) };
+    expect(currentNextCheck(f.check, f.context, identity)).toBe(true);
   });
 
   it('publishes checkpoint progress to the independent assignment log with a stable id and exact digest', async () => {

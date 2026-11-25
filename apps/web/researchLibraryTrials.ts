@@ -112,23 +112,26 @@ export class WebResearchLibraryTrials {
   }
   targets(viewer: string, assetId: string, releaseVersion: string): ResearchLibraryTrialTarget[] {
     this.path(viewer, 'targets');
-    const release = this.release(viewer, assetId, releaseVersion), runs = new Map<string, { run: WebRun; projectId?: string }>();
-    for (const run of this.deps.jobs.list(viewer)) runs.set(run.id, { run });
+    const release = this.release(viewer, assetId, releaseVersion);
+    const runs: { run: WebRun; project?: { id: string; title: string } }[] = this.deps.jobs.list(viewer).map(run => ({ run }));
     for (let offset = 0;; offset += 100) {
       const page = this.deps.projects.list(viewer, { limit: 100, offset });
       for (const info of page.items) {
         const project = this.deps.projects.detail(viewer, info.id);
         if (!project.permissions.member) continue;
-        for (const binding of project.runs) if (binding.permissions.proof && !runs.has(binding.runId)) {
+        for (const binding of project.runs) if (binding.permissions.proof) {
           const resolved = this.deps.projects.resolveBinding(viewer, project.id, binding.runId, 'proof');
-          runs.set(binding.runId, { run: resolved.run, projectId: project.id });
+          runs.push({ run: resolved.run, project: { id: project.id, title: project.title } });
         }
       }
       if (page.items.length < 100) break;
     }
-    return [...runs.values()].flatMap(({ run, projectId }) => (run.observation?.inspection.tasks ?? []).flatMap(task => {
+    return runs.flatMap(({ run, project }) => (run.observation?.inspection.tasks ?? []).flatMap(task => {
       if (!['goal', 'lemma'].includes(task.kind)) return [];
-      try { return [this.resolve(viewer, { runId: run.id, ...(projectId ? { projectId } : {}), taskId: task.id }, release).target]; }
+      try {
+        const target = this.resolve(viewer, { runId: run.id, ...(project ? { projectId: project.id } : {}), taskId: task.id }, release).target;
+        return project ? [{ ...target, projectTitle: project.title }] : [target];
+      }
       catch (error) { if (error instanceof WebStorageError && [403, 404, 409].includes(error.status)) return []; throw error; }
     }));
   }

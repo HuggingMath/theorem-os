@@ -8,7 +8,7 @@ export type ResearchLibraryTrialTargetRef = {
   commit: string; sourceDigest: string; environmentDigest: string; file: string;
 };
 export type ResearchLibraryTrialTarget = {
-  ref: ResearchLibraryTrialTargetRef; runTitle: string; taskTitle: string; declaration: string; type: string;
+  ref: ResearchLibraryTrialTargetRef; runTitle: string; projectTitle?: string; taskTitle: string; declaration: string; type: string;
   environment: 'standard' | 'mathlib'; premises: string[]; compatible: boolean; incompatibility?: string;
 };
 export type ResearchLibraryTrialReceipt = {

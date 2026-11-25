@@ -88,10 +88,11 @@ const inputSchema = z.object({
     environmentDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(), file: z.string().min(1).max(1000).regex(/^[^\p{Cc}]*$/u).optional(),
     label: z.string().trim().min(1).max(webContinuationLabelMax).regex(/^[^\p{Cc}]*$/u) }).strict().optional(),
 }).strict();
-// A question about one recorded version; its code and Lean's output are read here, never taken from the request.
+// A question about one recorded check; its code and Lean's output are read here, never taken from the request.
 const explainSchema = z.object({
   taskId: z.string().min(1).max(200), commit: z.string().regex(/^[A-Za-z0-9]{1,128}$/u),
-  taskVersion: z.string().min(1).max(200).optional(),
+  taskVersion: z.string().min(1).max(200).optional(), receiptId: z.string().min(1).max(200).optional(),
+  checkAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   question: z.string().trim().min(1).max(webExplainLimits.question),
   turns: z.array(z.object({ question: z.string().min(1).max(webExplainLimits.question),
     answer: z.string().min(1).max(webExplainLimits.answer) }).strict()).max(webExplainLimits.turns).default([]),
@@ -1218,7 +1219,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         if (operation === 'trajectory/version' && request.method === 'GET') {
           const query = trajectoryVersionQuery(url.searchParams);
           if (!query) throw new HttpError(400, '版本参数无效。');
-          const version = trajectories.version(owner, run.id, query.taskId, query.commit, query.taskVersion);
+          const version = trajectories.version(owner, run.id, query.taskId, query.commit, query.taskVersion, query.receiptId, query.checkAt);
           if (!version) throw new HttpError(404, '这个版本没有记录或已超出保留范围。');
           json(response, 200, { version }); return;
         }
@@ -1229,12 +1230,13 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (!provider) throw new HttpError(409, '这次运行的模型服务已不在配置中。');
           const apiKey = parsed.data.apiKey || heldKey(session, provider);
           if (!apiKey) throw new HttpError(400, '请填写 API Key。');
-          const version = trajectories.version(owner, run.id, parsed.data.taskId, parsed.data.commit, parsed.data.taskVersion);
-          if (!version) throw new HttpError(404, '这个版本没有记录或已超出保留范围。');
-          const feedback = failedFeedback(version.checks);
-          if (!feedback) throw new HttpError(409, '这个版本没有未通过的 Lean 检查可以解释。');
-          const objective = run.observation?.plan?.tasks.find(task => task.id === version.taskId)?.objective;
-          const input = explainInput(run, version, feedback, parsed.data.turns as WebExplainTurn[], parsed.data.question, objective);
+          const { taskId, commit, taskVersion, receiptId, checkAt, question, turns } = parsed.data;
+          const selection = trajectories.explanationVersion(owner, run.id, taskId, commit, taskVersion, receiptId, checkAt);
+          if (selection.status === 'missing') throw new HttpError(404, '这个检查没有记录或已超出保留范围。');
+          if (selection.status === 'ambiguous') throw new HttpError(409, '这个版本有多次检查，请选择要解释的一次。');
+          const feedback = selection.status === 'found' && failedFeedback(selection.detail.checks);
+          if (selection.status !== 'found' || !feedback) throw new HttpError(409, '没有未通过的 Lean 检查可以解释。');
+          const input = explainInput(run, selection.detail, feedback, turns as WebExplainTurn[], question, selection.detail.objective);
           // Closing the panel or the tab stops the call; the provider bills what it already produced.
           const gone = new AbortController();
           response.once('close', () => { if (!response.writableFinished) gone.abort(); });

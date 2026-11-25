@@ -83,9 +83,10 @@ export function isWebObservation(value: unknown): value is WebObservation {
     value.checks.every(check => object(check) && object(check.record) &&
       ['id', 'taskId', 'taskVersion', 'commit', 'sourceDigest', 'environmentDigest'].every(field => typeof check[field] === 'string'));
 }
+const libraryRestartSchema = z.object({ previousSolverRunId: z.string().min(1).max(128),
+  solverRunId: z.string().min(1).max(128), round: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict();
 const workerMessageSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('library_restart'), previousSolverRunId: z.string().min(1).max(128),
-    solverRunId: z.string().min(1).max(128), round: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict(),
+  libraryRestartSchema.extend({ type: z.literal('library_restart') }),
   z.object({ type: z.literal('progress'), event: z.string().min(1).max(100), message: z.string().max(2_000),
     details: z.custom<WebEventDetails>(isWebEventDetails).optional() }).strict(),
   z.object({ type: z.literal('error'), message: z.string().min(1).max(2_000),
@@ -222,12 +223,15 @@ export class DockerWebRunner implements WebRunner {
         try {
           const value: unknown = JSON.parse(output);
           if (!object(value) || typeof value.id !== 'string' || typeof value.status !== 'string') throw new Error();
-          const { observation, sourceBlobs, ...receipt } = value;
+          const { observation, sourceBlobs, libraryRestart: transition, ...receipt } = value;
           const observed = observation === undefined ? undefined
             : readWorkerObservation(observation, sourceBlobs, { runId: id, sources: new Map() });
           if (observation !== undefined && !observed) throw new Error();
+          const libraryRestart = transition === undefined ? undefined : libraryRestartSchema.parse(transition);
+          if (libraryRestart && (command.type !== 'capture' || observed?.solverRunId !== libraryRestart.solverRunId)) throw new Error();
           if (receipt.catalog) validateTheoremKnowledge(receipt.catalog);
-          resolve({ ...receipt, ...(observed ? { observation: observed } : {}) } as WebCommandResult);
+          resolve({ ...receipt, ...(observed ? { observation: observed } : {}),
+            ...(libraryRestart ? { libraryRestart } : {}) } as WebCommandResult);
         } catch { reject(new Error('运行环境未返回有效命令回执。')); }
       };
       const timer = setTimeout(() => finish(new Error('命令回执超时，请先查询当前回执再重试。')), 15_000);
@@ -408,8 +412,9 @@ export class DockerWebRunner implements WebRunner {
         // Capture the actual saved checkpoint and source evidence before deleting the container.
         try {
           const captured = await this.command(input.id, { type: 'capture' });
-          if (captured.observation) onMessage({ type: 'observation', observation: captured.observation });
-          if (captured.catalog) onMessage({ type: 'catalog', catalog: captured.catalog });
+          if (captured.libraryRestart) forward({ type: 'library_restart', ...captured.libraryRestart });
+          if (captured.observation) forward({ type: 'observation', observation: captured.observation });
+          if (captured.catalog) forward({ type: 'catalog', catalog: captured.catalog });
         } catch { /* A run cancelled during bootstrap may not have a checkpoint yet. */ }
         await remove();
         child.kill('SIGKILL');

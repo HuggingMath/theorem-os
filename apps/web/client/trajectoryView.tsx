@@ -80,14 +80,14 @@ type Item = { step: TrajectoryStep; key: string; index: number };
 type Loaded = { status: 'loading' } | { status: 'ready'; revision: number; detail: TrajectoryVersionDetail } | { status: 'failed'; error: string };
 /** Where the key for a question comes from; with none, the panel asks for one and keeps it on this page only. */
 export type ExplainKey = { source: 'saved'; ending: string } | { source: 'server' } | { source: 'remembered' } | { source: 'none' };
-export type ExplainRequest = { taskId: string; commit: string; taskVersion?: string; question: string; turns: WebExplainTurn[]; apiKey?: string };
+export type ExplainRequest = { taskId: string; commit: string; taskVersion?: string; receiptId: string; checkAt: number; question: string; turns: WebExplainTurn[]; apiKey?: string };
 /** What a reader may do with a run of their own: start a new run from a version, and ask why a version failed. */
 export type OwnRunActions = {
   allowed(run: WebRun): boolean;
   start(run: WebRun, from: WebContinuation): void;
   explain?: { key(run: WebRun): ExplainKey; ask(run: WebRun, request: ExplainRequest, signal: AbortSignal): Promise<WebExplainAnswer> };
 };
-/** One version's questions and answers, kept on the page; nothing is stored on the server. */
+/** One check's questions and answers, kept on the page; nothing is stored on the server. */
 type AskTurn = WebExplainTurn & { truncated?: boolean; usage?: WebExplainAnswer['usage'] };
 type AskThread = { turns: AskTurn[]; draft: string; pending?: { question: string; controller: AbortController }; error?: string };
 type Built = { key: string; steps: TrajectoryStep[]; keys: string[]; names: Map<string, string> };
@@ -113,7 +113,7 @@ type Ctx = { run: WebRun; state: RunState; names: Map<string, string>; tasks: Ma
 type Content = { title: ComponentChildren; meta?: string[]; badge?: [string, Tone]; body?: ComponentChildren };
 
 const shortName = (name: string) => name.split('.').at(-1) || name;
-const detailKey = ({ version, check }: TrajectoryRef) => check?.taskVersion ? `${version.key}\u0000${check.taskVersion}` : version.key;
+const detailKey = ({ version, check }: TrajectoryRef) => JSON.stringify([version.key, check?.taskVersion, check?.at, check?.receiptIds[0]]);
 /** The Lean output of a version's check (`ids`, its receipts; none means all), failed receipts first, each output once. */
 function checkEntries(detail: TrajectoryVersionDetail, ids: readonly string[]) {
   const wanted = new Set(ids), checks = detail.checks.filter(check => !wanted.size || wanted.has(check.id))
@@ -966,7 +966,7 @@ export class TrajectoryView {
     if (step.kind !== 'attempt' && step.kind !== 'proof') return [];
     const version = step.ref?.version, saved = version?.source !== undefined, failed = Boolean(version) && step.outcome === 'failed';
     return [saved && 'code', saved && step.kind === 'attempt' && step.previous?.version.source !== undefined && 'diff',
-      failed && 'feedback', failed && this.asks(run) && 'ask'].filter((mode): mode is Mode => Boolean(mode));
+      failed && 'feedback', failed && step.ref?.check?.receiptIds[0] && this.asks(run) && 'ask'].filter((mode): mode is Mode => Boolean(mode));
   }
   private asks(run: WebRun) { return Boolean(this.own?.explain && this.own.allowed(run)); }
 
@@ -1100,6 +1100,10 @@ export class TrajectoryView {
     for (const old of versions.keys()) { if (versions.size <= limits.versions) break; versions.delete(old); }
     const query = new URLSearchParams({ task: version.taskId, commit: version.commit });
     if (check?.taskVersion) query.set('taskVersion', check.taskVersion);
+    if (check?.receiptIds[0]) {
+      query.set('receiptId', check.receiptIds[0]);
+      query.set('checkAt', String(check.at));
+    }
     void this.api<{ version: TrajectoryVersionDetail }>(`/api/runs/${encodeURIComponent(ctx.run.id)}/trajectory/version?${query}`)
       .then(({ version: detail }) => { versions.set(key, { status: 'ready', revision: version.revision, detail }); },
         error => { versions.set(key, { status: 'failed', error: errorText(error) }); })
@@ -1291,7 +1295,7 @@ export class TrajectoryView {
   }
 
   /**
-   * Questions about a failed version, answered by the run's own model through its provider: each is a call the reader
+   * Questions about a failed check, answered by the run's own model through its provider: each is a call the reader
    * pays for, outside the run's budget, and the run never sees it. The thread stays on this page until it is left;
    * each question carries the last few answers with it.
    */
@@ -1330,8 +1334,8 @@ export class TrajectoryView {
     </div>;
   }
   private async send(ctx: Ctx, { version, check }: TrajectoryRef, thread: AskThread, form: HTMLFormElement) {
-    const explain = this.own?.explain, question = thread.draft.trim(), run = ctx.run;
-    if (!explain || !question || thread.pending) return;
+    const explain = this.own?.explain, question = thread.draft.trim(), run = ctx.run, receiptId = check?.receiptIds[0];
+    if (!explain || !question || !check || !receiptId || thread.pending) return;
     const source = explain.key(run).source, typed = this.typedKeys.get(run.providerId) ?? '';
     if (source === 'none' && !/^[\x21-\x7e]{8,4096}$/u.test(typed)) {
       thread.error = t('请填写这个服务商的 API Key'); this.render();
@@ -1343,7 +1347,7 @@ export class TrajectoryView {
     thread.pending = { question, controller }; thread.error = undefined; thread.draft = '';
     this.render();
     try {
-      const answer = await explain.ask(run, { taskId: version.taskId, commit: version.commit, question,
+      const answer = await explain.ask(run, { taskId: version.taskId, commit: version.commit, receiptId, checkAt: check.at, question,
         ...(check?.taskVersion ? { taskVersion: check.taskVersion } : {}),
         turns: thread.turns.slice(-explainLimits.turns).map(turn => ({ question: turn.question, answer: turn.answer })),
         ...(source === 'none' ? { apiKey: typed } : {}) }, controller.signal);

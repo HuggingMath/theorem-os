@@ -22,7 +22,7 @@ export function LibraryTrial({ release, context }: { release: ResearchAssetRelea
     : <><CheckedMathExamples release={release} /><a class="button" href={`login.html?${signIn}`}>{tx('登录后在研究目标中试用', 'Sign in to try this on a research goal')}</a></>;
 }
 function TrialForm({ release, owner }: { release: ResearchAssetRelease; owner: string }) {
-  const parameters = new URLSearchParams(location.search), linkedRun = parameters.get('run'), linkedTask = parameters.get('task');
+  const parameters = new URLSearchParams(location.search), linkedRun = parameters.get('run'), linkedTask = parameters.get('task'), linkedProject = parameters.get('project');
   const [trialId, setTrialId] = useState(parameters.get('trial') ?? '');
   const [open, setOpen] = useState(Boolean(linkedRun || trialId)), [selected, setSelected] = useState('');
   const [prepared, setPrepared] = useState<{ input: string; item: ResearchLibraryTrial }>(), [confirmed, setConfirmed] = useState('');
@@ -41,7 +41,7 @@ function TrialForm({ release, owner }: { release: ResearchAssetRelease; owner: s
     } else setPrepared(previous => previous?.item.id === recovery.id && !(previous.item.check && !recovery.check) ? { ...previous, item: recovery } : previous);
   }, [recovery, matchingRecovery]);
   const available = targets.data?.items ?? [], requested = available.find(item => item.ref.runId === linkedRun && (!linkedTask || item.ref.taskId === linkedTask)
-    && (!parameters.get('project') || !item.ref.projectId || item.ref.projectId === parameters.get('project'))
+    && (!linkedProject || item.ref.projectId === linkedProject)
     && (!parameters.get('taskVersion') || item.ref.taskVersion === parameters.get('taskVersion')) && (!parameters.get('commit') || item.ref.commit === parameters.get('commit')));
   const target = selected ? available.find(item => targetKey(item) === selected) : linkedRun ? requested : available.find(item => item.compatible);
   const editorReady = !trialId || prepared?.item.id === trialId || Boolean(saved.error) || Boolean(recovery && !matchingRecovery);
@@ -51,7 +51,7 @@ function TrialForm({ release, owner }: { release: ResearchAssetRelease; owner: s
       : { declaration: release.mathematics!.declarations[0]?.name ?? '', proof: '', argumentNotes: '', missingPremises: '' });
   const { declaration: name, proof, argumentNotes: argumentsNote, missingPremises: missing } = editor.value;
   const declaration = release.mathematics!.declarations.find(item => item.name === name);
-  const input = JSON.stringify([target ? targetKey(target) : undefined, name, proof, argumentsNote, missing]);
+  const input = JSON.stringify([target ? targetKey(target) : undefined, name, proof.trim(), argumentsNote, missing]);
   const draft = prepared?.input === input ? prepared.item : undefined;
   const busy = prepare.busy || check.busy || draft?.status === 'checking';
   const loadExample = (example: ResearchCheckedMathExample) => {
@@ -74,18 +74,17 @@ function TrialForm({ release, owner }: { release: ResearchAssetRelease; owner: s
     {targets.data && !available.length && <p class="research-status">{tx('当前没有保存了定理源码的可试用任务。先打开一次研究；项目任务需要候选证明权限。', 'No eligible task with saved theorem source is available. Open a research run first; project tasks require proof submission permission.')}</p>}
     {targets.data && Boolean(available.length) && <form class="research-form" onSubmit={event => {
       event.preventDefault(); if (!target || !target.compatible || !declaration || !editor.ready) return;
-      const submitted = input;
       void prepare.run<Item<ResearchLibraryTrial>>('POST', `${base}/library/${enc(release.assetId)}/releases/${enc(release.version)}/trials`, {
         releaseDigest: release.digest, target: target.ref, declaration: name, proof, argumentNotes: argumentsNote, missingPremises: missing,
       }, result => {
         restored.current = result.item.id; setTrialId(result.item.id);
         const next = new URL(location.href); next.searchParams.set('trial', result.item.id); history.replaceState(null, '', next);
-        setPrepared({ input: submitted, item: result.item }); setConfirmed(''); check.reset();
+        setPrepared({ input: draftInput(result.item), item: result.item }); setConfirmed(''); check.reset();
       });
     }}>
       <label>{tx('研究 / 精确任务版本', 'Research / exact task version')}<select value={target ? targetKey(target) : ''} disabled={busy || !editorReady} onChange={event => { setSelected(event.currentTarget.value); setConfirmed(''); }}>
         <option value="">{tx('选择一个当前目标', 'Choose a current goal')}</option>{available.map(item => <option key={targetKey(item)} value={targetKey(item)} disabled={!item.compatible}>
-          {item.runTitle} · {item.taskTitle} · {item.ref.taskVersion.slice(0, 10)} · {item.ref.commit.slice(0, 10)}{item.compatible ? '' : ` · ${tx('环境不同', 'Different environment')}`}</option>)}</select></label>
+          {item.projectTitle ?? tx('个人运行', 'Personal run')} · {item.runTitle} · {item.taskTitle} · {item.ref.taskVersion.slice(0, 10)} · {item.ref.commit.slice(0, 10)}{item.compatible ? '' : ` · ${tx('环境不同', 'Different environment')}`}</option>)}</select></label>
       {linkedRun && !requested && !selected && <ErrorBox message={tx('入口对应的任务版本或源码提交已改变。请明确选择当前目标后重新准备。', 'The linked task version or source commit has changed. Select the current goal explicitly to prepare a new candidate.')} />}
       {target && <section class="research-trial-target"><h4><Rich text={target.taskTitle} /></h4><pre class="research-block-code">{target.type}</pre>
         {target.premises.length > 0 && <><h4>{tx('任务记录的前提', 'Recorded task premises')}</h4><ul>{target.premises.map((premise, index) => <li key={index}><Rich text={premise} /></li>)}</ul></>}

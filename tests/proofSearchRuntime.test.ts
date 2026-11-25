@@ -6,7 +6,8 @@ import { canonicalMathJson, mathDigest, withMathRuntimeLease } from '../src/math
 import { proofSearchCheckpointSchema, searchLeanBranches, type ProofSearchCheckpoint,
   type SearchCheckpointReference } from '../src/math/leanProofSearch';
 import type { ProofSearchSession } from '../src/math/pantographSession';
-import { projectProofSearchRecord, retainProofSearchCheckpoint } from '../src/solver/proofSearchRecords';
+import { latestProofSearchRecord, projectProofSearchRecord, proofSearchRecordForAssignment,
+  readProofSearchCheckpoint, retainProofSearchCheckpoint } from '../src/solver/proofSearchRecords';
 import { runProofSearchTool } from '../src/solver/proofSearchTool';
 import { assignmentDeliveryFile, taskVersion } from '../src/solver/tasks';
 
@@ -175,6 +176,49 @@ describe('proof-search runtime persistence with fake Lean boundaries', () => {
     expect(proof.toString()).toBe('by\n  intro n\n  rfl\n');
     expect(first.fake.close).toHaveBeenCalledTimes(1); expect(fake.close).toHaveBeenCalledTimes(1);
     expect(output.dispose).toHaveBeenCalledTimes(1); expect(boundary.retainedProjection).not.toHaveBeenCalled();
+  });
+
+  it('keeps parallel owner and checker continuations at the same generation independently resumable', async () => {
+    const first = await savedSearch(), history = mathDigest('independent check');
+    const retain = (projectRoot: string, reference: SearchCheckpointReference, workerId: string, history?: string) =>
+      retainProofSearchCheckpoint({ projectRoot, runDirectory: directory, reference, scope, workerId, assignmentKey: workerId, history });
+    const seed = retain(project, first.reference, 'owner');
+    const independent = makeProject('independent');
+    const projectRecord = (projectRoot: string, record: typeof seed, history?: string) =>
+      projectProofSearchRecord({ record, scope, projectRoot, runDirectory: directory, history })!.checkpoint;
+    const seedCopy = projectRecord(independent, seed, history);
+    boundary.projection.mockImplementation(({ projectRoot }) => projection(projectRoot));
+    boundary.retainedProjection.mockImplementation(({ projectRoot }) => projection(projectRoot));
+    boundary.open.mockImplementation(async () => session());
+    const from = first.checkpoint.nodes[1]!.id;
+    const authorization = (reference: SearchCheckpointReference) =>
+      ({ basisDigest: seed.basisDigest, checkpointDigest: reference.digest });
+    const [owner, checker] = await Promise.all([
+      search({ request: { resume: first.reference, branches: [{ from, tactics: ['rfl'] }] } }),
+      search({ projectRoot: independent, history, retainedInput: authorization(seedCopy),
+        request: { resume: seedCopy, branches: [{ from, tactics: ['simp'] }] } }),
+    ]);
+    expect(owner.status).toBe('candidate');
+    expect(checker).toMatchObject({ status: 'exhausted', sourceBinding: 'host-retained-source-snapshot' });
+    const ownerRecord = retain(project, owner.checkpoint!, 'owner');
+    const checkerRecord = retain(independent, checker.checkpoint!, 'checker', history);
+    expect(ownerRecord.generation).toBe(checkerRecord.generation);
+    expect(ownerRecord.checkpoint.digest).not.toBe(checkerRecord.checkpoint.digest);
+    const records = { [scope.taskId]: latestProofSearchRecord(seed, ownerRecord),
+      'independent-task': latestProofSearchRecord(undefined, checkerRecord) };
+    const check = { taskId: 'independent-task', id: history, scope: { executionBasisDigest: seed.basisDigest },
+      proofSearchSeed: seed } as NonNullable<Parameters<typeof proofSearchRecordForAssignment>[2]>;
+    expect(proofSearchRecordForAssignment(records, scope)).toBe(ownerRecord);
+    expect(proofSearchRecordForAssignment(records, scope, check)).toBe(checkerRecord);
+    const ownerCopy = projectRecord(independent, ownerRecord, history);
+    expect(ownerCopy.path).not.toBe(path.resolve(independent, checker.checkpoint!.path));
+    expect(readProofSearchCheckpoint(independent, checker.checkpoint!, history).reference.digest).toBe(checker.checkpoint!.digest);
+    const migrated = makeProject('checker-restart'), checkerCopy = projectRecord(migrated, checkerRecord, history);
+    const end = await search({ projectRoot: migrated, history, retainedInput: authorization(checkerCopy),
+      request: { resume: checkerCopy, branches: [{ from: checker.frontier!.at(-1)!.node, tactics: ['rfl'] }] } });
+    expect(end).toMatchObject({ status: 'candidate', proofAcceptance: 'not-accepted' });
+    expect(path.dirname(end.candidates[0]!.artifact.path)).toBe(path.dirname(end.checkpoint!.path));
+    expect(readCheckpoint(migrated, end.checkpoint!).counters.replay).toBeGreaterThan(checker.counters!.replay);
   });
 
   it('keeps ordinary owner resumes stale when current source changes instead of restoring retained source', async () => {

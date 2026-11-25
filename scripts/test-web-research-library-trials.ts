@@ -127,10 +127,19 @@ try {
     const proof = trial.getByRole('textbox', { name: tx('候选 Lean 证明体', 'Candidate Lean proof body'), exact: true });
     const argumentsNote = trial.getByRole('textbox', { name: tx('参数如何对应（可选）', 'Argument mapping (optional)'), exact: true });
     assert.equal(await proof.inputValue(), 'by\n  intro n\n  exact Shared.zero n');
-    await argumentsNote.fill('Library n maps to task n'); await proof.fill('by\n  exact Shared.zero n');
+    await argumentsNote.fill('Library n maps to task n'); await proof.fill('by\n  exact Shared.zero n\n');
     const prepare = trial.getByRole('button', { name: tx('准备并审阅候选', 'Prepare candidate for review'), exact: true });
+    const preparedResponse = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === `/api/research/library/${release.assetId}/releases/${release.version}/trials`);
     phase = `prepare-${width}-${language}`; await prepare.click();
+    const prepared = await preparedResponse; assert.equal(prepared.status(), 201);
+    assert.equal(prepared.request().postDataJSON().proof, 'by\n  exact Shared.zero n\n');
+    const savedTrial: ResearchLibraryTrial = (await prepared.json()).item;
+    assert.equal(savedTrial.proof, 'by\n  exact Shared.zero n');
+    await page.waitForURL(url => url.searchParams.get('trial') === savedTrial.id);
+    await page.waitForFunction(value => document.querySelector<HTMLTextAreaElement>('[data-library-trial] textarea[required]')?.value === value, savedTrial.proof);
     const review = trial.locator('[data-library-trial-review]'); await review.waitFor();
+    assert.equal(JSON.parse(await goals.inputValue())[1], project.id, 'The owner’s project link chooses its binding even when a personal target is available');
     assert.equal(compilerCalls.length, initialCalls, 'Preparing a candidate must not call the checker');
     await review.getByText('import Submission.Library.Shared', { exact: false }).waitFor();
     const check = review.getByRole('button', { name: tx('确认并独立检查', 'Confirm and check independently'), exact: true });
@@ -225,6 +234,22 @@ try {
     const reviewer = (await peerContext.cookies(origin)).find(item => item.name === 'theoremos_session')!.value;
     project = service.research.projects.setMember(owner, project.id, service.research.projects.identity(reviewer), {
       requestId: 'reviewer', expectedRevision: service.research.projects.detail(owner, project.id).revision, role: 'collaborator' });
+    phase = `exact-project-target-${width}-${language}`;
+    let secondProject = service.research.projects.create(owner, { requestId: 'second-project', title: 'Another addition project', visibility: 'members' });
+    secondProject = service.research.projects.addVersion(owner, secondProject.id, { requestId: 'second-statement', expectedRevision: secondProject.revision,
+      statement: 'Addition identity', source: original, environment: 'standard' });
+    secondProject = service.research.projects.bindRun(owner, secondProject.id, { requestId: 'second-binding', expectedRevision: secondProject.revision,
+      runId: run.id, statementVersionId: secondProject.versions[0].id, exposure: 'members', grants: { proof: true } });
+    secondProject = service.research.projects.setMember(owner, secondProject.id, service.research.projects.identity(reviewer), {
+      requestId: 'second-project-reviewer', expectedRevision: secondProject.revision, role: 'collaborator' });
+    for (const exactProject of [project, secondProject]) {
+      const params = new URLSearchParams(entry);
+      params.set('project', exactProject.id); params.set('entry', release.assetId); params.set('version', release.version);
+      await peer.goto(`${origin}/library.html?${params}`);
+      const selectedGoal = peer.locator('[data-library-trial] select').first().locator('option:checked').filter({ hasText: exactProject.title });
+      await selectedGoal.waitFor({ state: 'attached' });
+      assert.deepEqual(JSON.parse((await selectedGoal.getAttribute('value'))!).slice(0, 5), [run.id, exactProject.id, 'target', 'task-v1', commit]);
+    }
     phase = `human-review-${width}-${language}`;
     await peer.goto(page.url()); const peerFeedback = peer.locator(`#feedback-${candidate.id}`);
     const frozenEvidence = peerFeedback.locator('[data-library-candidate-evidence]'); await frozenEvidence.locator(':scope > summary').click();
@@ -277,7 +302,7 @@ try {
     await trial.getByRole('alert').filter({ hasText: tx('任务版本或源码提交已经改变', 'The task version or source commit has changed') }).waitFor();
     assert.equal(compilerCalls.length, beforeDiagnostics + 1);
     checks.push({ width, language, layout, trialId, confirmedCompileCalls: 5, uncertainAttempts: attempts.length,
-      preparedDoesNotCheck: true, draftAndReceiptRecovered: true, runUnchanged: true, staleSourceRejected: true,
+      preparedDoesNotCheck: true, trimmedProofReviewable: true, exactProjectTarget: true, draftAndReceiptRecovered: true, runUnchanged: true, staleSourceRejected: true,
       checkedExampleLoadedWithoutCompiler: true, explicitSharing: true, separateHumanApproval: true, reviewedNewAttemptPrepared: true, actualComposerLaunchIncludesFixedPack: true });
     compiler = async value => ({ output: '', exitCode: 0, timedOut: false, checkedTarget: value.candidateTarget?.name });
     await context.close(); active = undefined;

@@ -211,6 +211,7 @@ export async function withMathRuntimeLease<T>(
     lockPath: string;
     flockExecutable: string;
     shared?: boolean;
+    waitMs?: number;
     signal?: AbortSignal;
   }>,
   operation: (lease: MathLease) => Promise<T>
@@ -238,7 +239,8 @@ export async function withMathRuntimeLease<T>(
     await new Promise<void>((resolve, reject) => {
       const child = spawn(
         input.flockExecutable,
-        [input.shared ? '--shared' : '--exclusive', '--nonblock', '--conflict-exit-code', '73', '3'],
+        [input.shared ? '--shared' : '--exclusive', ...(input.waitMs ? ['--timeout', String(input.waitMs / 1000)] : ['--nonblock']),
+          '--conflict-exit-code', '73', '3'],
         { stdio: ['ignore', 'ignore', 'ignore', descriptor], windowsHide: true }
       );
       let spawnFailed = false;
@@ -247,7 +249,7 @@ export async function withMathRuntimeLease<T>(
       });
       const timeout = setTimeout(() => {
         child.kill('SIGKILL');
-      }, 10_000);
+      }, Math.max(10_000, (input.waitMs ?? 0) + 1_000));
       child.once('close', (code) => {
         clearTimeout(timeout);
         if (!spawnFailed && code === 0) resolve();
