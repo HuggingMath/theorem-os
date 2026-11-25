@@ -52,8 +52,10 @@ const runner: WebRunner = {
   },
 };
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;
+const fixtureClientIpHeader = 'x-fixture-client-ip';
 const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin,
-  THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web'), THEOREMOS_WEB_DATA_ROOT: dataRoot, THEOREMOS_WEB_CONCURRENCY: '4' }), runner,
+  THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web'), THEOREMOS_WEB_DATA_ROOT: dataRoot, THEOREMOS_WEB_CONCURRENCY: '4',
+  THEOREMOS_WEB_CLIENT_IP_HEADER: fixtureClientIpHeader }), runner,
 { sample: null, mailer: async () => { prohibited++; throw new Error('No mail allowed'); } });
 const browser = await startBrowser(service.server, port);
 async function http<T>(page: Page, method: string, pathname: string, input?: unknown): Promise<T> {
@@ -67,7 +69,11 @@ async function http<T>(page: Page, method: string, pathname: string, input?: unk
 try {
   for (const [language, width] of [['zh', 1440], ['en', 390]] as const) {
     phase = `setup-${language}-${width}`;
-    const actors = await Promise.all([0, 1].map(() => browser.newContext({ locale: language === 'zh' ? 'zh-CN' : 'en-US', viewport: { width, height: 1000 }, reducedMotion: 'reduce' })));
+    // Each simulated visitor has its own rate limit, even though Chromium connects over loopback.
+    const firstAddress = language === 'zh' ? 1 : 3;
+    const actors = await Promise.all([0, 1].map(index => browser.newContext({ locale: language === 'zh' ? 'zh-CN' : 'en-US',
+      viewport: { width, height: 1000 }, reducedMotion: 'reduce',
+      extraHTTPHeaders: { [fixtureClientIpHeader]: `192.0.2.${firstAddress + index}` } })));
     for (const actor of actors) {
       await actor.addInitScript(language => { try { localStorage.setItem('theorem-os.web-locale.v1', language); } catch {} }, language);
       await preferFullCollaboration(actor);

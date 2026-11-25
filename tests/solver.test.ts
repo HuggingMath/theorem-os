@@ -3344,20 +3344,23 @@ describe('isolated solver and host acceptance', () => {
     await expect((cooperative as any).check(task, assignment, workspace, submittedCommit)).rejects.toThrow('math_task_check_identity_changed');
   });
 
+  const budgetFixturePlan = () => waitingPlanTasks().map(task => task.id === 'a' ? { ...task, ownerId: 'researcher-1' }
+    : task.id === 'b' ? { ...task, ownerId: 'researcher-2' } : task);
+
   it.each([false, true])('keeps healthy peers available while a pending open settles with failure=%s', async failure => {
     configureCooperation(async (action, options) => {
-      if (action.kind === 'lead') writePlan(options.workspace,
-        planTasks().map(task => task.kind === 'goal' ? { ...task, conditional: false } : task));
+      if (action.kind === 'lead') writePlan(options.workspace, budgetFixturePlan());
       else finishAssignment(action, options);
       return 'completed';
     });
+    let pendingOpen: { turns: number; healthyPhase: string } | undefined;
     const open = async (...inputs: Parameters<typeof directSolverModules.M1.open>) => {
       if (inputs[0].environment!.DEEPSCIENTIST_MATH_WORKER_ID === 'researcher-2') {
         await expect.poll(() => cooperationState().tasks[0].status).toBe('integrated');
         // Let the healthy worker reach its next assignment request while the last turn is still reserved.
         await new Promise(resolve => setImmediate(resolve));
         const state = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
-        expect(state.workers.find((worker: any) => worker.id === 'researcher-1').phase).not.toBe('finished');
+        pendingOpen = { turns: state.turns, healthyPhase: state.workers.find((worker: any) => worker.id === 'researcher-1').phase };
         if (failure) throw new Error('fixture_pending_open_failed');
       }
       return directSolverModules.M1.open(...inputs);
@@ -3366,6 +3369,9 @@ describe('isolated solver and host acceptance', () => {
       { ...directSolverModules, M1: { ...directSolverModules.M1, open } });
     const state = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
     expect(code).toBe(failure ? 1 : 4);
+    expect(pendingOpen).toMatchObject({ turns: 3, healthyPhase: expect.not.stringMatching(/^finished$/u) });
+    if (failure) expect(state.workers.find((worker: any) => worker.id === 'researcher-2'))
+      .toMatchObject({ error: 'fixture_pending_open_failed', turns: 0 });
     expect(state.turns).toBe(3);
     expect(state.cooperation.tasks.slice(0, 2).map((node: any) => node.status)).toEqual(['integrated', 'integrated']);
     expect(state.cooperation.tasks.slice(0, 2).map((node: any) => node.attempts)).toEqual([1, 1]);
@@ -3377,16 +3383,17 @@ describe('isolated solver and host acceptance', () => {
 
   it('keeps preassigned peers available when another worker reserves the last turn', async () => {
     configureCooperation(async (action, options) => {
-      if (action.kind === 'lead') writePlan(options.workspace,
-        planTasks().map(task => task.kind === 'goal' ? { ...task, conditional: false } : task));
+      if (action.kind === 'lead') writePlan(options.workspace, budgetFixturePlan());
       else finishAssignment(action, options);
       return 'completed';
     });
+    let pendingOpen: { turns: number; peerPhase: string; assignment: unknown } | undefined;
     const open = async (...inputs: Parameters<typeof directSolverModules.M1.open>) => {
       if (inputs[0].environment!.DEEPSCIENTIST_MATH_WORKER_ID === 'researcher-1') {
         await new Promise(resolve => setImmediate(resolve));
         const state = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
-        expect(state.workers.find((worker: any) => worker.id === 'researcher-2').phase).not.toBe('finished');
+        pendingOpen = { turns: state.turns, peerPhase: state.workers.find((worker: any) => worker.id === 'researcher-2').phase,
+          assignment: state.cooperation.tasks[1].assignment };
         throw new Error('fixture_pending_open_failed');
       }
       return directSolverModules.M1.open(...inputs);
@@ -3394,6 +3401,10 @@ describe('isolated solver and host acceptance', () => {
     expect(await runSolver([...args, '--workers', '4', '--max-turns', '2'], directory,
       { ...directSolverModules, M1: { ...directSolverModules.M1, open } })).toBe(1);
     const state = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
+    expect(pendingOpen).toMatchObject({ turns: 2, peerPhase: expect.not.stringMatching(/^finished$/u),
+      assignment: { taskId: 'b', workerId: 'researcher-2' } });
+    expect(state.workers.find((worker: any) => worker.id === 'researcher-1'))
+      .toMatchObject({ error: 'fixture_pending_open_failed', turns: 0 });
     expect(state.turns).toBe(2);
     expect(state.workers.find((worker: any) => worker.id === 'researcher-2').turns).toBe(1);
     expect(state.cooperation.tasks[1]).toMatchObject({ status: 'integrated', attempts: 1 });
@@ -4007,27 +4018,42 @@ describe('isolated solver and host acceptance', () => {
   });
 
   it('discards a proof superseded by an edit while its independent check is running', async () => {
-    configureCooperation(undefined, waitingPlanTasks);
+    let originalSubmission: { commit: string; taskDigest: string } | undefined;
+    const originalDelivery = () => cooperationState().deliveries?.find((delivery: any) =>
+      delivery.taskId === 'a' && delivery.kind === 'proof' && delivery.commit === originalSubmission?.commit &&
+      delivery.taskDigest === originalSubmission?.taskDigest);
+    configureCooperation(async (action, options) => {
+      if (action.kind === 'lead') { writePlan(options.workspace, waitingPlanTasks()); return 'completed'; }
+      if (action.kind === 'task' && action.task.id === 'a' && action.task.revision === 1) {
+        // Let the old check settle before final proof acceptance cancels outstanding work.
+        await expect.poll(() => originalDelivery()?.status, { timeout: 5_000 }).toBe('superseded');
+      }
+      finishAssignment(action, options);
+      if (action.kind === 'task' && action.task.id === 'a' && action.task.revision === 0)
+        originalSubmission = { commit: commitSolverSources(problem, options.workspace), taskDigest: action.assignment.taskDigest };
+      return 'completed';
+    });
     let edited = false;
     const checkTask = async (...inputs: Parameters<typeof directSolverModules.M2.checkTask>) => {
       const proof = await directSolverModules.M2.checkTask(...inputs);
-      if (inputs[3].id === 'a' && !edited) {
+      if (inputs[2] === originalSubmission?.commit && inputs[4].taskDigest === originalSubmission?.taskDigest && !edited) {
+        expect(proof.passed).toBe(true);
         edited = true;
         const journal = JSON.parse(fs.readFileSync(path.join(inputs[1], 'COOPERATION.json'), 'utf8'));
         fs.appendFileSync(path.join(`${output}.runtime`, 'edits.jsonl'), JSON.stringify({
           id: 'during-check', baseVersion: journal.planVersion,
           tasks: waitingPlanTasks().map(task => task.id === 'a' ? { ...task, revision: 1 } : task),
         }) + '\n');
-        await vi.waitFor(() => expect(cooperationState().edits?.some((edit: any) =>
-          edit.id === 'during-check' && edit.status === 'applied')).toBe(true));
+        await expect.poll(() => cooperationState().edits?.find((edit: any) => edit.id === 'during-check')?.status,
+          { timeout: 5_000 }).toBe('applied');
       }
       return proof;
     };
     expect(await runSolver([...args, '--workers', '4', '--max-turns', '8'], directory,
       { ...directSolverModules, M2: { ...directSolverModules.M2, checkTask } })).toBe(0);
-    const state = cooperationState();
-    expect(state.deliveries.some((delivery: any) => delivery.taskId === 'a' && delivery.status === 'superseded')).toBe(true);
-    expect(state.tasks.find((node: any) => node.task.id === 'a')).toMatchObject({ task: { revision: 1 }, status: 'integrated' });
+    expect(edited).toBe(true);
+    expect(originalDelivery()?.status).toBe('superseded');
+    expect(cooperationState().tasks.find((node: any) => node.task.id === 'a')).toMatchObject({ task: { revision: 1 }, status: 'integrated' });
   });
 
   it('does not accept checked partial proofs as a solution and rechecks integrated evidence on resume', async () => {
@@ -6153,19 +6179,20 @@ describe('isolated solver and host acceptance', () => {
 
   it('checks and integrates an immutable early proof before its producer finishes the turn', async () => {
     const consumerStarted = deferred();
-    let deliveredCommit: string | undefined;
+    let deliveredCommit: string | undefined, producerId: string | undefined;
+    let consumer: { message: string; accepted: boolean } | undefined;
     configureCooperation(async (action, options, message) => {
       if (action.kind === 'lead') { writePlan(options.workspace, waitingPlanTasks()); return 'completed'; }
       if (action.kind === 'task' && action.task.id === 'a') {
         finishAssignment(action, options);
+        producerId = options.environment!.DEEPSCIENTIST_MATH_WORKER_ID;
         deliveredCommit = commitSolverSources(problem, options.workspace);
         appendDelivery(options, action, { id: 'early-a', kind: 'proof', summary: 'The helper is ready', commit: deliveredCommit });
         await consumerStarted.promise;
         expect(cooperationState().tasks[0].status).toBe('integrated');
       } else {
         if (action.kind === 'task' && action.task.id === 'first') {
-          expect(message).toContain('early-a');
-          expect(host.officialGate).not.toHaveBeenCalled();
+          consumer = { message, accepted: host.officialGate.mock.calls.length > 0 };
           consumerStarted.resolve();
         }
         finishAssignment(action, options);
@@ -6179,10 +6206,11 @@ describe('isolated solver and host acceptance', () => {
         results: result.results.map(receipt => ({ ...receipt, stdoutPreview: 'FULL_CHECK_OUTPUT' })) };
     });
     expect(await runSolver([...args, '--workers', '4', '--max-turns', '6'], directory)).toBe(0);
+    expect(consumer).toMatchObject({ message: expect.stringContaining('early-a'), accepted: false });
     const state = cooperationState(), proof = state.tasks[0].proof, integrated = state.tasks[0].integratedCheck;
     const delivery = state.deliveries.find((record: any) => record.submissionId === 'early-a');
     expect(delivery).toMatchObject({
-      kind: 'proof', status: 'verified', producer: 'researcher-1', commit: integrated.commit,
+      kind: 'proof', status: 'verified', producer: producerId, commit: integrated.commit,
       sourceDigest: integrated.sourceDigest,
       statement: 'True', remainingObligations: [], evidence: { passed: true } });
     expect(delivery.actualReferences).toEqual(integrated.references);
@@ -6201,6 +6229,8 @@ describe('isolated solver and host acceptance', () => {
 
   it('starts a conditional sketch before its proof dependency, steers it with public progress and retains the unproved obligation', async () => {
     const sketchStarted = deferred(), progressNotified = deferred();
+    let sketchWorkspace: string | undefined, producerId: string | undefined;
+    let initialPeerStatus: string | undefined, notifiedPeer: unknown;
     const tasks: CooperativeTask[] = [
       { ...planTasks()[0], groupId: 'alternative', sharing: 'problem' },
       { id: 'draft', kind: 'sketch', objective: 'Explore the bridge before it is proved', dependsOn: ['a'], revision: 0, groupId: 'main' },
@@ -6209,14 +6239,16 @@ describe('isolated solver and host acceptance', () => {
     configureCooperation(async (action, options) => {
       if (action.kind === 'lead') writePlan(options.workspace, tasks, routeGroups());
       else if (action.kind === 'task' && action.task.id === 'a') {
+        producerId = options.environment!.DEEPSCIENTIST_MATH_WORKER_ID;
         await sketchStarted.promise;
         appendDelivery(options, action, { id: 'hint-a', kind: 'progress', summary: 'Try True.intro', remainingObligations: ['a'] });
         await progressNotified.promise;
         await expect.poll(() => cooperationState().tasks.find((node: any) => node.task.id === 'draft')?.status).toBe('completed');
         finishAssignment(action, options);
       } else if (action.kind === 'task' && action.task.id === 'draft') {
+        sketchWorkspace = options.workspace;
         const peers = JSON.parse(fs.readFileSync(path.join(options.workspace, 'COOPERATION.json'), 'utf8')).peers;
-        expect(peers.find((peer: any) => peer.id === 'a')).toMatchObject({ status: 'running', owner: 'researcher-1' });
+        initialPeerStatus = peers.find((peer: any) => peer.id === 'a')?.status;
         sketchStarted.resolve(); await progressNotified.promise;
         fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), '```math-result\n' + JSON.stringify({
           taskId: 'draft', summary: 'Conditional argument using a', conclusion: 'supporting', evidenceRefs: ['hint-a'] }) + '\n```');
@@ -6231,10 +6263,16 @@ describe('isolated solver and host acceptance', () => {
     });
     const create = host.createSession.getMockImplementation()!;
     host.createSession.mockImplementation(async (options: MathAgentOptions) => ({ ...await create(options), notify: vi.fn(async () => {
+      if (options.workspace !== sketchWorkspace) return;
       const snapshot = JSON.parse(fs.readFileSync(path.join(options.workspace, 'COOPERATION.json'), 'utf8'));
-      if (snapshot.deliveries.some((record: any) => record.submissionId === 'hint-a')) progressNotified.resolve();
+      if (snapshot.deliveries.some((record: any) => record.submissionId === 'hint-a')) {
+        notifiedPeer = snapshot.peers.find((peer: any) => peer.id === 'a');
+        progressNotified.resolve();
+      }
     }) }));
     expect(await runSolver([...args, '--workers', '4', '--max-turns', '6'], directory)).toBe(0);
+    expect(['pending', 'running']).toContain(initialPeerStatus);
+    expect(notifiedPeer).toMatchObject({ status: 'running', owner: producerId });
     const records = cooperationState().deliveries;
     expect(records.find((record: any) => record.submissionId === 'hint-a')).toMatchObject({ status: 'conditional', remainingObligations: ['a'] });
     expect(records.find((record: any) => record.taskId === 'draft' && record.kind === 'research')).toMatchObject({
