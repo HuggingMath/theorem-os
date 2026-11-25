@@ -62,9 +62,11 @@ try {
     await context.addInitScript(({ key, language }) => localStorage.setItem(key, language), { key: localeStorageKey, language });
     await context.route(/^https?:\/\//u, async route => { if (new URL(route.request().url()).origin !== origin) { external.push(route.request().url()); await route.abort(); } else await route.continue(); });
     const page = await context.newPage(); active = page; page.setDefaultTimeout(15_000); page.on('pageerror', error => errors.push(error.message));
-    await page.goto(origin + '/problem.html'); await page.locator('[data-problem-page]').waitFor();
+    // Opening the workspace during seeding can auto-select an attempt and create the read baseline early.
+    const session = await page.goto(origin + '/api/session');
+    assert.ok(session?.ok());
     const owner = (await context.cookies(origin)).find(item => item.name === 'theoremos_session')!.value;
-    const provider = (await read<{ providers: { id: string }[] }>(page, '/api/session')).providers[0];
+    const provider = (await session.json()).providers[0];
     const input = { providerId: provider.id, apiKey: 'sk-fixture-never-sent', model: 'fixture-model', effort: 'high' as const, environment: sample.run.environment,
       source: sample.run.source.trim(), maxTurns: 2, maxRunSeconds: 60, maxTotalTokens: 10000, workers: 2, coordination: 'cooperative' as const };
     const parent = service.jobs.create(owner, { ...input, task: 'Parent branch' }, provider as never);
