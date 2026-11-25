@@ -10,6 +10,7 @@ import { readWebConfig, type WebConfig } from '../apps/web/config';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import { loadWebSample } from '../apps/web/sample';
 import { decodeTaskDraft } from '../apps/web/client/draft';
+import { readWebArchiveObservations, type StoredWebArchiveV2 } from '../apps/web/storage';
 import type { WebRunner } from '../apps/web/runner';
 import { webLimits, webSampleRunId, type WebResult, type WebRun, type WebRunInput, type WebSession, type WorkerInput, type WorkerMessage } from '../apps/web/shared';
 import type { WebObservation } from '../apps/web/collaboration';
@@ -590,7 +591,7 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
       expect(visible.status).toBe('completed');
       if (route.endsWith('/download')) {
         expect(response.headers.get('content-disposition')).toContain(`theoremos-${run.id}.json`);
-        expect(data.schema).toBe('theorem-os.web-archive.v1');
+        expect(data.schema).toBe('theorem-os.web-archive.v2');
       }
     }
     expect((await request(`/api/runs/${run.id}/download`, bob)).status).toBe(404);
@@ -632,7 +633,7 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     expect(sample.actions.map((action: { workerId: string; kind: string }) => `${action.workerId}:${action.kind}`)).toEqual(
       ['solver:edit', 'engineer:edit', 'solver:edit', 'engineer:edit', 'researcher-1:edit']);
     const bundleResponse = await request(`${route}/download`, alice), bundle = await bundleResponse.json();
-    expect(bundle.schema).toBe('theorem-os.web-archive.v1');
+    expect(bundle.schema).toBe('theorem-os.web-archive.v2');
     expect(bundle.events.length).toBeGreaterThan(250);
     expect(bundle.events[0].sequence).toBe(1);
     expect(bundle.actions).toHaveLength(3);
@@ -656,10 +657,13 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     const owner = alice.cookie.slice('theoremos_session='.length);
     service.storage.saveCommand(owner, run.id, 'saved-guidance', { id: 'saved-guidance', status: 'delivered' });
     runner.calls[0].finish(); await tick();
-    const archive = await (await request(`/api/runs/${run.id}/download`, alice)).json();
+    const archive = await (await request(`/api/runs/${run.id}/download`, alice)).json() as StoredWebArchiveV2;
     expect(archive.observations).toHaveLength(4);
     expect(archive.sources.length).toBeGreaterThan(0); expect(archive.checks.length).toBeGreaterThan(0);
-    expect(archive.sources).toContainEqual(recording.observations[0].sources[0]);
+    const recordedSource = recording.observations[0].sources[0];
+    const source = archive.sources.find(item => item.taskVersion === recordedSource.taskVersion && item.commit === recordedSource.commit);
+    expect(source && archive.sourceBlobs[source.source.sha256]).toBe(recordedSource.source);
+    expect(readWebArchiveObservations(archive).observations[0].sources[0]).toEqual(recordedSource);
     expect(archive.commands).toEqual([{ id: 'saved-guidance', status: 'delivered' }]);
     expect(archive.summary).toMatchObject({ observations: 4, commands: 1, requiresFreshCheck: true,
       coverage: { observations: 'complete', actions: 'complete', commands: 'recorded' } });
@@ -688,7 +692,7 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     expect(data.run.error).toContain('[REDACTED]');
     const download = await request(`/api/runs/${run.id}/download`, alice);
     expect(download.status).toBe(200);
-    expect(await download.json()).toMatchObject({ schema: 'theorem-os.web-archive.v1', run: data.run,
+    expect(await download.json()).toMatchObject({ schema: 'theorem-os.web-archive.v2', run: data.run,
       events: data.run.events, observations: [], actions: [], sources: [], checks: [], commands: [] });
     expect(data.run).not.toHaveProperty('result');
     expect(await (await request('/api/runs', alice)).text()).not.toContain(key);
@@ -715,7 +719,7 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     const text = await response.text();
     expect(text).not.toContain(key);
     const archive = JSON.parse(text);
-    expect(archive.schema).toBe('theorem-os.web-archive.v1');
+    expect(archive.schema).toBe('theorem-os.web-archive.v2');
     expect(archive.run).toEqual((await (await request(`/api/runs/${run.id}`, alice)).json()).run);
     expect(archive.run.status).toBe(status);
     expect(archive.run.source).toBe(submitted.source.replaceAll(key, '[REDACTED]'));
@@ -744,7 +748,7 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     const received = await request(`/api/runs/${first.id}/download`, alice);
     expect(received.status).toBe(200);
     const archive = await received.json();
-    expect(archive.schema).toBe('theorem-os.web-archive.v1');
+    expect(archive.schema).toBe('theorem-os.web-archive.v2');
     expect(archive.run.status).toBe('running');
     expect(archive.run.result).toEqual(result);
     expect(runner.calls[0].signal.aborted).toBe(false);

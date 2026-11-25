@@ -126,15 +126,25 @@ export function buildTrajectory(input: TrajectoryInput): TrajectoryStep[] {
     if (found) found.used = true;
     return found;
   };
-  /** An assembled check covers every target; the copies stored under each goal task are one check. */
+  /** Match the batch outcome and prefer a receipt that explains why it passed or failed. */
   const claimAssembly = (at: number, passed: boolean) => {
-    const found = claim(at, slot => slot.check.passed === passed && (!targets.length || targets.every(name => slot.check.theorems.includes(name))));
-    if (found) for (let position = firstAt(found.check.at); position < slots.length && slots[position]!.check.at === found.check.at; position++)
-      if (slots[position]!.version.commit === found.version.commit) slots[position]!.used = true;
+    const found = claim(at, slot => slot.check.originalProblemPassed === passed && slot.check.passed === passed) ??
+      claim(at, slot => slot.check.originalProblemPassed === passed) ??
+      claim(at, slot => slot.check.originalProblemPassed === undefined && slot.check.passed === passed &&
+        (!targets.length || targets.every(name => slot.check.theorems.includes(name))));
+    // Older pages may still have a complete copy of the same batch under each goal.
+    if (found && found.check.originalProblemPassed === undefined) {
+      for (let position = firstAt(found.check.at); position < slots.length && slots[position]!.check.at === found.check.at; position++) {
+        const slot = slots[position]!;
+        if (slot.version.commit === found.version.commit && slot.check.originalProblemPassed === undefined) slot.used = true;
+      }
+    }
     return found;
   };
+  const forTask = (slot: Slot, taskId: string, passed?: boolean) => slot.version.taskId === taskId &&
+    slot.check.originalProblemPassed === undefined && (passed === undefined || slot.check.passed === passed);
   const latestCheck = (taskId: string, at: number) => {
-    for (let position = firstAt(at + 1) - 1; position >= 0; position--) if (slots[position]!.version.taskId === taskId) return slots[position];
+    for (let position = firstAt(at + 1) - 1; position >= 0; position--) if (forTask(slots[position]!, taskId)) return slots[position];
   };
   const refOf = (slot: Slot | undefined): TrajectoryRef | undefined => slot && { version: slot.version, check: slot.check };
   const deliveryFor = proofDeliveryLookup(data.deliveries.values());
@@ -160,7 +170,7 @@ export function buildTrajectory(input: TrajectoryInput): TrajectoryStep[] {
       // A reused check is the latest recorded one of the task; it is not claimed again.
       slot = latestCheck(taskId, at);
       passed ??= event.type === 'task_failure_check_reused' ? false : slot?.check.passed;
-    } else slot = claim(at, item => item.version.taskId === taskId && (passed === undefined || item.check.passed === passed));
+    } else slot = claim(at, item => forTask(item, taskId, passed));
     if (passed === undefined) return;
     const ref = refOf(slot), outcome: TrajectoryOutcome = passed ? details.conditional ? 'conditional' : 'passed' : 'failed';
     const previous = lastAttempt.get(taskId);
@@ -172,14 +182,14 @@ export function buildTrajectory(input: TrajectoryInput): TrajectoryStep[] {
     const taskId = event.details?.taskId;
     if (!taskId) return;
     // Integrating checks the task on the main line; that check belongs to this step, not to a new attempt.
-    claim(at, item => item.version.taskId === taskId && item.check.passed);
+    claim(at, item => forTask(item, taskId, true));
     const step = lastAttempt.get(taskId);
     if (step) step.integrated = true;
   };
   const recheck = (event: WebEvent, at: number) => {
     const taskId = event.details?.taskId, passed = event.details?.passed;
     if (!taskId) return;
-    const slot = claim(at, item => item.version.taskId === taskId && (passed === undefined || item.check.passed === passed));
+    const slot = claim(at, item => forTask(item, taskId, passed));
     const result: RecheckResult = { taskId, passed: passed ?? slot?.check.passed ?? false, ref: refOf(slot),
       ...(event.type === 'task_conditional_recheck_finished' ? { conditional: true } : {}) };
     const last = steps.at(-1);
@@ -253,10 +263,10 @@ export function buildTrajectory(input: TrajectoryInput): TrajectoryStep[] {
   inputs.sort((a, b) => a.at - b.at || a.order - b.order || a.sequence - b.sequence);
   for (const item of inputs) item.run();
 
-  // Every unconsumed check is an attempt of its own, even when the same commit was checked more than once.
+  // Every unconsumed task check is an attempt of its own, even when the same commit was checked more than once.
   // Assembly, integration and rechecks already consumed their slots; reusing a receipt does not consume a new check.
   for (const { version, check, used } of slots) {
-    if (used) continue;
+    if (used || check.originalProblemPassed !== undefined) continue;
     steps.push({ kind: 'attempt', at: check.at, taskId: version.taskId, workerId: owners.get(version.taskId), number: 0,
       outcome: check.passed ? 'passed' : 'failed', ref: { version, check }, reused: false, integrated: false, note: noteOf(version.taskId, { version, check }) });
   }

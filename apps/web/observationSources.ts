@@ -2,12 +2,12 @@ import { mathDigest } from '../../src/math/mathRuntimeIo';
 import type { WebObservation, WebTaskSource } from './collaboration';
 
 type SourceReference = { sha256: string };
-type ObservationWithSource<Text> = Omit<WebObservation, 'sources'> & {
-  sources: (Omit<WebTaskSource, 'source' | 'dependencySources'> & {
-    source: Text; dependencySources?: { file: string; source: Text }[];
-  })[];
+type TaskSourceWithText<Text> = Omit<WebTaskSource, 'source' | 'dependencySources'> & {
+  source: Text; dependencySources?: { file: string; source: Text }[];
 };
+type ObservationWithSource<Text> = Omit<WebObservation, 'sources'> & { sources: TaskSourceWithText<Text>[] };
 
+export type CompactWebTaskSource = TaskSourceWithText<SourceReference>;
 export type CompactWebObservation = ObservationWithSource<SourceReference>;
 export type WorkerObservationFrame = {
   type: 'observation';
@@ -27,9 +27,10 @@ function mapSources<From, To>(observation: ObservationWithSource<From>, map: (so
   };
 }
 
-export function compactObservation(observation: WebObservation, save: (digest: string, text: string) => void): CompactWebObservation {
+/** Share text hashes across a batch of observations without reading or hashing unchanged text again. */
+export function observationCompactor(save: (digest: string, text: string) => void): (observation: WebObservation) => CompactWebObservation {
   const digests = new Map<string, string>();
-  return mapSources(observation, (source: string) => {
+  return observation => mapSources(observation, (source: string) => {
     let sha256 = digests.get(source);
     if (!sha256) {
       sha256 = mathDigest(source);
@@ -38,6 +39,10 @@ export function compactObservation(observation: WebObservation, save: (digest: s
     }
     return { sha256 };
   });
+}
+
+export function compactObservation(observation: WebObservation, save: (digest: string, text: string) => void): CompactWebObservation {
+  return observationCompactor(save)(observation);
 }
 
 /** Legacy records inline their sources. References must all resolve before handing the observation to a consumer. */

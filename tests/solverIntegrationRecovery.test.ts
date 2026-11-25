@@ -6,6 +6,7 @@ import type { SolverRunState } from '../src/solver/archive';
 import type { CooperativeResearch } from '../src/solver/cooperation';
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import { committedSource, commitSolverSources, type SolverProblem } from '../src/solver/problem';
+import { TaskTypePreflightCache } from '../src/solver/taskTypePreflight';
 import { assignmentDeliveryFile, taskVersion, type CooperativeAction, type CooperativeTask } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
@@ -197,6 +198,47 @@ describe('checked task integration recovery', () => {
     expect(node().proof).not.toBe(restored);
     expect(node().feedback).toBeUndefined();
     expect(host.verify).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])('dispatches a different same-type declaration after an exhausted proof failure (legacy=%s)', async legacy => {
+    state.workers = workers.map(worker => ({ ...worker, phase: 'running', turns: 0 }));
+    Object.assign(state.workers[1], { sessionTaskId: action.task.id, sessionTaskVersion: taskVersion(action.task) });
+    const failedCommit = writeLemma(workers[1], 'lemma recovery_lemma : True := by exact missing_recovery_proof');
+    host.verify.mockImplementation(async request => failedBatch(verified(request), {
+      stdoutPreview: () => 'Submission.lean:3:1: error: unknown identifier missing_recovery_proof',
+    }));
+    await cooperative.deliver(workers[1], action, failedCommit);
+    expect(node().status).toBe('pending');
+    node().status = 'running';
+    expect(cooperative.started(workers[1], action)).toBe(true);
+    await cooperative.deliver(workers[1], action, failedCommit);
+    expect(node().status).toBe('blocked');
+    const [failure] = state.cooperation!.failedTaskInputs!;
+    if (legacy) delete failure.declarationDigest;
+
+    const nextTask: CooperativeTask = { ...action.task, id: 'independent_fact', objective: 'Prove a different fact.',
+      theoremName: 'Tutorial.independent_fact', ownerId: workers[1].id };
+    state.cooperation!.tasks.push({ task: nextTask, status: 'pending', attempts: 0 });
+    const goal = node('goal_0');
+    goal.task = { ...goal.task, status: 'active', dependsOn: [nextTask.id], conditional: false };
+    const refresh = () => (cooperative as any).refreshFailedTaskInputs();
+    refresh();
+    expect(node(nextTask.id)).toMatchObject({ status: 'pending', attempts: 0 });
+
+    // Another waiting worker may refresh dispatch while the host has reseeded this worktree for its next declaration.
+    const observationStart = events.length;
+    const preflight = vi.spyOn(TaskTypePreflightCache.prototype, 'check').mockImplementation(async input => {
+      refresh();
+      return { current: () => true, result: { status: 'deferred', inputDigest: 'offline-fixture', taskDigest: taskVersion(input.task),
+        reason: 'fixture-deferred', evidence: 'advisory-type-elaboration', proofAcceptance: 'not-assessed' } };
+    });
+    const next = await cooperative.next(workers[1], { maxTurns: Infinity, remainingMs: Infinity });
+    expect(next).toMatchObject({ kind: 'task', task: { id: nextTask.id } });
+    expect(preflight).toHaveBeenCalledOnce();
+    expect(node().status).toBe('blocked');
+    expect(events.slice(observationStart)).not.toContainEqual(expect.objectContaining({
+      event: 'task_failed_input_reopened', details: expect.objectContaining({ taskId: action.task.id }),
+    }));
   });
 
   it.each(['conditional', 'verified'] as const)('publishes a %s proof without using inherited failed feedback as its summary', async status => {

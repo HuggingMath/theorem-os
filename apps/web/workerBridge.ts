@@ -13,7 +13,7 @@ import { humanGuidanceInputSchema, queueHumanGuidance, readHumanGuidance, withdr
 import { parseCooperationPlan, taskGroup, taskVersion, type TaskRecord } from '../../src/solver/tasks';
 import { allowedKnowledgeFile, buildTheoremKnowledge, validateTheoremKnowledge, type TheoremKnowledgeBase } from '../../src/solver/theoremKnowledge';
 import { importKnowledgeRuns } from '../../src/solver/theoremKnowledgeRuns';
-import type { ProofCheck } from '../../src/solver/modules/evidence';
+import { proofReceiptsMatch, type ProofCheck } from '../../src/solver/modules/evidence';
 import type { WebCheckReceipt, WebCommand, WebCommandResult, WebObservation, WebTaskSource } from './collaboration';
 import type { WorkerMessage } from './shared';
 import { projectWebDeclarationArtifacts } from './declarationArtifacts';
@@ -131,15 +131,22 @@ function sourceProjection(state: SolverRunState, directory: string) {
       sourceBytes += bytes; sourceIds.add(key);
     } catch { sourcePartial = true; }
   };
-  const addProof = (node: Pick<TaskRecord, 'task'>, proof: ProofCheck) => {
+  const addProof = (node: Pick<TaskRecord, 'task'>, proof: ProofCheck, original?: SolverRunState['problem']['targets'][number]) => {
     const version = taskVersion(node.task);
     if ('taskDigest' in proof && proof.taskDigest !== version) { sourcePartial = true; checkPartial = true; return; }
     addSource(node, proof.commit, proof.sourceDigest);
     for (const receipt of proof.verification.results) {
+      if (receipt.proofPath !== node.task.proofPath || receipt.theoremName !== node.task.theoremName) continue;
       const id = receipt.receiptId || `observation-${mathDigest(canonicalMathJson(receipt))}`;
       const key = canonicalMathJson([node.task.id, version, proof.commit, id]);
       if (checkIds.has(key)) continue;
-      const record = { ...receipt, passed: proof.passed,
+      // The original-problem check can pass one target while failing the batch.
+      const passed = original ? proofReceiptsMatch({ ...proof.verification, status: receipt.status, results: [receipt] }, proof.commit, [{
+        proofPath: original.proofPath, theoremName: original.theoremName, expectedSourceDeclarationHash: original.declarationHash,
+        statementHash: state.problem.contract.statementHash, leanStatementHash: state.problem.contract.leanStatementHash, claim: 'statement',
+      }]) : proof.passed;
+      const record = { ...receipt, passed,
+        ...(original ? { originalProblemPassed: proof.passed } : {}),
         ...('conditions' in proof ? { conditions: proof.conditions ?? [] } : {}),
         ...('references' in proof ? { references: proof.references } : {}),
         verification: { schema: proof.verification.schema, status: proof.verification.status,
@@ -169,9 +176,11 @@ function sourceProjection(state: SolverRunState, directory: string) {
     }
     if (commit) addSource(node, commit); else sourcePartial = true;
   }
-  if (state.check) for (const node of state.cooperation?.tasks ?? []) if (node.task.kind === 'goal' &&
-      state.check.verification.results.some(receipt => receipt.proofPath === node.task.proofPath && receipt.theoremName === node.task.theoremName))
-    addProof(node, state.check);
+  if (state.check) for (const node of state.cooperation?.tasks ?? []) if (node.task.kind === 'goal') {
+    const target = state.problem.targets.find(item => item.proofPath === node.task.proofPath && item.theoremName === node.task.theoremName);
+    if (target && state.check.verification.results.some(receipt =>
+      receipt.proofPath === target.proofPath && receipt.theoremName === target.theoremName)) addProof(node, state.check, target);
+  }
   if (!state.cooperation?.tasks.length && state.problem.targets.length) sourcePartial = true;
   return { sources, checks, coverage: { sources: sourcePartial ? 'partial' as const : 'recorded' as const,
     checks: checkPartial ? 'partial' as const : 'recorded' as const } };

@@ -5,12 +5,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { webSampleRunId, webSampleSchema, type WebSampleFile } from '../apps/web/sample';
 import { sampleActions } from './web-sample-actions';
-import type { StoredWebArchive } from '../apps/web/storage';
+import { readWebArchiveObservations, type StoredWebArchive } from '../apps/web/storage';
 
 const input = path.resolve(process.argv[2] ?? 'out/web-cooperative-smoke/archive.json');
 const output = path.resolve('apps/web/sample/run.json');
 const archive = JSON.parse(fs.readFileSync(input, 'utf8')) as StoredWebArchive;
-if (archive.schema !== 'theorem-os.web-archive.v1' || archive.run.result?.status !== 'evaluated_passed')
+if (!['theorem-os.web-archive.v1', 'theorem-os.web-archive.v2'].includes(archive.schema) || archive.run.result?.status !== 'evaluated_passed')
   throw new Error(`${input} is not an accepted web archive`);
 
 const from = archive.run.id;
@@ -29,12 +29,13 @@ const readable: [recorded: string, shown: string][] = [
   ['Prove Tutorial.zero_add using Nat.zero_add.', '证明 Tutorial.zero_add：可以直接用 Nat.zero_add。'],
 ];
 // Ids, the smoke marker and the container work directory are replaced everywhere, including nested records.
-let text = JSON.stringify({ run: archive.run, observations: archive.observations, events: archive.events });
+const recorded = readWebArchiveObservations(archive);
+let text = JSON.stringify({ ...recorded, events: archive.events });
 text = text.replaceAll(from, webSampleRunId)
   .replaceAll('WEB_COOPERATIVE_SMOKE\\n', '').replaceAll('WEB_COOPERATIVE_SMOKE', title)
   .replace(/\/work\/run-[A-Za-z0-9]+\//gu, '/workspace/');
 for (const [recorded, shown] of readable) text = text.replaceAll(JSON.stringify(recorded).slice(1, -1), JSON.stringify(shown).slice(1, -1));
-const data = JSON.parse(text) as Pick<StoredWebArchive, 'run' | 'observations' | 'events'>;
+const data = JSON.parse(text) as typeof recorded & Pick<StoredWebArchive, 'events'>;
 const sample: WebSampleFile = {
   schema: webSampleSchema,
   recordedAt: archive.summary.createdAt,

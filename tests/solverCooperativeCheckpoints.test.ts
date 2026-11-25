@@ -460,8 +460,9 @@ describe('cooperative advisory scheduling checkpoints', () => {
       expect(vi.getTimerCount()).toBe(0);
     });
 
-  it.each(['ready', 'compacting', 'claimed-elsewhere', 'target-lost-at-boundary', 'dispatch-mismatch'] as const)(
-    'only checkpoints at the request boundary with a saved draft and the same proof (%s)', async outcome => {
+  it.each(['ready', 'ready-with-structured-draft', 'compacting', 'claimed-elsewhere', 'target-lost-at-boundary',
+    'dispatch-mismatch', 'completed-with-ready-proof', 'completed-with-reassigned-proof'] as const)(
+    'preserves drafts and completed findings during a typed proof handoff (%s)', async outcome => {
       const { state, workers, check, events, controller, run, wake } = fixture(false, undefined, undefined, true);
       const held = heldAdvisoryTurns(2, ['investigate', 'goal_1']);
       const open = async (options: MathAgentOptions): Promise<MathAgentSession> => ({
@@ -477,6 +478,9 @@ describe('cooperative advisory scheduling checkpoints', () => {
           // A peer becomes responsible for the goal after the final handoff check and before dispatch.
           reassignGoal();
         }
+        // Once the finding is published, this fixture with no available proof owner would wake the Lead.
+        if (outcome === 'completed-with-reassigned-proof' && event === 'research_delivered')
+          controller.abort(new Error('fixture_complete'));
       });
       void completion.catch(() => {});
       await held.wait(0, completion);
@@ -498,14 +502,33 @@ describe('cooperative advisory scheduling checkpoints', () => {
       await vi.advanceTimersByTimeAsync(5_000);
       expect(held.notify).toHaveBeenCalledWith(expect.stringContaining('A typed proof task is now ready'), { mode: 'advisory' });
       expect(boundary()).toBe(false);
-      const notes = 'Inspected the exact pinned input. The independent review is unfinished.\n';
+      const completedReview = outcome === 'completed-with-ready-proof' || outcome === 'completed-with-reassigned-proof';
+      const notes = completedReview || outcome === 'ready-with-structured-draft'
+        ? JSON.stringify({ summary: 'The interface is feasible by the displayed construction.', conclusion: 'supporting',
+          evidenceRefs: ['construction:fixture'] })
+        : 'Inspected the exact pinned input. The independent review is unfinished.\n';
       activity({ event: 'item_started', itemType: 'commandExecution' });
       fs.writeFileSync(path.join(workers[1].worktree, 'RESEARCH.md'), notes);
       expect(boundary()).toBe(false);
       activity({ event: 'item_completed', itemType: 'commandExecution' });
       expect(held.interrupt).not.toHaveBeenCalled();
 
-      if (outcome === 'claimed-elsewhere') {
+      if (completedReview) {
+        if (outcome === 'completed-with-reassigned-proof') { reassignGoal(); expect(boundary()).toBe(false); }
+        held.done[0].resolve('completed');
+        await vi.waitFor(() => expect(events.some(({ event }) =>
+          event === 'research_delivered' || event === 'feasibility_review_checkpoint_saved')).toBe(true));
+        const audit = state.cooperation!.tasks.find(node => node.task.id === 'investigate')!;
+        expect(audit).toMatchObject({ status: 'completed', finding: expect.stringContaining('displayed construction') });
+        expect(audit.researchCompletion).toBeDefined();
+        expect(events).toContainEqual({ event: 'research_delivered',
+          details: expect.objectContaining({ taskId: 'investigate', complete: true }) });
+        expect(events.some(({ event }) => event === 'turn_checkpoint')).toBe(false);
+        if (outcome === 'completed-with-ready-proof') {
+          await held.wait(1, completion);
+          expect(held.actions[1].task.id).toBe('goal_1');
+        }
+      } else if (outcome === 'claimed-elsewhere') {
         // The existing handoff is stale by the time the model asks for another request.
         reassignGoal();
         expect(boundary()).toBe(false);
@@ -533,11 +556,13 @@ describe('cooperative advisory scheduling checkpoints', () => {
               cooldownUntil: Date.now() + 10 * 60_000 }) });
         } else expect(events.some(item => item.event === 'cooperative_preemption_mismatch')).toBe(false);
       }
-      const audit = state.cooperation!.tasks.find(node => node.task.id === 'investigate')!;
-      const draft = state.cooperation!.researchDrafts!.investigate;
-      expect(audit.researchCompletion).toBeUndefined();
-      expect(draft.feasibilityInputDigest).toBe(held.actions[0].assignment.feasibilityInputDigest);
-      expect(committedSource(workers[1].worktree, draft.commit, 'RESEARCH.md')).toBe(notes);
+      if (!completedReview) {
+        const audit = state.cooperation!.tasks.find(node => node.task.id === 'investigate')!;
+        const draft = state.cooperation!.researchDrafts!.investigate;
+        expect(audit.researchCompletion).toBeUndefined();
+        expect(draft.feasibilityInputDigest).toBe(held.actions[0].assignment.feasibilityInputDigest);
+        expect(committedSource(workers[1].worktree, draft.commit, 'RESEARCH.md')).toBe(notes);
+      }
       expect(held.interrupt).not.toHaveBeenCalled(); expect(check).not.toHaveBeenCalled();
       controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
       expect(vi.getTimerCount()).toBe(0);

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import type { WebObservation } from './collaboration';
+import { projectStoredObservationChecks } from './observationChecks';
 import { webArchive } from './storage';
 import { webAgentActionLimits, webSampleRunId, type WebAgentAction, type WebEvent, type WebRun } from './shared';
 import { recordedTrajectory, trajectoryPage, trajectoryQuery, trajectoryVersion, trajectoryVersionDetail, trajectoryVersionQuery, type TrajectoryIndex } from './trajectory';
@@ -25,7 +26,10 @@ const readOnly: WebSampleResponse = { status: 403, body: { error: '示例运行�
 export function loadWebSample(file = new URL('./sample/run.json', import.meta.url)): WebSampleFile | undefined {
   try {
     const sample = JSON.parse(fs.readFileSync(file, 'utf8')) as WebSampleFile;
-    return sample.schema === webSampleSchema && sample.run?.id === webSampleRunId ? sample : undefined;
+    if (sample.schema !== webSampleSchema || sample.run?.id !== webSampleRunId) return undefined;
+    sample.observations = sample.observations.map(projectStoredObservationChecks);
+    if (sample.run.observation) sample.run.observation = projectStoredObservationChecks(sample.run.observation);
+    return sample;
   } catch { return undefined; }
 }
 

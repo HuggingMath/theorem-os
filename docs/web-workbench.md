@@ -223,6 +223,7 @@ SMTP 密码只放在环境变量或 `.env` 中，不要写进仓库。服务在�
 | `POST /api/runs/:id/edits/preview`、`POST /api/runs/:id/edits` | 预览或提交完整版本化计划 |
 | `GET /api/runs/:id/commands/:commandId` | 查询原命令回执、应用或投递状态 |
 | `POST /api/runs/:id/archive`、`GET /api/runs/:id/archives/:archiveId` | 保存与下载可复核归档 |
+| `GET /api/runs/:id/download`、`GET /api/runs/:id/snapshot` | 下载完整研究归档或运行快照 |
 | `GET /api/knowledge/catalogs`、`GET /api/knowledge/search` | 不可变目录版本和检索 |
 | `GET /api/knowledge/:entryId` | metadata/source/dependencies/consumers/finding 视图，保留分页范围 |
 | `GET /api/modules` | 实际可用模块注册表 |
@@ -230,6 +231,8 @@ SMTP 密码只放在环境变量或 `.env` 中，不要写进仓库。服务在�
 | `GET /api/runs/:id/outline` | 候选证明的结构：原题目标与求解新增的辅助声明、各目标的阐释后类型与公理、已记录的引用关系；没有候选证明时 409 |
 | `GET /api/runs/:id/verification-kit` | 本地复核压缩包（ZIP）：固定版本的 `lean-toolchain` / `lakefile.toml` / `lake-manifest.json`、`Submission.lean`、`Original.lean`、逐目标 `#print axioms` 的 `Check.lean`、中英文 README 与 `report.json`；找不到原题目标时 409 |
 | `GET/POST /api/module-plans`、`DELETE /api/module-plans/:id` | 持久方案库与版本冲突检查 |
+
+直接下载和新保存的完整归档使用 `theorem-os.web-archive.v2`。任务和依赖的 `source` 字段使用 `{"sha256":"…"}` 引用，按摘要在同一文件的 `sourceBlobs` 对象中查找原文。历史观测、最近观测、命令回执附带的观测和顶层源码索引共用这份原文表。摘要继续记录覆盖范围和证据数量，`summary.digest` 绑定实际导出的内容。旧 v1 归档按保存时的格式和摘要下载。工作台可以从两版归档和 `theorem-os.web-export.v1` 运行快照导入任务草稿。
 
 ### 配置研究模块
 

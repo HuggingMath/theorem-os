@@ -74,6 +74,7 @@ export type PlanPublication = { nonce: string; file: string; offset: number; eve
 export type InitialPlanPublication = PlanPublication;
 export type PlanPublicationRejection = { nonce: string; file: string; offset: number; baseVersion: string; reason: string };
 export type FailedTaskInput = { id: string; taskId: string; taskDigest: string; inputDigest: string; basis: BlockerBasis;
+  declarationDigest?: string;
   attemptFingerprint?: string; relatedFailureIds?: string[];
   sourceDigest: string; targetDigest: string; seedSourceDigest: string; seedTargetDigest: string;
   canonicalSourceDigest: string; canonicalTargetDigest: string; feedback: string;

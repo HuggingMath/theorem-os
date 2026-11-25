@@ -106,7 +106,7 @@ describe('task draft codecs without credentials or run-result state', () => {
     expect(decodeTaskDraft(archive())).not.toHaveProperty('result');
   });
 
-  describe.each(['theorem-os.web-export.v1', 'theorem-os.web-archive.v1'])('%s token budgets', schema => {
+  describe.each(['theorem-os.web-export.v1', 'theorem-os.web-archive.v1', 'theorem-os.web-archive.v2'])('%s token budgets', schema => {
     it.each([
       [10_000, '1'], [20_000, '2'], [15_000, '1.5'], [10_003, '1.0003'],
       [12_345_678, '1234.5678'], [100_000_000, '10000'],

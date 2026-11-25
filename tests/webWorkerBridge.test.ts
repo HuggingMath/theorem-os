@@ -14,7 +14,6 @@ import { webWorkerFixture } from './helpers/webWorkerBridge';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { webGuidanceSchema } from '../apps/web/collaborationValidation';
 import { parseWorkerMessage } from '../apps/web/runner';
-import { WebStorage } from '../apps/web/storage';
 import type { WebObservation } from '../apps/web/collaboration';
 import { webProofMessageSink } from '../apps/web/proofJournal';
 
@@ -110,6 +109,54 @@ describe('isolated Web worker bridge', () => {
     f.state.turns++; f.save();
     expect((await bridge.capture()).observation.sequence).toBe(2);
     expect(messages.filter(message => message.type === 'catalog')).toHaveLength(1);
+  });
+
+  it('reports each original target verdict when a shared Lean check only partially passes, including in retained observations', async () => {
+    const f = fixture(), firstTarget = f.state.problem.targets[0]!;
+    const secondTarget = { ...firstTarget, theoremName: 'Original.second', declarationHash: mathDigest('second declaration') };
+    const second = { ...f.goal, id: 'second', theoremName: secondTarget.theoremName, dependsOn: [f.goal.id] };
+    const { statementHash, leanStatementHash } = f.state.problem.contract;
+    const { commit, sourceDigest, verification } = f.proof;
+    const firstReceipt = { ...verification.results[0]!, theoremName: firstTarget.theoremName, receiptId: 'goal-passed',
+      statementHash, leanStatementHash, sourceDeclarationHash: firstTarget.declarationHash };
+    const secondReceipt = { ...firstReceipt, theoremName: secondTarget.theoremName, receiptId: 'second-failed',
+      sourceDeclarationHash: secondTarget.declarationHash, status: 'failed' as const, error: 'Failure in second target' };
+    f.state.problem.targets = [firstTarget, secondTarget];
+    f.state.cooperation!.tasks = [
+      { task: f.goal, status: 'pending', attempts: 0 }, { task: second, status: 'pending', attempts: 0 },
+    ];
+    f.state.cooperation!.history = [];
+    f.state.check = { commit, sourceDigest, passed: false, verification: {
+      ...verification, status: 'failed', results: [secondReceipt, firstReceipt],
+    } };
+    f.save();
+
+    const { observation } = await createWebWorkerBridge({
+      webRunId: 'web-fixture', directory: f.directory, output: f.output,
+    }).capture();
+    expect(observation.acceptance).toBe('not-assessed');
+    expect(observation.checks).toMatchObject([
+      { taskId: f.goal.id, taskVersion: taskVersion(f.goal), id: firstReceipt.receiptId, commit, sourceDigest,
+        record: { theoremName: firstTarget.theoremName, status: 'kernel_verified', passed: true,
+          verification: { status: 'failed' }, acceptance: 'not-assessed' } },
+      { taskId: second.id, taskVersion: taskVersion(second), id: secondReceipt.receiptId, commit, sourceDigest,
+        record: { theoremName: secondTarget.theoremName, status: 'failed', passed: false, error: secondReceipt.error } },
+    ]);
+
+    const legacy = { ...observation, checks: observation.checks.flatMap(({ record: { originalProblemPassed: _batch, ...record }, ...check }) =>
+      [f.goal, second].map(task => ({ ...check, taskId: task.id, taskVersion: taskVersion(task), record: { ...record, passed: false } }))) };
+    const owner = 'offline-owner', storage = new WebStorage(path.join(f.directory, 'stored-receipts'));
+    storage.saveObservation(owner, legacy);
+    expect(storage.listObservations(owner, observation.webRunId)[0]!.checks).toEqual(observation.checks);
+    expect(storage.getCheckReceipt(owner, observation.webRunId, secondReceipt.receiptId)).toEqual(observation.checks[1]);
+    expect(storage.getCheckReceipt(owner, observation.webRunId, firstReceipt.receiptId)).toEqual(observation.checks[0]);
+
+    // A retained kernel success for another declaration hash cannot prove this frozen declaration.
+    const mismatched = { ...legacy, sequence: 2, checks: legacy.checks.map(check => check.id !== firstReceipt.receiptId
+      ? check : { ...check, record: { ...check.record, sourceDeclarationHash: 'other-declaration' } }) };
+    storage.saveObservation(owner, mismatched);
+    expect(storage.getCheckReceipt(owner, observation.webRunId, firstReceipt.receiptId))
+      .toMatchObject({ taskId: f.goal.id, record: { status: 'kernel_verified', passed: false } });
   });
 
   it('continues observation sequences across a host-authorized library round and retires old guidance references', async () => {
