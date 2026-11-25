@@ -39,11 +39,11 @@ body[data-output-open=true] #runs-panel{background:var(--card)}
 .research-conversation-description{margin-top:10px!important;overflow-wrap:anywhere}
 .research-conversation-latest{margin:16px 0 0;color:var(--muted);font-size:13px;overflow-wrap:anywhere}
 .research-conversation-artifacts{display:flex;flex-wrap:wrap;gap:8px;margin-top:24px}
-.research-conversation-artifacts button{display:flex;align-items:center;gap:8px;min-height:36px;padding:7px 13px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);text-align:left;font-size:13px;font-weight:500;line-height:1.5;transition:background-color .15s,border-color .15s}
-.research-conversation-artifacts button>span{min-width:0;overflow-wrap:anywhere}
-.research-conversation-artifacts button>svg{width:15px;height:15px;flex-shrink:0}
-.research-conversation-artifacts button>svg:last-child{color:var(--muted);width:12px;height:12px}
-.research-conversation-artifacts button:hover:not(:disabled){border-color:var(--gray-300);background:var(--gray-50)}
+.research-conversation-artifacts :is(button,a){display:flex;align-items:center;gap:8px;min-height:36px;padding:7px 13px;border:1px solid var(--gray-200);border-left:3px solid var(--blue-500);border-radius:4px 12px 12px 4px;background:var(--card);color:var(--ink);text-align:left;font-size:13px;font-weight:500;line-height:1.5;box-shadow:var(--shadow-sm);transition:background-color .15s,border-color .15s}
+.research-conversation-artifacts :is(button,a)>span{min-width:0;overflow-wrap:anywhere}
+.research-conversation-artifacts :is(button,a)>svg{width:15px;height:15px;flex-shrink:0}
+.research-conversation-artifacts :is(button,a)>svg:last-child{color:var(--muted);width:12px;height:12px}
+.research-conversation-artifacts :is(button,a):hover:not(:disabled){border-color:var(--gray-300);background:var(--gray-50)}
 .research-conversation-artifacts button:disabled{opacity:.5;cursor:default}
 .research-conversation-guidance{display:inline-flex;align-items:center;gap:8px;margin-top:24px}
 .research-conversation-guidance svg{width:16px;height:16px}
@@ -373,6 +373,9 @@ body[data-chat-empty=true] .chat-settings-fields{left:-1px;right:-1px;top:calc(1
 #natural-research .chat-settings-fields :is(input:not([type=radio]),select){display:block;width:100%;min-width:0;border:1px solid var(--line);background-color:var(--card);color:var(--ink);border-radius:8px;padding:10px;font-size:13px}
 #natural-research .chat-settings-fields select{height:40px;padding:8px 32px 8px 11px;line-height:1.35}
 .chat-connection-fields{display:grid;gap:8px;min-width:0}
+.chat-tab-key-memory{display:grid;gap:4px;margin-top:2px;color:var(--muted);font-size:12px;line-height:1.55}
+.chat-tab-key-memory>label{display:inline-flex;align-items:center;gap:7px;width:max-content;max-width:100%;color:var(--ink);cursor:pointer;white-space:nowrap}
+.chat-tab-key-memory input{width:14px;height:14px;margin:0;accent-color:var(--blue-600)}
 .chat-settings-options select{margin-top:8px}
 .chat-settings-fields>label span{color:var(--muted);font-weight:400}
 .chat-settings-options input{margin-top:8px}

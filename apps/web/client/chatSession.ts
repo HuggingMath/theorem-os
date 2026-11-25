@@ -29,6 +29,7 @@ import { backgroundReviewPending } from './backgroundReview';
 import { ChatAnswers } from './chatAnswer';
 import { chatMathematics } from './chatMathematics';
 import { detailLevel } from './detailLevel';
+import { forgetKey, ownedTabKeyStorage, rememberedKey, rememberKey } from './keyMemory';
 
 const running = (item?: { status: string }) => item?.status === 'queued' || item?.status === 'running';
 const reason = (error: unknown) => localizeMessage(error instanceof Error ? error.message : String(error));
@@ -420,6 +421,27 @@ export class ChatSession {
   }
   private activeProviderId() { return this.run?.providerId ?? this.formalization?.providerId ?? this.providerId; }
   private activeModel() { return this.run?.model ?? this.formalization?.model ?? this.model; }
+  private get tabKeyProvider() {
+    const session = this.options.session();
+    if (!session?.account?.keyVault) return session?.providers.find(provider => provider.id === this.activeProviderId());
+  }
+  private get tabKey() {
+    const provider = this.tabKeyProvider;
+    return provider && rememberedKey(ownedTabKeyStorage(this.options.session()), provider.id, provider.baseUrl);
+  }
+  private get activeKey() {
+    return this.apiKey || this.tabKey || '';
+  }
+  private setRememberedKey(remember: boolean) {
+    const provider = this.tabKeyProvider;
+    if (!provider) return;
+    const storage = ownedTabKeyStorage(this.options.session());
+    if (!remember) {
+      if (this.tabKey) forgetKey(storage);
+    } else if (this.apiKey.trim() && !rememberKey(storage, { providerId: provider.id, baseUrl: provider.baseUrl, apiKey: this.apiKey.trim() })) {
+      this.keyNotice = t('浏览器不允许保存，Key 只保留到这次提交');
+    }
+  }
   private clearConnection() { this.connectionRevision++; this.connection = undefined; this.checkingConnection = false; }
   private async checkConnection() {
     if (this.checkingConnection) return;
@@ -427,7 +449,7 @@ export class ChatSession {
     this.checkingConnection = true; this.connection = undefined; this.draw();
     try {
       const result = await this.post<{ status: 'available' | 'unknown'; message: string }>(`/api/providers/${encodeURIComponent(this.activeProviderId())}/check`,
-        { apiKey: this.apiKey, model: this.activeModel() });
+        { apiKey: this.activeKey, model: this.activeModel() });
       if (revision === this.connectionRevision) this.connection = { ...result, message: reason(result.message) };
     } catch (error) { if (revision === this.connectionRevision) this.connection = { status: 'error', message: reason(error) }; }
     finally { if (revision === this.connectionRevision) { this.checkingConnection = false; this.draw(); } }
@@ -436,7 +458,7 @@ export class ChatSession {
     const item = this.formalization;
     if (!item || item.runId || this.startingResearch || (item.status !== 'confirmed'
       && !(confirmStatement && item.humanReview && item.status === 'review' && item.report))) return;
-    if (!this.apiKey && this.options.keyRequired(this.activeProviderId())) {
+    if (!this.activeKey && this.options.keyRequired(this.activeProviderId())) {
       this.error = t('请在设置中填写 API Key 后发送。'); this.draw();
       const settings = this.composer.querySelector<HTMLDetailsElement>('#formalize-settings');
       if (settings) settings.open = true;
@@ -454,7 +476,7 @@ export class ChatSession {
         this.formalizations = this.formalizations.map(record => record.id === formalization.id ? formalization : record);
         this.draw();
       }
-      const { formalization } = await this.post<{ formalization: WebFormalization }>(`/api/formalizations/${item.id}/research`, { apiKey: this.apiKey });
+      const { formalization } = await this.post<{ formalization: WebFormalization }>(`/api/formalizations/${item.id}/research`, { apiKey: this.activeKey });
       if (generation !== this.generation) return;
       this.formalization = formalization;
       this.formalizations = this.formalizations.map(record => record.id === formalization.id ? formalization : record);
@@ -816,7 +838,7 @@ export class ChatSession {
       || !(this.pendingMessage?.text ?? retryText ?? this.draft).trim()) return;
     // A received task can be reattached without starting it again. Editing its original instead needs an explicit choice.
     if (this.seed && retryText === undefined && withLibraryReferences(this.draft, this.references, locale) !== this.seed.original) { this.draw(); return; }
-    const generation = this.generation, owner = this.ownerRevision, seed = this.seed, conversation = this.conversation, key = this.apiKey,
+    const generation = this.generation, owner = this.ownerRevision, seed = this.seed, conversation = this.conversation, key = this.activeKey,
       draftText = this.draft, references = this.references;
     const message = conversation ? this.pendingMessage ?? { requestId: crypto.randomUUID(), text: retryText ?? withLibraryReferences(draftText, references, locale) } : undefined;
     const text = seed?.original ?? message?.text ?? retryText ?? withLibraryReferences(draftText, references, locale);
@@ -1245,7 +1267,7 @@ export class ChatSession {
         this.composer.querySelector<HTMLSelectElement>('#formalize-provider')?.focus();
       },
       startGuide: { onTemplate: () => this.fillOriginal(this.draft.trim() ? this.draft : statementTemplate()), onLean: this.options.onLean,
-        ready: !!this.activeModel().trim() && (!this.options.keyRequired(this.activeProviderId()) || !!this.apiKey.trim()) },
+        ready: !!this.activeModel().trim() && (!this.options.keyRequired(this.activeProviderId()) || !!this.activeKey.trim()) },
       overview: { owner: this.options.draftScope, runs: this.options.runs(), conversations: this.summaries, formalizations: this.formalizations,
         request: this.options.request, onOpenRun: this.options.onOpenRun, onOpenConversation: (id: string) => void this.open(id) },
     };
@@ -1351,7 +1373,9 @@ export class ChatSession {
         onPrepareEdited: () => void this.submit(this.seed!.original, true) } } : {}),
       participation: this.participation, participationLocked: Boolean(this.seed || this.submissionIdentity.unresolved || this.run),
       onParticipation: value => { this.participation = value; this.rememberDraft(); this.draw(); },
-      keyRequired: guidance || pendingSubmission || this.pendingMessage ? false : this.options.keyRequired(this.activeProviderId()),
+      keyRequired: guidance || pendingSubmission || this.pendingMessage || this.tabKey ? false : this.options.keyRequired(this.activeProviderId()),
+      ...(this.tabKeyProvider ? { tabKeyMemory: { remembered: Boolean(this.tabKey), notice: this.keyNotice,
+        onChange: (remember: boolean) => { this.keyNotice = ''; this.setRememberedKey(remember); this.clearConnection(); this.draw(); } } } : {}),
       providers: this.providers(), providerId: this.activeProviderId(), model: this.activeModel(),
       onProvider: value => { this.providerId = value; this.model = this.providers().find(item => item.id === value)?.defaultModel ?? ''; this.apiKey = ''; this.keyNotice = ''; this.clearConnection(); this.rememberDraft(); this.draw(); },
       onModel: value => { this.model = value; this.clearConnection(); this.rememberDraft(); this.draw(); },
@@ -1396,7 +1420,12 @@ export class ChatSession {
         : this.conversation && this.run?.status === 'running' && !showGuidance && !canDecide && !this.options.isSample(this.run)
           ? t('这里发送的是讨论，不会调整正在进行的解题。') : undefined,
       onEnvironment: () => { if (!this.submissionIdentity.unresolved && !this.seed && !this.conversation && !this.run) this.environment = webTaskEnvironment; this.rememberDraft(); this.draw(); }, onEffort: value => { this.effort = value; this.researchEffort = value; this.rememberDraft(); this.draw(); },
-      onKey: value => { this.apiKey = value; this.keyNotice = ''; this.clearConnection(); this.draw(); },
+      onKey: value => {
+        const remembered = this.tabKey;
+        this.apiKey = value; this.keyNotice = '';
+        if (remembered) this.setRememberedKey(Boolean(value.trim()));
+        this.clearConnection(); this.draw();
+      },
       onExample: id => this.useExample(id),
       onLean: this.options.onLean,
     });

@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
+import { paperDraftActive } from '../apps/web/paperTypes';
 
 const GiB = 1024 ** 3;
 type Entry = { path: string; bytes: number; sha256: string };
@@ -125,7 +126,7 @@ export function maintenanceFile(dataRoot: string, enabled: boolean) {
 /** Read only known record types; no source text, email, session or key is included in the result. */
 export function localOperations(dataRoot: string): Operations {
   const root = fs.realpathSync(dataRoot), maintenance = path.join(root, 'operations/maintenance.json');
-  const queues: Operations['queues'] = Object.fromEntries(['research', 'formalization', 'explanation', 'conversation'].map(name => [name, { running: 0, queued: 0 }]));
+  const queues: Operations['queues'] = Object.fromEntries(['research', 'formalization', 'explanation', 'conversation', 'paper'].map(name => [name, { running: 0, queued: 0 }]));
   function record(queue: Queue, item: { status?: string; createdAt?: string }) {
     if (item.status === 'running') queue.running++;
     if (item.status === 'queued') {
@@ -135,11 +136,16 @@ export function localOperations(dataRoot: string): Operations {
   }
   const directories = (directory: string) => fs.existsSync(directory) ? fs.readdirSync(directory, { withFileTypes: true })
     .filter(entry => entry.isDirectory()).map(entry => path.join(directory, entry.name)) : [];
+  const jsonFiles = (directory: string) => fs.existsSync(directory) ? fs.readdirSync(directory, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.endsWith('.json')).map(entry => path.join(directory, entry.name)) : [];
   for (const owner of directories(path.join(root, 'owners'))) {
     for (const run of directories(path.join(owner, 'runs'))) {
       const file = path.join(run, 'run.json'); if (fs.existsSync(file)) record(queues.research, readJson(file).run);
       for (const explanation of directories(path.join(run, 'explanations'))) {
         const file = path.join(explanation, 'record.json'); if (fs.existsSync(file)) record(queues.explanation, readJson(file));
+      }
+      for (const file of jsonFiles(path.join(run, 'papers'))) {
+        if (paperDraftActive(readJson(file).status)) queues.paper.running++;
       }
     }
     for (const formalization of directories(path.join(owner, 'formalizations'))) {
@@ -153,9 +159,8 @@ export function localOperations(dataRoot: string): Operations {
         });
       }
     }
-    const conversations = path.join(owner, 'conversations');
-    for (const file of fs.existsSync(conversations) ? fs.readdirSync(conversations, { withFileTypes: true }).filter(entry => entry.isFile() && entry.name.endsWith('.json')) : []) {
-      const messages = readJson(path.join(conversations, file.name)).messages;
+    for (const file of jsonFiles(path.join(owner, 'conversations'))) {
+      const messages = readJson(file).messages;
       queues.conversation.running += messages.filter((message: { kind: string; status: string }) => message.kind === 'text' && message.status === 'pending').length;
     }
   }
@@ -206,7 +211,7 @@ const help = `Usage: bun scripts/web-operations.ts COMMAND [options]
   restore --snapshot DIRECTORY [--output NEW_ISOLATED_DIRECTORY]
   prune --backup-root DIRECTORY [--retention-days 7] [--apply]
   capacity [--research-concurrency 1] [--data-root DIR --base-url URL --container NAME --samples 12]
-  images --commit FULL_SHA [--web-image IMAGE --worker-image IMAGE]
+  images --commit FULL_SHA [--web-image IMAGE --worker-image IMAGE --tex-image IMAGE]
 Monitor/capacity: --min-free-gib 30 --max-queue-seconds 1800 --interval-seconds 5 --max-memory-percent 90
 Wait: --timeout-seconds 3600. Session JSON is a private {cookie,csrf} file; never put credentials in arguments.
 No command starts model work, sends alerts, changes containers or overwrites a restore destination.
@@ -217,7 +222,7 @@ export async function main(argv: string[]) {
     help: { type: 'boolean' }, offline: { type: 'boolean' }, apply: { type: 'boolean' }, 'backup-root': { type: 'string' }, 'retention-days': { type: 'string' },
     'data-root': { type: 'string' }, output: { type: 'string' }, snapshot: { type: 'string' },
     container: { type: 'string' }, 'base-url': { type: 'string' }, 'session-file': { type: 'string' }, commit: { type: 'string' },
-    'web-image': { type: 'string' }, 'worker-image': { type: 'string' }, 'research-concurrency': { type: 'string' },
+    'web-image': { type: 'string' }, 'worker-image': { type: 'string' }, 'tex-image': { type: 'string' }, 'research-concurrency': { type: 'string' },
     'min-free-gib': { type: 'string' }, 'max-queue-seconds': { type: 'string' }, 'timeout-seconds': { type: 'string' },
     'interval-seconds': { type: 'string' }, samples: { type: 'string' }, 'log-file': { type: 'string' }, 'max-memory-percent': { type: 'string' },
   } });
@@ -253,8 +258,8 @@ export async function main(argv: string[]) {
   }
   if (command === 'images') {
     const commit = required('commit'); if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error('full_commit_sha_required');
-    const images = ['web', 'worker'].map(kind => {
-      const image = values[kind === 'web' ? 'web-image' : 'worker-image'] ?? `ghcr.io/huggingmath/theorem-os-${kind}:${commit}`;
+    const images = (['web', 'worker', 'tex'] as const).map(kind => {
+      const image = values[`${kind}-image`] ?? `ghcr.io/huggingmath/theorem-os-${kind}:${commit}`;
       const revision = docker(['image', 'inspect', '--format', '{{index .Config.Labels "org.opencontainers.image.revision"}}', image]).trim();
       if (revision !== commit) throw new Error(`${kind}_image_revision_mismatch`);
       return { kind, image, id: docker(['image', 'inspect', '--format', '{{.Id}}', image]).trim(), revision };

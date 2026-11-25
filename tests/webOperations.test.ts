@@ -3,6 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { WebPaperDrafts } from '../apps/web/paperDrafts';
+import { WebStorage } from '../apps/web/storage';
 import { backupData, capacityEnvelope, inspectSignals, localOperations, main, maintenanceFile, pruneBackups, restoreData } from '../scripts/web-operations';
 
 describe('operator backup, recovery and monitoring with disposable offline data', () => {
@@ -109,6 +111,23 @@ describe('operator backup, recovery and monitoring with disposable offline data'
     expect(localOperations(data).queues.formalization).toEqual({ running: 2, queued: 2, oldestQueuedAt: '2026-11-07T03:00:00Z' });
   });
 
+  it('counts active paper drafts and clears interrupted jobs at service startup without discarding their drafts', () => {
+    const states = ['writing', 'reviewing', 'revising', 'done', 'error'];
+    const draft = { main: 'private paper text', review: 'pending' };
+    const location = (index: number) => ['owners', 'owner', 'runs', 'run', 'papers', `${String(index).repeat(64)}.json`];
+    const storage = new WebStorage(data);
+    states.forEach((status, index) => storage.saveRecord(location(index), { status, draft }));
+    const before = localOperations(data);
+    expect(before.queues.paper).toEqual({ running: 3, queued: 0 });
+    expect(JSON.stringify(before)).not.toContain(draft.main);
+
+    const papers = new WebPaperDrafts(storage);
+    expect(papers.counts()).toEqual({ running: 0, queued: 0 });
+    expect(localOperations(data).queues.paper).toEqual({ running: 0, queued: 0 });
+    states.forEach((status, index) => expect(storage.getRecord(location(index))).toEqual(index < 3
+      ? { status: 'error', error: 'interrupted', draft } : { status, draft }));
+  });
+
   it('does not report drained while a handed-off statement still has a queued review', async () => {
     maintenanceFile(data, true);
     write('owners/owner/formalizations/first/record.json', { formalization: { status: 'confirmed',
@@ -138,6 +157,37 @@ describe('operator backup, recovery and monitoring with disposable offline data'
     const print = vi.spyOn(console, 'log').mockImplementation(() => {});
     await main(['backup', '--data-root', data, '--offline', '--output', path.join(root, 'backup')]);
     expect(print).toHaveBeenCalledOnce();
+  });
+
+  it('requires the TeX image and checks its revision alongside web and worker', async () => {
+    const commit = 'a'.repeat(40);
+    const prefix = 'ghcr.io/huggingmath/theorem-os-';
+    const fixtures = {
+      [`${prefix}web:${commit}`]: { revision: commit, id: 'sha256:web' },
+      [`${prefix}worker:${commit}`]: { revision: commit, id: 'sha256:worker' },
+      'theorem-os-tex:old': { revision: 'b'.repeat(40), id: 'sha256:old-tex' },
+      'theorem-os-tex:current': { revision: commit, id: 'sha256:tex' },
+    };
+    const binary = path.join(root, 'docker');
+    fs.writeFileSync(binary, `#!${process.execPath}
+const [imageCommand, inspectCommand, formatOption, format, image] = process.argv.slice(2);
+if (imageCommand !== 'image' || inspectCommand !== 'inspect' || formatOption !== '--format') process.exit(23);
+const record = ${JSON.stringify(fixtures)}[image];
+if (!record) { console.error('No such image: ' + image); process.exit(1); }
+console.log(format.includes('org.opencontainers.image.revision') ? record.revision : record.id);
+`, { mode: 0o700 });
+    vi.stubEnv('PATH', root);
+    const print = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const args = ['images', '--commit', commit];
+    await expect(main(args)).rejects.toThrow(`No such image: ${prefix}tex:${commit}`);
+    await expect(main([...args, '--tex-image', 'theorem-os-tex:old'])).rejects.toThrow('tex_image_revision_mismatch');
+    expect(print).not.toHaveBeenCalled();
+    await main([...args, '--tex-image', 'theorem-os-tex:current']);
+    expect(JSON.parse(print.mock.calls[0][0])).toEqual({ ready: true, commit, images: [
+      { kind: 'web', image: `${prefix}web:${commit}`, id: 'sha256:web', revision: commit },
+      { kind: 'worker', image: `${prefix}worker:${commit}`, id: 'sha256:worker', revision: commit },
+      { kind: 'tex', image: 'theorem-os-tex:current', id: 'sha256:tex', revision: commit },
+    ] });
   });
 
   it('refuses a live container before copying its data', async () => {

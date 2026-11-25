@@ -85,14 +85,14 @@ The replay builds the pinned runtime, submits a deliberately failing candidate, 
 See the [Web Workbench Guide](./docs/web-workbench.md) and [Operations Guide](./docs/web-operations.md) for host `/dev/fuse` requirements and disk headroom (~30 GiB recommended per concurrent Mathlib run):
 
 ```bash
-# Option A: Build and start web + worker locally
-THEOREMOS_SOURCE_COMMIT=$(git rev-parse HEAD) docker compose -f apps/web/compose.yml build worker web
+# Option A: Build web, worker and tex locally, then start the workbench
+THEOREMOS_SOURCE_COMMIT=$(git rev-parse HEAD) docker compose -f apps/web/compose.yml build worker web tex
 docker compose -f apps/web/compose.yml up -d web
 docker compose -f apps/web/compose.yml ps
 
-# Option B: Pull paired full-SHA images built by GitHub Actions
+# Option B: Pull all three images published by GitHub Actions for the same commit
 export THEOREMOS_IMAGE_TAG=<full-40-char-commit-sha>
-docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml pull worker web
+docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml pull worker web tex
 bun scripts/web-operations.ts images --commit "$THEOREMOS_IMAGE_TAG"
 docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml up -d --no-build web
 ```

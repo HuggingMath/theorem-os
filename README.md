@@ -84,14 +84,14 @@ bun run math inspect --run "$THEOREMOS_REPLAY/result.json"
 完整依赖与 FUSE / 磁盘要求（建议为每个并发 Mathlib 任务预留 30 GiB 可用磁盘）详见 [网页工作台文档](./docs/web-workbench.md) 与[运维指南](./docs/web-operations.md)：
 
 ```bash
-# 方式 A：从当前源码构建 web 与 worker 镜像并启动
-THEOREMOS_SOURCE_COMMIT=$(git rev-parse HEAD) docker compose -f apps/web/compose.yml build worker web
+# 方式 A：从当前源码构建 web、worker 和 tex 镜像并启动
+THEOREMOS_SOURCE_COMMIT=$(git rev-parse HEAD) docker compose -f apps/web/compose.yml build worker web tex
 docker compose -f apps/web/compose.yml up -d web
 docker compose -f apps/web/compose.yml ps
 
-# 方式 B：拉取 GitHub Actions 发布到 GHCR 的完整 SHA 镜像对
+# 方式 B：拉取 GitHub Actions 发布到 GHCR 的同一 SHA 的三个镜像
 export THEOREMOS_IMAGE_TAG=<完整的40位提交SHA>
-docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml pull worker web
+docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml pull worker web tex
 bun scripts/web-operations.ts images --commit "$THEOREMOS_IMAGE_TAG"
 docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml up -d --no-build web
 ```

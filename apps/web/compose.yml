@@ -17,6 +17,7 @@ services:
     environment:
       THEOREMOS_WEB_PUBLIC_URL: ${THEOREMOS_WEB_PUBLIC_URL:-http://127.0.0.1:8787}
       THEOREMOS_WEB_WORKER_IMAGE: theorem-os-worker:local
+      THEOREMOS_WEB_TEX_IMAGE: theorem-os-tex:local
       THEOREMOS_WEB_CONCURRENCY: ${THEOREMOS_WEB_CONCURRENCY:-1}
       THEOREMOS_WEB_QUEUE_LIMIT: ${THEOREMOS_WEB_QUEUE_LIMIT:-8}
       THEOREMOS_WEB_DATA_ROOT: /var/lib/theorem-os
@@ -54,6 +55,15 @@ services:
       context: ../..
       dockerfile: apps/web/Dockerfile
       target: worker
+      args:
+        THEOREMOS_SOURCE_COMMIT: ${THEOREMOS_SOURCE_COMMIT:-unknown}
+  tex:
+    image: theorem-os-tex:local
+    profiles: ["build-tex"]
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+      target: tex
       args:
         THEOREMOS_SOURCE_COMMIT: ${THEOREMOS_SOURCE_COMMIT:-unknown}
 

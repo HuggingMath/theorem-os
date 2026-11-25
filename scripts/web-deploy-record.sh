@@ -1,11 +1,11 @@
 #!/bin/sh
-# Prints one JSON line tying a Docker deployment to its source: the commit, whether the tree was clean, the web and
-# worker image IDs and labels, the running container's image, /healthz, and the SHA-256 of the served and built app.js.
+# Prints one JSON line tying a Docker deployment to its source: the commit, whether the tree was clean, the web, worker
+# and TeX image IDs and labels, the running container's image, /healthz, and the SHA-256 of the served and built app.js.
 # Usage: scripts/web-deploy-record.sh https://public.example >> deploys.jsonl
 # The base must be THEOREMOS_WEB_PUBLIC_URL: the service refuses other Host headers.
 set -eu
 base=${1:?usage: web-deploy-record.sh PUBLIC_URL}
-web=${THEOREMOS_WEB_IMAGE:-theorem-os-web:local} worker=${THEOREMOS_WEB_WORKER_IMAGE:-theorem-os-worker:local}
+web=${THEOREMOS_WEB_IMAGE:-theorem-os-web:local} worker=${THEOREMOS_WEB_WORKER_IMAGE:-theorem-os-worker:local} tex=${THEOREMOS_WEB_TEX_IMAGE:-theorem-os-tex:local}
 container=${THEOREMOS_WEB_CONTAINER:-theorem-os-web-1}
 commit=$(git rev-parse HEAD)
 if [ -z "$(git status --porcelain --untracked-files=all)" ]; then clean=true; else clean=false; fi
@@ -17,5 +17,5 @@ built=$(docker exec "$container" sha256sum /opt/theorem-os/out/web/app.js | cut 
 printf '{"at":"%s","commit":"%s","clean":%s,"web":{"image":"%s","id":"%s","revision":"%s","running":"%s"},' \
   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$commit" "$clean" "$web" "$(image "$web")" "$(label "$web")" \
   "$(docker inspect --format '{{.Image}}' "$container")"
-printf '"worker":{"image":"%s","id":"%s","revision":"%s"},"healthz":%s,"appJs":{"served":"%s","built":"%s"}}\n' \
-  "$worker" "$(image "$worker")" "$(label "$worker")" "$(curl --fail --silent "$base/healthz")" "$served" "$built"
+printf '"worker":{"image":"%s","id":"%s","revision":"%s"},"tex":{"image":"%s","id":"%s","revision":"%s"},"healthz":%s,"appJs":{"served":"%s","built":"%s"}}\n' \
+  "$worker" "$(image "$worker")" "$(label "$worker")" "$tex" "$(image "$tex")" "$(label "$tex")" "$(curl --fail --silent "$base/healthz")" "$served" "$built"

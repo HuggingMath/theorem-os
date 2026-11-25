@@ -38,6 +38,21 @@ COPY LICENSE NOTICE CITATION.cff ./
 COPY LICENSES ./LICENSES
 COPY third_party ./third_party
 
+# A small, independent image for untrusted LaTeX snapshots. It deliberately has no project source or network client.
+FROM debian:bookworm-slim AS tex
+ARG THEOREMOS_SOURCE_COMMIT=unknown
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates fontconfig latexmk python3 texlive-fonts-recommended \
+    texlive-latex-recommended texlive-xetex \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --create-home --home-dir /work --shell /usr/sbin/nologin theorem \
+    && chmod 0700 /work
+ENV HOME=/tmp TEXMFCONFIG=/tmp/texmf-config TEXMFVAR=/tmp/texmf-var XDG_CACHE_HOME=/tmp/cache
+WORKDIR /work
+USER 10001:10001
+LABEL org.opencontainers.image.revision=$THEOREMOS_SOURCE_COMMIT
+ENTRYPOINT ["sh"]
+
 FROM base AS worker-tools
 ENV ELAN_HOME=/opt/elan \
     PATH=/opt/elan/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin \

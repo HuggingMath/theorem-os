@@ -1,6 +1,6 @@
 import type { TrajectoryVersionDetail } from './trajectory';
 import type { WebCheckReceipt } from './collaboration';
-import type { WebRun } from './shared';
+import type { WebEffort, WebRun } from './shared';
 import { withoutCheckMarkers } from './report';
 
 /** One answered question about a failed version, as the browser keeps it and sends it back for a follow-up. */
@@ -76,7 +76,8 @@ const upstreamStatus: Record<number, string> = {
   404: '模型服务不认识这个模型，或不支持 Responses API。', 429: '模型服务限流或额度不足，请稍后再问。',
 };
 
-export type WebExplainCall = { baseUrl: string; apiKey: string; model: string; input: unknown[]; timeoutMs?: number; instructions?: string; onText?(text: string): void };
+export type WebExplainCall = { baseUrl: string; apiKey: string; model: string; input: unknown[]; timeoutMs?: number; instructions?: string;
+  effort?: Exclude<WebEffort, 'none'> | null; maxAnswer?: number; onText?(text: string): void };
 /**
  * One streamed call to the provider's Responses API, the endpoint the run's workers use, with light reasoning and
  * nothing stored. Aborting `signal` (the reader closed the panel) stops it; only a positive `timeoutMs` adds a deadline.
@@ -84,13 +85,14 @@ export type WebExplainCall = { baseUrl: string; apiKey: string; model: string; i
 export async function askProvider(call: WebExplainCall, signal?: AbortSignal): Promise<WebExplainAnswer> {
   const timeout = call.timeoutMs !== undefined && call.timeoutMs > 0 ? AbortSignal.timeout(call.timeoutMs) : undefined;
   const active = signal && timeout ? AbortSignal.any([signal, timeout]) : signal ?? timeout ?? new AbortController().signal;
+  const limit = call.maxAnswer ?? webExplainLimits.answer;
   try {
     // Redirects are refused so the key is never sent anywhere but the configured address.
     const response = await fetch(`${call.baseUrl}/responses`, { method: 'POST', redirect: 'error',
       signal: active,
       headers: { Authorization: `Bearer ${call.apiKey}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
       body: JSON.stringify({ model: call.model, instructions: call.instructions ?? webExplainInstructions, input: call.input,
-        reasoning: { effort: 'low' }, stream: true, store: false }) });
+        ...(call.effort === null ? {} : { reasoning: { effort: call.effort ?? 'low' } }), stream: true, store: false }) });
     if (!response.ok) {
       await response.body?.cancel().catch(() => {});
       throw new WebExplainError(502, upstreamStatus[response.status] ?? `模型服务返回错误（HTTP ${response.status}）。`);
@@ -98,9 +100,9 @@ export async function askProvider(call: WebExplainCall, signal?: AbortSignal): P
     if (!/^text\/event-stream/iu.test(response.headers.get('content-type') ?? '')) {
       const body = await response.json() as Record<string, unknown>;
       active.throwIfAborted();
-      return answerOf(outputText(body.output), true, body.usage);
+      return answerOf(outputText(body.output), body.status === undefined || body.status === 'completed', body.usage, limit);
     }
-    const answer = await streamed(response.body!, active, call.onText);
+    const answer = await streamed(response.body!, active, limit, call.onText);
     active.throwIfAborted();
     return answer;
   } catch (error) {
@@ -112,7 +114,7 @@ export async function askProvider(call: WebExplainCall, signal?: AbortSignal): P
 }
 
 /** Reads the Responses event stream: text deltas until `response.completed`, whose usage it keeps. */
-async function streamed(body: ReadableStream<Uint8Array>, signal: AbortSignal, onText?: (text: string) => void): Promise<WebExplainAnswer> {
+async function streamed(body: ReadableStream<Uint8Array>, signal: AbortSignal, limit: number, onText?: (text: string) => void): Promise<WebExplainAnswer> {
   const reader = body.getReader(), decoder = new TextDecoder();
   let buffer = '', text = '', usage: unknown, finished = false;
   try {
@@ -129,27 +131,27 @@ async function streamed(body: ReadableStream<Uint8Array>, signal: AbortSignal, o
         const event = JSON.parse(data) as Record<string, unknown>, response = event.response as Record<string, unknown> | undefined;
         if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
           text += event.delta;
-          onText?.(text.trimStart().slice(0, webExplainLimits.answer));
+          onText?.(text.trimStart().slice(0, limit));
           signal.throwIfAborted();
         }
         else if (event.type === 'response.completed' || event.type === 'response.incomplete') {
           usage = response?.usage; finished = event.type === 'response.completed';
           text ||= outputText(response?.output);
-          return answerOf(text, finished, usage);
+          return answerOf(text, finished, usage, limit);
         } else if (event.type === 'response.failed' || event.type === 'error') throw new WebExplainError(502, '模型服务没能完成回答。');
       }
       // Far past what is shown, the rest would only cost more.
-      if (text.length > webExplainLimits.answer * 2) return answerOf(text, false, usage);
+      if (text.length > limit * 2) return answerOf(text, false, usage, limit);
     }
-    return answerOf(text, finished, usage);
+    return answerOf(text, finished, usage, limit);
   } finally { await reader.cancel().catch(() => {}); }
 }
 
-function answerOf(raw: string, finished: boolean, usage: unknown): WebExplainAnswer {
+function answerOf(raw: string, finished: boolean, usage: unknown, limit: number): WebExplainAnswer {
   const text = raw.trim();
   if (!text) throw new WebExplainError(502, '模型服务没有给出回答。');
-  const counted = usageOf(usage), cut = text.length > webExplainLimits.answer || !finished;
-  return { answer: text.slice(0, webExplainLimits.answer), ...(cut ? { truncated: true } : {}), ...(counted ? { usage: counted } : {}) };
+  const counted = usageOf(usage), cut = text.length > limit || !finished;
+  return { answer: text.slice(0, limit), ...(cut ? { truncated: true } : {}), ...(counted ? { usage: counted } : {}) };
 }
 function outputText(output: unknown): string {
   if (!Array.isArray(output)) return '';

@@ -15,6 +15,9 @@ export type WebEnvironment = 'standard' | 'mathlib';
 /** `maxRuns` is how many run records one owner may keep; the composer warns before the server refuses the next one. */
 export const webLimits = Object.freeze({ maxTurns: 20, maxRunSeconds: 900, maxWorkers: 4, maxTotalTokens: 100_000_000,
   maxSourceBytes: 128 * 1024, maxTaskBytes: 8_000, maxRuns: 40 });
+/** Limits for compiling a saved paper snapshot in an isolated TeX container. */
+export const webPaperLimits = Object.freeze({ maxConcurrent: 2, maxRunSeconds: 120,
+  maxSourceBytes: 512 * 1024, maxPdfBytes: 16 * 1024 * 1024, maxLogBytes: 64 * 1024 });
 /** How long a run may spend preparing its proof environment; this is separate from the solve budget, which starts after it. */
 export const webPreparationSeconds: Readonly<Record<WebEnvironment, number>> = { standard: 120, mathlib: 600 };
 /** Why a run stopped without an accepted proof. Categories carry no provider text. */

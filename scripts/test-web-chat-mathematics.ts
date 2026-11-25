@@ -15,6 +15,7 @@ import { collaborationDetailStorageKey } from '../apps/web/client/runAwareness';
 import type { WebRunner } from '../apps/web/runner';
 import { createWebService } from '../apps/web/server';
 import type { WebExplanation, WebExplanationDocument, WebExplanationOverview, WebRun } from '../apps/web/shared';
+import { proofOutline } from '../apps/web/verificationKit';
 import { audit } from './web-a11y';
 import { freePort, preferFullCollaboration } from './web-scenario';
 import { clickWorkbenchAction, openChatResultDetails, openNavigationMenu } from './web-ui-controls';
@@ -275,6 +276,12 @@ try {
       if (selectedRun) {
         const endpoint = url.pathname.slice(`/api/runs/${selectedRun.id}`.length);
         if (!endpoint) { await route.fulfill({ json: { run: selectedRun } }); return; }
+        if (endpoint === '/paper') {
+          const targets = proofOutline(selectedRun)!.declarations.filter(item => item.role === 'target').map(item => item.name);
+          await route.fulfill({ json: { title: selectedRun.title, targets, target: url.searchParams.get('target') ?? targets[0],
+            language: url.searchParams.get('language') ?? 'en', defaultProviderId: 'sub2api',
+            providers: [{ id: 'sub2api', name: 'Sub2API', defaultModel: 'deepseek-flash', key: 'required' }] } }); return;
+        }
         if (endpoint === '/explanations') {
           reads.push(url.pathname);
           if (selectedRun === accepted && failAcceptedOverview) {
@@ -326,7 +333,11 @@ try {
         }
         if (endpoint === '/actions') { await route.fulfill({ json: { actions: [], dropped: 0 } }); return; }
         if (endpoint === '/events') { await route.fulfill({ json: { events: [] } }); return; }
-        if (endpoint === '/outline') { await route.fulfill({ status: 404, json: { error: 'No outline in read-only fixture' } }); return; }
+        if (endpoint === '/outline') {
+          if (selectedRun === accepted) await route.fulfill({ json: { outline: proofOutline(selectedRun) } });
+          else await route.fulfill({ status: 404, json: { error: 'No outline in read-only fixture' } });
+          return;
+        }
       }
       await route.continue();
     });
@@ -380,6 +391,34 @@ try {
     await page.goto(`${origin}/?chat=${conversations[0].id}`, { timeout: 15_000 });
     const answer = page.locator('[data-chat-answer]');
     await answer.locator('[data-chat-answer-document="swap_sum"]').waitFor({ timeout: 15_000 });
+    const draftLink = page.locator('[data-chat-paper]');
+    assert.equal(await draftLink.evaluate(element => element.previousElementSibling?.getAttribute('data-research-artifact')), 'source');
+    await page.mouse.move(0, 0);
+    const artifactStyle = (element: Element) => {
+      const { borderRadius, borderColor, height, padding, fontSize, fontWeight } = getComputedStyle(element);
+      return { borderRadius, borderColor, height, padding, fontSize, fontWeight };
+    };
+    assert.deepEqual(await draftLink.evaluate(artifactStyle),
+      await page.locator('.research-conversation-artifacts [data-research-artifact="source"]').evaluate(artifactStyle),
+      'The paper link shares the accepted proof button style');
+    await draftLink.click();
+    assert.equal(new URL(page.url()).searchParams.get('run'), accepted.id);
+    assert.equal(new URL(page.url()).searchParams.get('chat'), conversations[0].id);
+    await page.getByText('swap_sum', { exact: true }).first().waitFor();
+    await page.getByRole('heading', { name: '尚无论文初稿' }).waitFor();
+    assert.equal(await page.getByText('main.tex', { exact: true }).count(), 0);
+    assert.equal(await page.locator('a[download]').count(), 0);
+    await fit(page);
+    if (width === 1440) {
+      assert.deepEqual(await page.getByLabel('目标定理').locator('option').allTextContents(), ['swap_sum', 'identity_sum']);
+      await page.getByRole('button', { name: '生成初稿', exact: true }).click();
+      await page.getByRole('dialog').getByLabel('API Key').waitFor();
+      await page.keyboard.press('Escape');
+    }
+    await page.getByRole('link', { name: '返回对话', exact: true }).click();
+    await page.locator(`[data-conversation="${conversations[0].id}"] [data-chat-paper]`).waitFor();
+    await answer.locator('[data-chat-answer-document="swap_sum"]').waitFor({ timeout: 15_000 });
+    mark(`${width}: accepted proof opens an empty paper draft without a model request and returns to the same conversation`);
     const more = page.locator('[data-chat-result-more]');
     const fullAcceptedDescription = await page.locator('.research-conversation-status .research-conversation-description').innerText();
     assert.equal(await page.locator('.research-conversation-status [data-chat-run-meta]').count(), 1,

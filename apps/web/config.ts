@@ -37,6 +37,7 @@ export type WebConfig = {
   staticRoot: string;
   dataRoot?: string;
   workerImage: string;
+  texImage: string;
   /** The git commit the image was built from (Dockerfile ARG), reported by /healthz; absent when unknown. */
   sourceCommit?: string;
   concurrency: number;
@@ -151,6 +152,7 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
     staticRoot: path.resolve(env.THEOREMOS_WEB_STATIC_ROOT || 'out/web'),
     ...(env.THEOREMOS_WEB_DATA_ROOT ? { dataRoot: path.resolve(env.THEOREMOS_WEB_DATA_ROOT) } : {}),
     workerImage: env.THEOREMOS_WEB_WORKER_IMAGE || 'theorem-os-worker:local',
+    texImage: env.THEOREMOS_WEB_TEX_IMAGE || 'theorem-os-tex:local',
     ...(/^[0-9a-f]{7,40}$/u.test(env.THEOREMOS_SOURCE_COMMIT ?? '') ? { sourceCommit: env.THEOREMOS_SOURCE_COMMIT } : {}),
     concurrency: integer(env.THEOREMOS_WEB_CONCURRENCY, 1, 1, 8),
     queueLimit: integer(env.THEOREMOS_WEB_QUEUE_LIMIT, 8, 1, 32),
