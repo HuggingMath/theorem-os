@@ -13,6 +13,6 @@ await build({ entryPoints: [path.join(root, 'apps/web/preview/preview.tsx')], ou
   jsx: 'automatic', jsxImportSource: 'preact' });
 fs.copyFileSync(path.join(root, 'apps/web/client/app.css'), path.join(output, 'app.css'));
 for (const file of ['index.html', 'preview.css']) fs.copyFileSync(path.join(root, 'apps/web/preview', file), path.join(output, file));
-for (const file of ['mark.svg', ...fs.readdirSync(path.join(root, 'docs/assets/fonts')).filter(name => name.endsWith('.woff2')).map(font => `fonts/${font}`)])
+for (const file of ['mark.svg', 'favicon.svg', ...fs.readdirSync(path.join(root, 'docs/assets/fonts')).filter(name => name.endsWith('.woff2')).map(font => `fonts/${font}`)])
   fs.copyFileSync(path.join(root, 'docs/assets', file), path.join(output, 'assets', file));
 console.log('Built component preview in out/web-preview');

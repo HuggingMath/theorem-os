@@ -152,7 +152,7 @@ if (themeToggle) {
   fs.copyFileSync(path.join(root, 'docs/replay.css'), path.join(output, 'replay.css'));
   fs.mkdirSync(path.join(output, 'assets'), { recursive: true });
   fs.cpSync(path.join(root, 'docs/assets/fonts'), path.join(output, 'assets/fonts'), { recursive: true });
-  for (const file of ['mark.svg', 'replay.png', 'replay.json']) fs.copyFileSync(path.join(root, 'docs/assets', file), path.join(output, 'assets', file));
+  for (const file of ['mark.svg', 'favicon.svg', 'replay.png', 'replay.json']) fs.copyFileSync(path.join(root, 'docs/assets', file), path.join(output, 'assets', file));
   fs.copyFileSync(path.join(root, 'node_modules/lucide/LICENSE'), path.join(output, 'lucide-LICENSE.txt'));
   return catalog.records.length;
 }
