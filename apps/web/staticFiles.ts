@@ -58,7 +58,9 @@ export function sendStatic(request: http.IncomingMessage, response: http.ServerR
   // Each encoding is its own representation, so it gets its own validator.
   const etag = encoding ? `${item.etag.slice(0, -1)}-${encoding}"` : item.etag;
   // no-transform keeps proxies from rewriting pages; Cloudflare would otherwise inject an analytics script the CSP blocks.
-  const immutable = relative && (versionedEntryFile.test(relative) || bundledChunk.test(relative) || relative.startsWith('assets/katex/'));
+  const immutable = relative && (versionedEntryFile.test(relative)
+    || /^assets\/(?:mark|favicon)\.[a-f0-9]{12}\.svg$/u.test(relative)
+    || bundledChunk.test(relative) || relative.startsWith('assets/katex/'));
   const cacheableAsset = relative?.startsWith('assets/');
   const headers: http.OutgoingHttpHeaders = { 'Content-Type': contentType, ETag: etag,
     'Cache-Control': immutable ? 'public, max-age=31536000, immutable, no-transform'
