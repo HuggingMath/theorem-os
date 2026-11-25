@@ -30,6 +30,7 @@ export function agentTeamInstructions(role: AgentTeamRole, maxAgents: number,
     'Inspection and adoption record source exposure; preserve original authorship and describe assembly or exposed review accurately. ' +
     'Use resume to continue a paused task without replacing its identity. ' +
     'Spawn and assign return immediately; poll/wait receives individual arrivals while other agents continue. ' +
+    'If portfolio scouting produced no report, split concrete unanswered questions from the frozen statement and spawn useful independent work as soon as capacity is free. ' +
     'Use inspect to examine exact declarations and evidence before choosing adoption into you or an idle child. ' +
     'Save sources and notes before requesting adoption into your worktree, then return. ' +
     'A pending adoption also makes the host hand off automatically before the next model request; ' +
@@ -65,6 +66,7 @@ function nativeAgentTeamInstructions(role: AgentTeamRole, maxAgents: number): st
     'This team run explicitly authorizes you to spawn and coordinate useful child agents through the native collaboration tools. ' +
     `At most ${maxAgents} agents including you may be available. ` +
     'As soon as you identify a proof step you can advance, work on it in your Lean files. Keep writing the consuming argument or another unassigned gap while members work. ' +
+    'If portfolio scouting produced no report, use native spawn_agent for concrete independent gaps found in the frozen statement. ' +
     'If several goals share a mathematical foundation, assign and check its small Lean interfaces before dispatching the consuming goals. ' +
     'Tag route-specific native spawn and followup objectives with Route: ROUTE_ID as the first line. Use theoremos_team retire_route with the obstruction and evidence refs to stop a refuted route. ' +
     'Idle members still occupy their places. Use native followup_task to reuse a member for another gap or specialty; interrupt_agent stops its turn and preserves its place and work. ' +

@@ -302,6 +302,29 @@ describe('bounded web progress forwarding', () => {
     return { sent, forward, at: (value: number) => { clock = value; } };
   };
 
+  it('forwards portfolio, handoff and fallback events through the runner protocol using safe details', () => {
+    const { sent, forward } = forwarder();
+    const events = [
+      { event: 'portfolio_exploration_started', profiles: ['structural-symmetry'] },
+      { event: 'portfolio_scout_started', workerId: 'portfolio-structural-symmetry' },
+      { event: 'portfolio_scout_finished', workerId: 'portfolio-structural-symmetry', status: 'failed' },
+      { event: 'portfolio_scout_unavailable', workerId: 'portfolio-structural-symmetry', status: 'failed',
+        reason: 'math_codex_rpc_failed:private setup diagnostic' },
+      { event: 'portfolio_gate_evaluated', foundationLemmas: ['private proposal'] },
+      { event: 'team_transport_fallback', from: 'native-agent-control', to: 'host-tools', reason: 'math_codex_transport_closed' },
+      { event: 'soft_slice_milestone_requested', workerId: 'solver', taskId: 'goal-1' },
+      { event: 'compaction_circuit_breaker_triggered', workerId: 'solver', taskId: 'goal-1' },
+    ];
+    for (const event of events) forward({ ...event, error: 'private error', taskText: 'private prompt' });
+    expect(sent.map(message => message.event)).toEqual(events.map(event => event.event));
+    const received = sent.map(message => parseWorkerMessage(JSON.stringify(message)));
+    expect(received).toEqual(sent);
+    expect(received[3]).toMatchObject({ details: { workerId: 'portfolio-structural-symmetry',
+      status: 'failed', reason: 'math_codex_rpc_failed' } });
+    expect(received[5]).toMatchObject({ message: '团队已切换至宿主工具', details: { reason: 'math_codex_transport_closed' } });
+    expect(JSON.stringify(sent)).not.toContain('private');
+  });
+
   it('keeps one activity heartbeat per worker per interval and drops the rest', () => {
     const { sent, forward, at } = forwarder();
     for (let index = 0; index < 50; index++) forward({ event: 'worker_activity', workerId: 'solver' });

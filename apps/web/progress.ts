@@ -19,6 +19,12 @@ const descriptions: Record<string, string> = {
   assignment_superseded: '当前分配已被更新', research_action: '已选择下一步研究操作',
   model_budget_stopped: '模型预算已停止后续调用', context_compiled: '本轮上下文已整理',
   planning_budget_stopped: '初始规划已达到限额，正在交接研究任务',
+  portfolio_exploration_started: '开始探索候选路线',
+  portfolio_scout_started: '路线探查已开始', portfolio_scout_finished: '路线探查已结束',
+  portfolio_scout_unavailable: '路线探查未能提交有效报告', portfolio_gate_evaluated: '候选路线评估已完成',
+  team_transport_fallback: '团队已切换至宿主工具',
+  soft_slice_milestone_requested: '已请 Agent 保存阶段成果并交接',
+  compaction_circuit_breaker_triggered: '上下文多次压缩，已请 Agent 保存成果并交接',
   context_restarted: '研究上下文已重新建立', task_assigned: '研究任务已分配',
   task_checked: '局部任务检查完成', task_check_reused: '已复用当前任务检查',
   task_failure_check_reused: '已复用当前任务的失败检查', task_recheck_started: '正在重新检查任务',
@@ -97,7 +103,7 @@ const failureDescriptions: Record<string, string> = {
   math_delivery_line_too_large: 'Agent 交付记录过大，未能读取',
 };
 // A recovery succeeded; naming the provider failure it recovered from would read as a new failure.
-const recoveries = new Set(['worker_recovered']);
+const recoveries = new Set(['worker_recovered', 'team_transport_fallback']);
 const fields: Record<string, readonly (keyof WebEventDetails)[]> = {
   turn_started: ['turn'], turn_checkpoint: ['turn', 'reason'], proof_check_started: ['turn'],
   proof_checked: ['passed', 'reused'], research_action: ['operation'],
@@ -133,6 +139,9 @@ const fields: Record<string, readonly (keyof WebEventDetails)[]> = {
   proof_ready_checked: ['taskId', 'passed', 'conditional'], proof_ready_frozen: ['taskId'],
   knowledge_use_observed: ['taskId'], knowledge_use_rejected: ['taskId'],
   worker_context_recovering: ['reason'], cooperation_poll_failed: ['reason'], rejected: ['reason'],
+  portfolio_scout_finished: ['status'], portfolio_scout_unavailable: ['status', 'reason'],
+  team_transport_fallback: ['reason'], soft_slice_milestone_requested: ['taskId'],
+  compaction_circuit_breaker_triggered: ['taskId'],
 };
 
 /** The code before any ':' detail; runtime reasons append ids, sizes or Lean text after it. */

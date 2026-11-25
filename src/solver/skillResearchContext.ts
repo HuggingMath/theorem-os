@@ -78,14 +78,14 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
     'Save useful source and worktree-root RESEARCH.md before returning. The host confirms writer shutdown and freezes actual source. ' +
     'A successful check-lean covering every original proof file, with no remaining proof holes, also hands writing back automatically. ' +
     'Only independent host checks of all original targets can accept the original problem.\n' +
-    'To publish independent declarations while the original problem is unfinished, write ' +
+    'Only if you have at least one locally compiled standalone declaration ready for host checking, write ' +
     JSON.stringify(path.join(access.worktree, '.scratch/declaration-submission.json')) + ' containing ' +
     '{"declarations":[{"file":"OWNED_FILE.lean","name":"Qualified.helper","type":"COMPLETE_CLOSED_LEAN_TYPE"}]}, then stop editing and return. ' +
-    'Optional description and premises describe scope, not additional proof authority. The host verifies each actual declaration and complete type independently. ' +
+    'Never write an empty declarations array. Optional description and premises describe scope. The host verifies each actual declaration and complete type independently. ' +
     'Other incomplete goals may remain; a helper that depends on them or on new axioms is rejected. ' +
     'The request is consumed after the turn, and its host feedback is saved at .scratch/declaration-feedback.json. ' +
-    'It never claims the original problem is solved. No task graph, role acknowledgment or fabricated receipt is required. ' +
-    'When the host requests a soft milestone handoff, submit available standalone helpers, record progress and the exact obstruction in fewer than 20 lines in RESEARCH.md, then return.';
+    'It never claims the original problem is solved. ' +
+    'At a soft milestone, record progress and the exact obstruction in fewer than 20 lines in RESEARCH.md, then return.';
   help.section('delivery', teamWorker ? agentTeamWorkerDeliveryHelp() : team ?
     'Member delivery contract, supplied by the host: ' + agentTeamWorkerDeliveryHelp() + '\n\n' +
     'The following declaration-submission file is only for your own Lead worktree; do not assign it to a member. ' + ownDelivery : ownDelivery, '');

@@ -430,16 +430,32 @@ export function commitSolverSources(problem: SolverProblem, worktree: string): s
   return git(worktree, ['rev-parse', 'HEAD']);
 }
 
+const worktreeMutations = new Map<string, Promise<void>>();
+
+/** Serialize metadata changes across linked checkouts, leaving their work concurrent. */
+async function mutateWorktrees(repository: string, mutate: () => void): Promise<void> {
+  const previous = worktreeMutations.get(repository) ?? Promise.resolve();
+  const current = previous.then(mutate);
+  const settled = current.catch(() => {});
+  worktreeMutations.set(repository, settled);
+  try { await current; }
+  finally { if (worktreeMutations.get(repository) === settled) worktreeMutations.delete(repository); }
+}
+
 /** Use a disposable checkout of a fixed commit and release it on every exit path. */
-export async function withSolverWorktree<T>(worktree: string, commit: string, run: (checkout: string) => Promise<T>): Promise<T> {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'math-check-'));
-  const checkout = path.join(directory, 'worktree');
+export async function withSolverWorktree<T>(worktree: string, commit: string, run: (checkout: string) => Promise<T>,
+  parentDir?: string): Promise<T> {
+  const repository = fs.realpathSync(git(worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
+  const directory = fs.mkdtempSync(path.join(parentDir ?? os.tmpdir(), 'math-check-'));
+  // Process isolation masks a checkout's immediate parent to hide its peers.
+  const checkout = parentDir === undefined ? path.join(directory, 'worktree') : directory;
   let added = false;
   try {
-    git(worktree, ['worktree', 'add', '--quiet', '--detach', checkout, commit]); added = true;
+    await mutateWorktrees(repository, () => { git(worktree, ['worktree', 'add', '--quiet', '--detach', checkout, commit]); });
+    added = true;
     return await run(checkout);
   } finally {
-    try { if (added) git(worktree, ['worktree', 'remove', '--force', checkout]); }
+    try { if (added) await mutateWorktrees(repository, () => { git(worktree, ['worktree', 'remove', '--force', checkout]); }); }
     finally { fs.rmSync(directory, { recursive: true, force: true }); }
   }
 }

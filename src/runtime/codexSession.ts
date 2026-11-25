@@ -8,7 +8,6 @@ import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { mathProofEnvironmentWorkerEnvironment } from '../math/mathProofEnvironment';
 import { assertMathCanonicalPath, isMathPathWithin } from '../math/paths';
 import { startChatCompletionsBridge } from './chatCompletionsBridge';
-import { DEEPSEEK_PROVIDER } from './deepseek';
 import { WESTLAKE_PROVIDER, validateWestlakeModel } from './westlake';
 import { SUB2API_PROVIDER } from './sub2api';
 import type { ModelRequestGate } from './modelRequest';
@@ -302,7 +301,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     (calledThread, calledTurn) => calledThread === threadId && activeTurn === calledTurn &&
       !turnSettled && !turnStopping && !closing, options.delegation ? [INVESTIGATION_TOOL] : []) : undefined;
   const configFile = path.join(options.profile, 'config.toml');
-  const profileConfig = fs.existsSync(configFile) ? parseToml(fs.readFileSync(configFile, 'utf8')) : {};
+  const frozenConfig = fs.existsSync(configFile) ? fs.readFileSync(configFile, 'utf8') : undefined;
+  const profileConfig = frozenConfig === undefined ? {} : parseToml(frozenConfig);
   const providerId = typeof profileConfig.model_provider === 'string' ? profileConfig.model_provider : undefined;
   const providers = profileConfig.model_providers;
   const selectedProvider = providerId && providers && typeof providers === 'object' && !Array.isArray(providers)
@@ -415,14 +415,13 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   let bridge: Awaited<ReturnType<typeof startChatCompletionsBridge>> | undefined;
   let responsesRelay: Awaited<ReturnType<typeof startFormalizationRelay>> | undefined;
   let nativeProfile = isolated?.profile ?? options.profile;
-  if (!isolated && (providerId === DEEPSEEK_PROVIDER.id || providerId === WESTLAKE_PROVIDER.id ||
-      providerId === SUB2API_PROVIDER.id || options.nativeAgentControl && fs.existsSync(configFile))) {
+  if (!isolated && frozenConfig !== undefined) {
     // Codex persists project trust in config.toml; keep those writes outside the frozen profile.
     nativeProfile = path.join(options.profile, 'runtime');
     fs.mkdirSync(nativeProfile, { recursive: true, mode: 0o700 });
     const snapshot = path.join(nativeProfile, `.config-${randomUUID()}.toml`);
     try {
-      let config = fs.readFileSync(configFile, 'utf8');
+      let config = frozenConfig;
       if (useResponsesRelay) {
         const clean = structuredClone(profileConfig), selected = { ...object(provider) } as ReturnType<typeof parseToml>;
         delete selected.auth;

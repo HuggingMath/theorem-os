@@ -37,11 +37,12 @@ import { mathematicalGapContextText } from '../mathematicalGaps';
 import { nextCheckContextText } from '../nextChecks';
 import { goalProgressTaskContext } from '../goalProgress';
 import { assertMathAgentSkillsCurrent, type MathAgentSkill } from '../../runtime/agentSkills';
-import { buildCommonResearchContext, buildCommonResearchGuide, cooperativeDeliveryProtocol, cooperativeHelperProtocol } from '../researchGuidance';
+import { buildCommonResearchContext, buildCommonResearchGuide, cooperativeDeliveryProtocol, cooperativeHelperProtocol, leadPlanToolInstruction } from '../researchGuidance';
 import { agentTeamContextSection, buildSkillResearchContext, executionLimitsSection } from '../skillResearchContext';
 import type { AgentTeamAssignment, AgentTeamRole } from '../agentTeamContext';
 import { researchSkillIdentity } from '../researchSkill';
-import { longCommandGuidance } from '../researchToolGuide';
+import { buildResearchToolGuide, longCommandGuidance } from '../researchToolGuide';
+import type { ResearchToolHelp } from '../researchToolHelp';
 
 export type ContextAccess = Readonly<{
   teamRole?: AgentTeamRole;
@@ -81,6 +82,7 @@ export type ContextAccess = Readonly<{
 export type ContextBundle = Readonly<{
   assignment?: CooperativeAction;
   workContract?: ReturnType<typeof cooperativeWorkContract>;
+  toolHelp?: ResearchToolHelp;
   instructions: string;
   message: string;
   /** Same-thread dispatch compiled under the same byte budget as the full context. */
@@ -163,6 +165,7 @@ export function buildResearchContext(task: SolverProblem, state: Readonly<Solver
   const command = `bun ${shellArgument(access.tools ?? path.join(access.root, 'bin/math.ts'))}`;
   const fixedReview = access.assignment?.kind === 'review';
   const planningLead = access.assignment?.kind === 'lead';
+  const toolHelp = planningLead && !skillWorkflow ? buildResearchToolGuide(task, access, state.environmentDigest).help.build() : undefined;
   const readOnlySources = fixedReview || planningLead || access.assignment?.kind === 'task' &&
     (isFeasibilityReview(access.assignment.task) || isFinalCandidateReview(access.assignment.task));
   const deliveryFile = access.assignment?.kind === 'lead' ? leadPlanDeliveryFile(access.assignment) : undefined;
@@ -255,7 +258,7 @@ ${access.corpusFile ? `For library lookup, run ${command} search-lean --workspac
       checkpoint = readMathText(notes, 1_000_000);
     }
   }
-  const bundle: ContextBundle = { instructions,
+  const bundle: ContextBundle = { instructions, ...(toolHelp ? { toolHelp } : {}),
     message, scope: 'original-problem-and-allowed-library',
     sources: { problemReceiptDigest: task.receiptDigest } };
   const residualSnapshot = readLeanResidualGoalSnapshot({ projectRoot: path.join(access.worktree, task.projectRelative), env: access.environment,
@@ -635,7 +638,7 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     (action.kind === 'task' && ['lemma', 'goal'].includes(action.task.kind)
       ? 'Source-bound research findings require sources with exactly these Lean file keys: ' + JSON.stringify(leanFiles) + '.\n' : '') +
     connectionRules + familyMemberRules + canonicalProbeRules
-    : context.instructions + '\n' + initialPlanningRules + rules + helperRules + organizationRules + leadDeliveryRules + planRevisionRules + familyRules + feasibilityRules + earlyRouteRules + connectionRules + familyMemberRules + attemptRules + focusRules + gapRules + nextCheckRules + observationRules + checkpointRules + mathematicalInterfaceRules + inheritedFindingRules + researchSourcesRules + canonicalProbeRules +
+    : context.instructions + '\n' + (action.kind === 'lead' ? leadPlanToolInstruction : '') + initialPlanningRules + rules + helperRules + organizationRules + leadDeliveryRules + planRevisionRules + familyRules + feasibilityRules + earlyRouteRules + connectionRules + familyMemberRules + attemptRules + focusRules + gapRules + nextCheckRules + observationRules + checkpointRules + mathematicalInterfaceRules + inheritedFindingRules + researchSourcesRules + canonicalProbeRules +
     (action.kind === 'lead' || action.kind === 'task' && !isFeasibilityReview(action.task)
       ? 'For parallel work, assign distinct proof, feasibility/counterexample, library-connection or consumer questions. Inspect in-flight work and reuse saved results; do not duplicate an unchanged question. Keep backup routes testing different inferences. Leave a slot waiting for input when no independent useful work exists. Do not manufacture helpers. Route priority reflects recorded inputs and obstructions, not predicted ease.\n' : '') +
     (action.kind === 'lead' ? 'Use the proof-continuation snapshot to identify the original goal\'s current mathematical frontier. Prefer consuming relevant checked lemmas before creating more auxiliary work; give each new helper an intended consumer and explicitly assign every substantive missing premise. Keep useful alternative routes visible. A lemma without a recorded consumer may still be useful; investigate its connection rather than deleting it. Planned dependencies, actual Lean proof references and conditional references are reported separately. Do not count auxiliary lemma totals as completion of the original problem. The host obtains fixed-candidate review after the complete proof is checked; mark any advisory final-candidate task with reviewScope:"final-candidate" so it waits for freshly checked original goals. Use a distinct task with reviewScope:"feasibility" for independent mathematical route checks before a complete candidate exists. Inspect validated lemmaRequests in deliveries and adopt useful exact proposals as separate lemma tasks; proposals and their local checks are advisory. Advisory research may start before its planned dependencies are proved; use typed proof tasks when a consumer must wait for checked premises. Set consumerGoalIds on advisory tasks to the original goals their effort serves; these attribution links never add proof premises or dependency waits.\n' : '') +

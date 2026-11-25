@@ -16,7 +16,7 @@ vi.mock(import('../src/math/mathBuildManifest'), async importOriginal =>
 describe('soft research milestones', () => {
   afterEach(() => vi.useRealTimers());
 
-  it.each(['time', 'compaction', 'fallback', 'natural-return', 'independent'] as const)('yields an unlimited research turn after %s', async trigger => {
+  it.each(['time', 'compaction', 'fallback', 'natural-return', 'independent', 'team'] as const)('yields an unlimited research turn after %s', async trigger => {
     vi.useFakeTimers();
     const { directory, workspace, problem } = localExample('soft-slice-');
     const controller = new AbortController();
@@ -33,6 +33,10 @@ describe('soft research milestones', () => {
       return readMathAgentSkill(path.join(skillRoot, 'SKILL.md'));
     })();
     const state = solverState(problem, workspace, { runId: 'soft-slice-fixture', phase: 'prepared',
+      ...(trigger === 'team' ? { researchDelegation: { mode: 'team', maxAgents: 3 }, portfolioExploration: {
+        phase: 'completed', durationMs: 1000, scouts: [{ profile: 'structural-symmetry', status: 'timed-out', turns: 1 }],
+        gate: { retiredRoutes: [], foundationLemmas: [] },
+      } } : {}),
       ...(skill ? { researchMode: 'skill', researchSkill: { name: skill.name, digest: skill.digest, loading: skill.loading } } : {}) });
     const modules: typeof directSolverModules = { ...directSolverModules,
       M2: { ...directSolverModules.M2, check: async () => {
@@ -44,7 +48,8 @@ describe('soft research milestones', () => {
       M1: { ...directSolverModules.M1, open: async (options: MathAgentOptions): Promise<MathAgentSession> => ({
         threadId: 'offline-soft-slice', usageSource: 'upstream-requests', advisoryNotifications: 'native-history',
         notify, interrupt, close: vi.fn(async () => {}), stopForFreeze: stop,
-        run: async (_message, _id, _workspace, begin) => {
+        run: async (message, _id, _workspace, begin) => {
+          if (trigger === 'team') expect(message).toContain('Phase 1 ended without a usable report');
           begin('held-turn');
           started.resolve(options);
           return done.promise;
@@ -75,7 +80,18 @@ describe('soft research milestones', () => {
       }
       expect(events).toContainEqual({ event, details: expect.objectContaining({ turnId: 'held-turn',
         completedCompactions: trigger === 'compaction' ? 2 : 0 }) });
-      expect(notify.mock.calls).toEqual([[expect.stringMatching(/standalone helpers.*fewer than 20 lines.*RESEARCH\.md/u), { mode: 'advisory' }]]);
+      const notice = trigger === 'team' ? /route_summary.*delegate focused independent obligations.*fewer than 20 lines.*RESEARCH\.md/u
+        : /standalone helper.*fewer than 20 lines.*RESEARCH\.md/u;
+      expect(notify.mock.calls).toEqual([[expect.stringMatching(notice), { mode: 'advisory' }]]);
+      if (trigger === 'team') {
+        expect(options.instructions).toContain('spawn useful independent work');
+        expect(notify.mock.calls.flat()).not.toContainEqual(expect.stringContaining('declaration-submission.json'));
+        // This file is handled after the turn, outside the whole-proof diagnostics watcher.
+        expect(options.completedOutput?.file).toMatch(/lean-diagnostics-latest\.json$/u);
+        fs.writeFileSync(path.join(workspace, '.scratch/declaration-submission.json'), '{"declarations":[]}');
+      } else if (skill) {
+        expect(notify.mock.calls.flat()).toContainEqual(expect.stringContaining('Never write an empty declarations array'));
+      }
       expect(options.requestGate?.checkpoint?.()).toBe(false);
       expect(interrupt).not.toHaveBeenCalled();
       fs.writeFileSync(path.join(workspace, 'RESEARCH.md'), 'Established the first reduction. The induction step remains open.\n');
@@ -95,6 +111,12 @@ describe('soft research milestones', () => {
       expect(events).toContainEqual({ event: 'turn_checkpoint', details: expect.objectContaining({ reason: 'math_soft_slice_checkpoint' }) });
       expect(events.some(entry => entry.event === (skill ? 'research_saved' : 'proof_checked'))).toBe(true);
       expect(fs.readFileSync(path.join(workspace, 'RESEARCH.md'), 'utf8')).toContain('The induction step remains open.');
+      if (trigger === 'team') {
+        expect(fs.existsSync(path.join(workspace, '.scratch/declaration-submission.json'))).toBe(false);
+        expect(fs.existsSync(path.join(workspace, '.scratch/declaration-feedback.json'))).toBe(false);
+        expect(events.some(entry => entry.event === 'declarations_checked')).toBe(false);
+        expect(state.declarationArtifacts ?? []).toEqual([]);
+      }
     } finally {
       controller.abort();
       done.resolve('interrupted');

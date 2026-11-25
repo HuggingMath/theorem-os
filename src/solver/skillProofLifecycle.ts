@@ -79,7 +79,9 @@ export function createSkillProofLifecycle(input: {
       try {
         let artifacts: Awaited<ReturnType<typeof checkDeclarationArtifacts>>;
         try {
-          const submission = readDeclarationSubmission(worktree)!;
+          // A Lead may have nothing of its own to publish while teammates work.
+          const submission = readDeclarationSubmission(worktree, { allowEmpty: state.researchDelegation?.mode === 'team' });
+          if (!submission) { consumed = true; return; }
           artifacts = await input.exclusiveCheck(() => checkDeclarationArtifacts({ state,
             worktree, commit, declarations: submission.declarations, env: environment,
             signal, timeoutMs: input.proofTimeoutMs, assertWriterStopped: () => {

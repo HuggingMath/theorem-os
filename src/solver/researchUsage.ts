@@ -160,7 +160,8 @@ export class ResearchUsage {
         }
         const before = research.usage;
         const priorTotal = reportedTotalTokens(before), total = reportedTotalTokens(usage), baseline = reportedTotalTokens(research.usageBeforeThread) ?? 0;
-        if (scope?.finished && total !== null && priorTotal !== null && total + baseline <= priorTotal) return;
+        // A resumed thread may replay its prior cumulative total before the next turn exists.
+        if (((!scope && !this.active) || scope?.finished) && total !== null && priorTotal !== null && total + baseline <= priorTotal) return;
         const reported = recordThreadUsage(research, usage);
         const index = scope ? nativeTurns.indexOf(scope) : -1;
         const previousUnreported = index > 0 && nativeTurns.slice(0, index).some(turn => !turn.reported);

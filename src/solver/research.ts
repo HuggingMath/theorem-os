@@ -52,6 +52,7 @@ import { buildSkillResearchContext, teamTurnTiming } from './skillResearchContex
 import { stopProofWriter } from './proofWriter';
 import { createSkillProofLifecycle } from './skillProofLifecycle';
 import { createSoftSlice, softSliceSettings, type SoftSliceSettings } from './softSlice';
+import { materializeResearchToolHelp } from './researchToolHelp';
 import { portfolioUsageRecords } from './portfolioExploration';
 
 // Scheduling checkpoints preserve unlimited solving budgets and resume the same assignment/thread.
@@ -265,6 +266,8 @@ export async function runResearchWorkers(input: {
       if (skillResearch && !access.researchSkill) throw new Error('math_research_skill_missing');
       const view = (): SolverRunState => ({ ...state, ...research, turns: state.turns });
       const emit = (event: string, details = {}) => input.emit(event, { workerId: worker.id, ...details });
+      // The host has one Lead writer in team mode too. This watches the full-proof Lean diagnostic,
+      // while the stopped-writer Skill lifecycle handles optional declaration nominations.
       const singleHandoff = !parallel ? new SingleSolverProofHandoff(state.problem, worker.worktree,
         submission => emit('proof_ready_checkpoint_requested', { ...submission, reason: 'current-lean-diagnostics' })) : undefined;
       // Cooperative callers keep their existing stopped-writer quarantine; other callers receive exact correction feedback.
@@ -314,6 +317,7 @@ export async function runResearchWorkers(input: {
         const currentContext = { ...(skillMode && !fullSkillWorkflow && !access.commonResearchSkill
           ? buildSkillResearchContext(state.problem, contextState, { ...contextAccess, researchSkill: access.researchSkill! })
           : modules.M4.build(state.problem, contextState, contextAccess)), ...(assignment ? { assignment } : {}) };
+        materializeResearchToolHelp(currentContext, worker.worktree);
         if (assignment?.kind === 'task' && scoped) {
           const basis = captureResearchBasis(assignment.task, {
             problemReceiptDigest: state.problem.receiptDigest, environmentDigest: state.environmentDigest,
@@ -562,9 +566,12 @@ export async function runResearchWorkers(input: {
             notice: (reason, completedCompactions) => {
               emit(reason === 'time' ? 'soft_slice_milestone_requested' : 'compaction_circuit_breaker_triggered',
                 { turnId: milestoneTurnId, completedCompactions, graceMs: milestoneSettings.graceMs });
-              const submission = assignment?.kind === 'task'
+              const submission = team
+                ? 'Use theoremos_team route_summary to review the team. Collect useful checked results and coordinate active teammates. ' +
+                  'If slots are free, delegate focused independent obligations using the team tools. '
+                : assignment?.kind === 'task'
                 ? 'Publish standalone helpers as a helpers event in the assignment delivery log. '
-                : skillMode ? 'Nominate standalone helpers for host checking in .scratch/declaration-submission.json. '
+                : skillMode ? 'Write .scratch/declaration-submission.json only if you have at least one locally compiled standalone helper to nominate. Never write an empty declarations array. '
                   : 'Save standalone helpers in the owned Lean files for host checking. ';
               void activeSession.notify?.(submission +
                 'Write fewer than 20 lines in worktree-root RESEARCH.md covering what is established, the exact obstruction, ' +

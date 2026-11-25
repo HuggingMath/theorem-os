@@ -16,10 +16,13 @@ export const longCommandGuidance =
 /** Shared optional tool reference; callers retain their own mandatory delivery contracts. */
 export function buildResearchToolGuide(problem: Pick<SolverProblem, 'receiptDigest' | 'projectRelative' | 'targets' | 'ownedFiles' | 'frozenFiles'>,
   access: Pick<ContextAccess, 'root' | 'tools' | 'worktree' | 'retrievalRoot' | 'corpusFile' |
-    'knowledgeFile' | 'knowledgeDigest' | 'libraryCatalog' | 'teamRole'>, environmentDigest: string,
+    'knowledgeFile' | 'knowledgeDigest' | 'libraryCatalog' | 'teamRole' | 'assignment'>, environmentDigest: string,
   teamTransport?: AgentTeamTransport) {
   const command = `bun ${quote(access.tools ?? path.join(access.root, 'bin/math.ts'))}`;
   const help = new ResearchToolHelpBuilder();
+  if (access.assignment?.kind === 'lead') help.section('Lead plan submission',
+    `Omit progressReview on the initial plan. Before publishing, validate the draft with ${command} plan-validate --file .scratch/plan.json\n` +
+    `To submit the validated draft on return, save it atomically to RESEARCH.md with ${command} plan-apply --file .scratch/plan.json`, '');
   const editable = new Set(problem.ownedFiles.filter(file => file.endsWith('.lean') && !Object.hasOwn(problem.frozenFiles ?? {}, file)));
   const file = problem.targets.find(target => editable.has(target.proofPath))?.proofPath ?? editable.values().next().value;
   const leanCheckCommand = file && `${command} check-lean --worktree ${quote(access.worktree)} --file ${quote(file)} --timeout-seconds 0`;

@@ -6,6 +6,7 @@ import { createCodexMathSession, mathWorkerPermissionConfig, type MathAgentOptio
 import { deepSeekProfileDigest, prepareDeepSeekProfile } from '../src/runtime/deepseek';
 import { prepareWestlakeProfile, westlakeProfileDigest } from '../src/runtime/westlake';
 import { prepareSub2apiProfile, sub2apiProfileDigest } from '../src/runtime/sub2api';
+import { assertResearchHarnessCurrent, bindResearchHarness } from '../src/runtime/researchHarness';
 import { nativeFileWatchFixture } from './helpers/nativeFileWatchFixture';
 
 describe('Codex app-server adapter without provider calls', () => {
@@ -48,8 +49,9 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (fixtureInstruction === 'startup-crash') return process.exit(27);
     if (fixtureInstruction === 'mutate-profile') {
       const config = process.env.CODEX_HOME + '/config.toml';
-      fs.writeFileSync(config + '.updated', fs.readFileSync(config, 'utf8') + '\\n[projects.fixture]\\ntrust_level = "trusted"\\n');
-      fs.renameSync(config + '.updated', config);
+      const update = config + '.' + process.pid + '.updated';
+      fs.writeFileSync(update, fs.readFileSync(config, 'utf8') + '\\n[projects.fixture]\\ntrust_level = "trusted"\\n');
+      fs.renameSync(update, config);
     }
     result({ thread: { id: fixtureInstruction === 'wrong-thread' ? 'wrong-thread' : settings.threadId || 'thread-fixture' },
       model: fixtureInstruction === 'mismatch' ? 'wrong-model' : settings.model,
@@ -192,7 +194,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       return;
     }
     if (process.env.THEOREM_OS_FIXTURE_REPAIR_JSON) {
-      const file = process.env.CODEX_HOME + '/OUTPUT.json';
+      const file = path.join(settings.cwd, 'OUTPUT.json');
       fs.writeFileSync(file + '.tmp', process.env.THEOREM_OS_FIXTURE_REPAIR_JSON);
       fs.renameSync(file + '.tmp', file);
     }
@@ -207,10 +209,40 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   });
   afterEach(async () => { await session?.close(); vi.unstubAllEnvs(); fs.rmSync(root, { recursive: true, force: true }); });
 
+  it('protects the pinned Web provider config across concurrent sessions without native agent control', async () => {
+    const profile = path.join(root, 'web-profile'), workspaces = ['scout-one', 'scout-two'].map(name => path.join(root, name));
+    for (const directory of [profile, ...workspaces]) fs.mkdirSync(directory);
+    const catalog = path.join(profile, 'models.json'), configFile = path.join(profile, 'config.toml');
+    fs.writeFileSync(catalog, '{"models":[]}');
+    const config = Buffer.from('model_provider = "web_provider"\nmodel_catalog_json = ' + JSON.stringify(catalog) +
+      '\n[model_providers.web_provider]\nbase_url = "https://fixture.invalid/v1"\nwire_api = "responses"\nenv_key = "FIXTURE_API_KEY"\n');
+    fs.writeFileSync(configFile, config);
+    const environment = { PATH: process.env.PATH, FIXTURE_API_KEY: 'fixture-only' };
+    const identity = bindResearchHarness('codex', options.executable, profile, environment, options.model);
+    const opened = await Promise.allSettled(workspaces.map(workspace => createCodexMathSession({
+      ...options, profile, workspace, environment, instructions: 'mutate-profile',
+    })));
+    try {
+      expect(opened.map(result => result.status === 'rejected' ? result.reason.message : result.status))
+        .toEqual(['fulfilled', 'fulfilled']);
+      const runtime = path.join(profile, 'runtime');
+      expect(fs.readFileSync(path.join(runtime, 'config.toml'), 'utf8')).toContain('[projects.fixture]');
+      expect(fs.readdirSync(runtime).filter(file => file.startsWith('.config-'))).toEqual([]);
+      const launches = fs.readFileSync(path.join(runtime, 'calls.jsonl'), 'utf8').trim().split('\n')
+        .map(line => JSON.parse(line)).filter(call => call.method === 'thread/start');
+      expect(launches).toHaveLength(2);
+      for (const { params } of launches) expect(params.config.model_catalog_json).toBe(catalog);
+      expect(fs.readFileSync(configFile)).toEqual(config);
+      expect(() => assertResearchHarnessCurrent(identity, environment, options.model)).not.toThrow();
+    } finally {
+      await Promise.all(opened.flatMap(result => result.status === 'fulfilled' ? [result.value.close()] : []));
+    }
+  });
+
   it('does not expose the host library configuration path to the agent process', async () => {
     vi.stubEnv('THEOREMOS_LIBRARY_HOST_CONFIG', '/host/private/library-config.json');
     session = await createCodexMathSession(options);
-    expect(JSON.parse(fs.readFileSync(path.join(root, 'library-host-environment.json'), 'utf8')))
+    expect(JSON.parse(fs.readFileSync(path.join(root, 'runtime', 'library-host-environment.json'), 'utf8')))
       .toEqual({ hostConfigPresent: false });
   });
 
@@ -345,7 +377,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   it('keeps canonical shell filters when excluding a custom provider credential', async () => {
     fs.writeFileSync(path.join(root, 'config.toml'), 'model_provider = "custom"\n[model_providers.custom]\nenv_key = "FIXTURE_API_KEY"\n[shell_environment_policy.filters]\nPATH = "include"\n');
     session = await createCodexMathSession({ ...options, environment: { PATH: process.env.PATH, FIXTURE_API_KEY: 'fixture-key' } });
-    const calls = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    const calls = fs.readFileSync(path.join(root, 'runtime', 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
     const config = calls.find(call => call.method === 'thread/start').params.config;
     expect(config['shell_environment_policy.filters']).toEqual({ PATH: 'include', FIXTURE_API_KEY: 'exclude' });
     expect(config).not.toHaveProperty('shell_environment_policy.exclude');
@@ -358,7 +390,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     expect(started).toHaveBeenCalledWith('message-1');
     expect(options.onUsage).toHaveBeenCalledWith({ totalTokens: 21 }, {});
     expect(session.lastInputTokens).toBe(12345);
-    const calls = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    const calls = fs.readFileSync(path.join(root, 'runtime', 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
     expect(calls.find(call => call.method === 'thread/start').params.config).toMatchObject({
       'features.apps': false, 'features.plugins': false,
     });
@@ -397,7 +429,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   it('refuses a new thread whose app-server did not adopt the worker profile', async () => {
     await expect(createCodexMathSession({ ...options, instructions: 'ignore-permissions' }))
       .rejects.toThrow('math_codex_sandbox_profile_mismatch');
-    const calls = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8');
+    const calls = fs.readFileSync(path.join(root, 'runtime', 'calls.jsonl'), 'utf8');
     expect(calls).not.toContain('turn/start');
     // A resumed thread keeps the sandbox it started with, so its response is not evidence either way.
     session = await createCodexMathSession({ ...options, threadId: 'retained-thread', instructions: 'ignore-permissions' });
@@ -638,7 +670,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   it('rejects an invalid proof environment before launching the app-server', async () => {
     await expect(createCodexMathSession({ ...options, proofProjectRoot: root,
       environment: { DEEPSCIENTIST_MATH_PROOF_ENVIRONMENT: '{}' } })).rejects.toThrow();
-    expect(fs.existsSync(path.join(root, 'calls.jsonl'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'runtime', 'calls.jsonl'))).toBe(false);
   });
 
   it('isolates mathematical temporary files by worktree and overrides inherited shell settings', async () => {
@@ -652,9 +684,9 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       const temporaryDirectory = path.join(workspace, '.scratch', 'tmp');
       expect(fs.readFileSync(path.join(temporaryDirectory, `${name}.txt`), 'utf8')).toBe('temporary fixture');
       expect(fs.existsSync(path.join(project, '.scratch'))).toBe(false);
-      expect(JSON.parse(fs.readFileSync(path.join(root, 'temporary-environment.json'), 'utf8')))
+      expect(JSON.parse(fs.readFileSync(path.join(root, 'runtime', 'temporary-environment.json'), 'utf8')))
         .toEqual({ inherited: temporaryDirectory, shell: temporaryDirectory });
-      const calls = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const calls = fs.readFileSync(path.join(root, 'runtime', 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
       expect(calls.filter(call => call.method === 'thread/start').at(-1).params.config['shell_environment_policy.set'])
         .toEqual({ TMPDIR: temporaryDirectory, LANG: 'C.UTF-8' });
       expect(calls.filter(call => call.method === 'thread/start').at(-1).params.config['permissions.math-worker.filesystem'])
@@ -685,7 +717,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     await expect(createCodexMathSession({ ...options, workspace, proofProjectRoot: workspace,
       environment: { PATH: process.env.PATH } })).rejects.toThrow('math_path_invalid');
     expect(fs.readdirSync(outside)).toEqual([]);
-    expect(fs.existsSync(path.join(root, 'calls.jsonl'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'runtime', 'calls.jsonl'))).toBe(false);
   });
 
   it('rejects a scratch symlink inserted between turns before dispatching another turn', async () => {
@@ -698,7 +730,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     fs.symlinkSync(outside, path.join(workspace, '.scratch'));
     await expect(session.run('temporary-file', 'unsafe', workspace, () => {})).rejects.toThrow('math_path_invalid');
     expect(fs.readdirSync(outside)).toEqual([]);
-    const calls = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    const calls = fs.readFileSync(path.join(root, 'runtime', 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
     expect(calls.filter(call => call.method === 'turn/start')).toHaveLength(1);
   });
 
@@ -708,7 +740,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     expect(await session.run('temporary-file', 'generic', root, () => {})).toBe('completed');
     expect(fs.readFileSync(path.join(inherited, 'generic.txt'), 'utf8')).toBe('temporary fixture');
     expect(fs.existsSync(path.join(root, '.scratch'))).toBe(false);
-    const calls = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    const calls = fs.readFileSync(path.join(root, 'runtime', 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
     expect(calls.find(call => call.method === 'thread/start').params.config).not.toHaveProperty('shell_environment_policy.set');
   });
 
@@ -753,7 +785,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     await session.notify!('A checked dependency is available');
     await session.interrupt();
     expect(await done).toBe('interrupted');
-    const calls = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    const calls = fs.readFileSync(path.join(root, 'runtime', 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
     expect(calls.filter(call => call.method === 'turn/steer').map(call => call.params)).toEqual([{
       threadId: 'thread-fixture', expectedTurnId: 'active-turn',
       input: [{ type: 'text', text: 'A checked dependency is available', text_elements: [] }],
@@ -852,7 +884,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     session = await createCodexMathSession({ ...options, turnTimeoutMs: 30 });
     expect(await session.run('wait', 'long-turn', root, () => {})).toBe('checkpoint');
     expect(await session.run('proof', 'next-turn', root, () => {})).toBe('completed');
-    const calls = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    const calls = fs.readFileSync(path.join(root, 'runtime', 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
     expect(calls.filter(call => call.method === 'turn/interrupt')).toHaveLength(1);
   });
 
@@ -860,9 +892,9 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (!value || typeof value !== 'object' || (value as Record<string, unknown>).answer !== 'valid')
       throw new Error('invalid fixture submission');
   };
-  const interrupts = (directory: string) => fs.readFileSync(path.join(directory, 'calls.jsonl'), 'utf8').trim().split('\n')
+  const interrupts = (directory: string) => fs.readFileSync(path.join(directory, 'runtime', 'calls.jsonl'), 'utf8').trim().split('\n')
     .map(line => JSON.parse(line)).filter(call => call.method === 'turn/interrupt');
-  const calls = (directory: string) => fs.readFileSync(path.join(directory, 'calls.jsonl'), 'utf8').trim().split('\n')
+  const calls = (directory: string) => fs.readFileSync(path.join(directory, 'runtime', 'calls.jsonl'), 'utf8').trim().split('\n')
     .map(line => JSON.parse(line));
 
   it('steers an invalid exact quote and admits its repaired unknown in the original turn', async () => {
@@ -1057,7 +1089,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   it('rejects a mismatched model before any provider request and fails a disconnected turn', async () => {
     await expect(createCodexMathSession({ ...options, instructions: 'mismatch' })).rejects.toThrow('math_codex_session_binding_mismatch');
     await expect(createCodexMathSession({ ...options, threadId: 'retained-thread', instructions: 'wrong-thread' })).rejects.toThrow('math_codex_session_binding_mismatch');
-    const calls = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8');
+    const calls = fs.readFileSync(path.join(root, 'runtime', 'calls.jsonl'), 'utf8');
     expect(calls).not.toContain('turn/start');
     session = await createCodexMathSession(options);
     await expect(session.run('crash', 'message-4', root, () => {})).rejects.toThrow('math_codex_transport_closed');

@@ -5,6 +5,7 @@ import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 import { readMathAgentSkill } from '../src/runtime/agentSkills';
 import { rejectedDeliveryReceipt } from '../src/solver/deliveryReceipts';
 import { prepareResearchSkill, researchSkillIdentity } from '../src/solver/researchSkill';
+import { materializeResearchToolHelp } from '../src/solver/researchToolHelp';
 import { buildResearchContext, finalizeResearchDispatch } from '../src/solver/modules/context';
 import { buildRunInspection, renderRunInspection } from '../src/solver/inspection';
 import { assignmentDeliveryFile, leadPlanDeliveryFile, parseCooperationPlan, taskVersion } from '../src/solver/tasks';
@@ -51,9 +52,15 @@ describe('Skill methods with complete host workflows', () => {
     expect(context.instructions).toContain('Keep the user-selected method available.');
     expect(context.instructions).toContain('Leave every Lean source unchanged');
     expect(context.instructions).toContain(leadPlanDeliveryFile(action));
+    const leadHelp = fs.readFileSync(path.join(f.workspace, '.scratch/theoremos-help.md'), 'utf8');
+    expect(leadHelp.split(/^## /mu)[1]).toMatch(/^Lead plan submission\b/u);
+    expect(leadHelp).toContain('Omit progressReview on the initial plan');
+    expect(context.instructions).toContain('Validate the draft JSON before publishing');
+    expect(leadHelp).toMatch(/plan-validate --file \.scratch\/plan\.json\n[^\n]+plan-apply --file \.scratch\/plan\.json/u);
     const reference = path.join(path.dirname(f.skill.path), 'references/cooperation.md');
     expect(context.instructions).toContain(reference);
     const protocol = fs.readFileSync(reference, 'utf8');
+    expect(protocol).toContain('Omit `progressReview` on the initial plan');
     for (const field of ['proofRoutes', 'conditional', 'definition', 'family', 'statementReview', 'researchDecisions',
       'nextCheckDecisions', 'guidanceDecisions', 'replacesReceipt']) expect(protocol).toContain(field);
     expect(context.workContract?.stage).toBe('route-planning');
@@ -72,6 +79,19 @@ describe('Skill methods with complete host workflows', () => {
     expect(next.manifest!.usedBytes).toBeLessThan(context.manifest!.usedBytes);
   });
 
+  it('materializes bundled plan commands for a cooperative Lead without the full Skill workflow', () => {
+    const f = fixture();
+    const action = { kind: 'lead' as const, seedCommit: f.problem.baseCommit, planVersion: 'initial', initialPlanNonce: 'start' };
+    const tools = path.join(f.directory, 'agent-tools', 'math.mjs');
+    const context = buildResearchContext(f.problem, { ...f.state, researchSkillWorkflow: undefined },
+      { ...f.access, assignment: action, tools });
+    materializeResearchToolHelp(context, f.workspace);
+    const help = fs.readFileSync(path.join(f.workspace, '.scratch/theoremos-help.md'), 'utf8');
+    expect(help.split(/^## /mu)[1]).toContain(`bun '${tools}' plan-validate --file .scratch/plan.json`);
+    expect(help).toContain(`bun '${tools}' plan-apply --file .scratch/plan.json`);
+    expect(context.instructions).toContain('Omit progressReview on the initial plan');
+  });
+
   it('keeps exact proof inputs, consumer context and mandatory failure feedback on task continuation', () => {
     const f = fixture();
     const node = f.state.cooperation!.tasks.find(item => item.task.id === 'helper')!;
@@ -85,9 +105,11 @@ describe('Skill methods with complete host workflows', () => {
     expect(context.message).toContain(assignment.taskDigest);
     expect(context.message).toContain('CURRENT_EXACT_TYPE_ERROR');
     expect(context.message).toContain(f.state.cooperation!.tasks[0]!.task.theoremName);
-    expect(context.instructions).toContain(assignmentDeliveryFile(assignment));
+    expect(context.instructions).toContain('delivery log named in the assignment message');
+    expect(context.message).toContain(assignmentDeliveryFile(assignment));
     expect(context.workContract?.input).toMatchObject({ taskId: 'helper', taskDigest: assignment.taskDigest });
     const help = fs.readFileSync(path.join(f.workspace, '.scratch/theoremos-help.md'), 'utf8');
+    expect(help).not.toContain('Lead plan submission');
     expect(help).toContain("bun '" + tools.replaceAll("'", "'\\''") + "' research-observe");
     const continued = finalizeResearchDispatch(context, { continuation: true });
     expect(continued.message).toContain('CURRENT_EXACT_TYPE_ERROR');
