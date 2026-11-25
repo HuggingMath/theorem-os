@@ -5,6 +5,7 @@ import type { NextCheckRecord } from './nextCheckContract';
 import { assertMathCanonicalPath } from '../math/paths';
 import { canonicalMathJson, mathDigest, parseMathJson, readMathFile, writeMathTextDurable } from '../math/mathRuntimeIo';
 import { localProofSearchPath, projectedProofSearchPath } from '../math/proofSearchCheckpointPath';
+import type { DeliveryRecord } from './deliveries';
 
 export function proofSearchCheckForAssignment(assignment: { taskId: string; taskDigest: string },
   currentChecks: readonly NextCheckRecord[], identity: { problemReceiptDigest: string; environmentDigest: string }) {
@@ -42,6 +43,7 @@ export type ProofSearchScope = z.infer<typeof proofSearchScopeSchema>;
 export const proofSearchCheckpointEnvelopeSchema = z.object({
   schema: z.literal('theorem-os.proof-search-checkpoint.v1'),
   generation: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  assignmentKey: z.string().min(1).max(4096).optional(),
   basis: z.object({
     scope: proofSearchScopeSchema,
     sourceDigest: digest, projectionDigest: digest, backendDigest: digest,
@@ -64,14 +66,57 @@ export const proofSearchRecordSchema = z.object({
 export type ProofSearchRecord = z.infer<typeof proofSearchRecordSchema>;
 
 const invalid = () => new Error('math_proof_search_checkpoint_invalid');
-function parsedCheckpoint(reference: ProofSearchCheckpointReference, file: string) {
-  assertMathCanonicalPath(file);
-  const bytes = readMathFile(file, MAX_PROOF_SEARCH_CHECKPOINT_BYTES).bytes;
-  if (mathDigest(bytes) !== reference.digest) throw invalid();
+function parseCheckpoint(bytes: Buffer, checkpointDigest: string) {
+  if (bytes.length > MAX_PROOF_SEARCH_CHECKPOINT_BYTES || mathDigest(bytes) !== checkpointDigest) throw invalid();
   const parsed = proofSearchCheckpointEnvelopeSchema.safeParse(parseMathJson(bytes, 'math_proof_search_checkpoint_invalid'));
   if (!parsed.success) throw invalid();
   const checkpoint = parsed.data, basisDigest = mathDigest(canonicalMathJson(checkpoint.basis));
   return { checkpoint, basisDigest, bytes };
+}
+
+function parsedCheckpoint(reference: ProofSearchCheckpointReference, file: string) {
+  assertMathCanonicalPath(file);
+  return parseCheckpoint(readMathFile(file, MAX_PROOF_SEARCH_CHECKPOINT_BYTES).bytes, reference.digest);
+}
+
+function retainedCheckpointPath(runDirectory: string, checkpointDigest: string) {
+  return path.join(path.resolve(runDirectory), 'proof-search-artifacts', digest.parse(checkpointDigest) + '.json');
+}
+
+function readRetainedCheckpoint(runDirectory: string, reference: ProofSearchCheckpointReference) {
+  const file = retainedCheckpointPath(runDirectory, reference.digest);
+  if (reference.path !== file) throw invalid();
+  return parsedCheckpoint(reference, file);
+}
+
+function assertRetainedCheckpoint(record: ProofSearchRecord, saved: ReturnType<typeof parseCheckpoint>) {
+  const { checkpoint, basisDigest, bytes } = saved;
+  if (basisDigest !== record.basisDigest || checkpoint.generation !== record.generation ||
+      !proofSearchRecordMatches(checkpoint.basis.scope, record) ||
+      checkpoint.assignmentKey && checkpoint.assignmentKey !== record.assignmentKey ||
+      checkpoint.basis.sourceDigest !== record.sourceDigest || checkpoint.basis.projectionDigest !== record.projectionDigest ||
+      checkpoint.basis.backendDigest !== record.backendDigest) throw invalid();
+  if (mathDigest(bytes.toString('utf8')) !== record.checkpoint.digest) throw invalid();
+}
+
+function writeCheckpoint(file: string, text: string) {
+  assertMathCanonicalPath(file);
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  assertMathCanonicalPath(file);
+  writeMathTextDurable(file, text, 0o400);
+}
+
+function checkpointRecord(saved: ReturnType<typeof parsedCheckpoint>, reference: ProofSearchCheckpointReference,
+  origin: Pick<ProofSearchRecord, 'workerId' | 'assignmentKey' | 'createdAt' | 'history'>): ProofSearchRecord {
+  const { checkpoint, basisDigest } = saved;
+  const usage = toolUsageSchema.safeParse(checkpoint.counters);
+  return proofSearchRecordSchema.parse({
+    schema: 'theorem-os.proof-search-record.v1', ...checkpoint.basis.scope,
+    sourceDigest: checkpoint.basis.sourceDigest, projectionDigest: checkpoint.basis.projectionDigest,
+    backendDigest: checkpoint.basis.backendDigest, basisDigest, generation: checkpoint.generation,
+    ...origin, checkpoint: reference, ...(usage.success ? { toolUsage: usage.data } : {}),
+    evidence: 'advisory-proof-search', proofAcceptance: 'not-accepted',
+  });
 }
 
 /** Read only an exact, regular project scratch checkpoint; an arbitrary artifact path is not an input. */
@@ -94,7 +139,7 @@ export function readProofSearchCheckpoint(projectRoot: string, value: ProofSearc
   } catch { throw invalid(); }
 }
 
-export function proofSearchRecordMatches(record: ProofSearchRecord | undefined, scope: ProofSearchScope): record is ProofSearchRecord {
+export function proofSearchRecordMatches<T extends ProofSearchScope>(record: T | undefined, scope: ProofSearchScope): record is T {
   return Boolean(record && record.taskId === scope.taskId && record.taskDigest === scope.taskDigest &&
     record.problemReceiptDigest === scope.problemReceiptDigest && record.environmentDigest === scope.environmentDigest);
 }
@@ -116,29 +161,46 @@ export function retainProofSearchCheckpoint(input: {
   projectRoot: string; runDirectory: string; reference: ProofSearchCheckpointReference; scope: ProofSearchScope;
   workerId: string; assignmentKey: string; now?: number; history?: string; requiredBasisDigest?: string;
 }): ProofSearchRecord {
-  const { checkpoint, basisDigest, bytes } = readProofSearchCheckpoint(input.projectRoot, input.reference, input.history);
-  if (canonicalMathJson(checkpoint.basis.scope) !== canonicalMathJson(input.scope) ||
-      input.requiredBasisDigest && basisDigest !== input.requiredBasisDigest)
+  const saved = readProofSearchCheckpoint(input.projectRoot, input.reference, input.history);
+  if (!proofSearchRecordMatches(saved.checkpoint.basis.scope, input.scope) ||
+      saved.checkpoint.assignmentKey && saved.checkpoint.assignmentKey !== input.assignmentKey ||
+      input.requiredBasisDigest && saved.basisDigest !== input.requiredBasisDigest)
     throw new Error('math_proof_search_checkpoint_scope_changed');
-  const directory = path.join(path.resolve(input.runDirectory), 'proof-search-artifacts');
-  const usage = toolUsageSchema.safeParse(checkpoint.counters);
   try {
-    assertMathCanonicalPath(directory);
-    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-    assertMathCanonicalPath(directory);
-    const file = path.join(directory, `${input.reference.digest}.json`);
-    assertMathCanonicalPath(file);
-    writeMathTextDurable(file, bytes.toString('utf8'), 0o400);
-    return proofSearchRecordSchema.parse({
-      schema: 'theorem-os.proof-search-record.v1', ...input.scope,
-      sourceDigest: checkpoint.basis.sourceDigest, projectionDigest: checkpoint.basis.projectionDigest,
-      backendDigest: checkpoint.basis.backendDigest, basisDigest, generation: checkpoint.generation,
+    const file = retainedCheckpointPath(input.runDirectory, input.reference.digest);
+    writeCheckpoint(file, saved.bytes.toString('utf8'));
+    return checkpointRecord(saved, { path: file, digest: input.reference.digest }, {
       history: input.history, workerId: input.workerId, assignmentKey: input.assignmentKey, createdAt: input.now ?? Date.now(),
-      checkpoint: { path: file, digest: input.reference.digest },
-      ...(usage.success ? { toolUsage: usage.data } : {}),
-      evidence: 'advisory-proof-search', proofAcceptance: 'not-accepted',
     });
   } catch { throw new Error('math_proof_search_checkpoint_unavailable'); }
+}
+
+/** A delivery binds an older exact artifact to the worker and assignment that produced it. */
+export function historicalProofSearchRecord(input: {
+  digest: string; runDirectory: string; scope: ProofSearchScope; basisDigest?: string;
+  deliveries: readonly DeliveryRecord[]; nextChecks?: readonly NextCheckRecord[];
+}): ProofSearchRecord | undefined {
+  const { scope } = input;
+  for (const delivery of input.deliveries) {
+    const { searchCheckpoint, assignmentKey } = delivery;
+    if (delivery.kind !== 'progress' || delivery.status === 'superseded' || !assignmentKey ||
+        searchCheckpoint?.digest !== input.digest) continue;
+    const owner = delivery.taskId === scope.taskId && delivery.taskDigest === scope.taskDigest;
+    const check = owner ? undefined : input.nextChecks?.find(record => record.taskId === delivery.taskId &&
+      record.taskDigest === delivery.taskDigest && record.scope.target.taskId === scope.taskId &&
+      record.scope.target.taskDigest === scope.taskDigest && record.scope.problemReceiptDigest === scope.problemReceiptDigest &&
+      record.scope.environmentDigest === scope.environmentDigest && record.check.execution?.kind === 'proof-search');
+    if (!owner && !check) continue;
+    try {
+      const saved = readRetainedCheckpoint(input.runDirectory, searchCheckpoint);
+      if (!proofSearchRecordMatches(saved.checkpoint.basis.scope, scope) ||
+          saved.checkpoint.assignmentKey && saved.checkpoint.assignmentKey !== assignmentKey ||
+          input.basisDigest && saved.basisDigest !== input.basisDigest ||
+          check?.scope.executionBasisDigest && saved.basisDigest !== check.scope.executionBasisDigest) continue;
+      return checkpointRecord(saved, searchCheckpoint, { history: check?.id, workerId: delivery.producer,
+        assignmentKey, createdAt: delivery.createdAt });
+    } catch { continue; }
+  }
 }
 
 /** Arrival order cannot roll back a newer generation of the same fixed search basis. */
@@ -155,19 +217,25 @@ export function projectProofSearchRecord(input: {
   if (!proofSearchRecordMatches(input.record, input.scope)) return;
   try {
     const record = proofSearchRecordSchema.parse(input.record);
-    const retained = path.join(path.resolve(input.runDirectory), 'proof-search-artifacts', `${record.checkpoint.digest}.json`);
-    if (record.checkpoint.path !== retained) return;
-    const { checkpoint, basisDigest, bytes } = parsedCheckpoint(record.checkpoint, retained);
-    if (basisDigest !== record.basisDigest || checkpoint.generation !== record.generation ||
-        canonicalMathJson(checkpoint.basis.scope) !== canonicalMathJson(input.scope) ||
-        checkpoint.basis.sourceDigest !== record.sourceDigest || checkpoint.basis.projectionDigest !== record.projectionDigest ||
-        checkpoint.basis.backendDigest !== record.backendDigest) return;
-    const file = projectedProofSearchPath(path.resolve(input.projectRoot), basisDigest, record.generation, record.checkpoint.digest,
+    const text = readRetainedProofSearchText(input.runDirectory, record);
+    const file = projectedProofSearchPath(path.resolve(input.projectRoot), record.basisDigest, record.generation, record.checkpoint.digest,
       digest.optional().parse(input.history ?? record.history));
-    assertMathCanonicalPath(file);
-    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    assertMathCanonicalPath(file);
-    writeMathTextDurable(file, bytes.toString('utf8'), 0o400);
+    writeCheckpoint(file, text);
     return { ...record, checkpoint: { path: file, digest: record.checkpoint.digest } };
   } catch { return undefined; }
+}
+
+export function readRetainedProofSearchText(runDirectory: string, record: ProofSearchRecord) {
+  const saved = readRetainedCheckpoint(runDirectory, record.checkpoint);
+  assertRetainedCheckpoint(record, saved);
+  return saved.bytes.toString('utf8');
+}
+
+export function installRetainedProofSearchText(runDirectory: string, record: ProofSearchRecord, text: string) {
+  assertRetainedCheckpoint(record, parseCheckpoint(Buffer.from(text, 'utf8'), record.checkpoint.digest));
+  writeCheckpoint(retainedCheckpointPath(runDirectory, record.checkpoint.digest), text);
+}
+
+export function relocateRetainedProofSearchRecord(runDirectory: string, record: ProofSearchRecord): ProofSearchRecord {
+  return { ...record, checkpoint: { ...record.checkpoint, path: retainedCheckpointPath(runDirectory, record.checkpoint.digest) } };
 }

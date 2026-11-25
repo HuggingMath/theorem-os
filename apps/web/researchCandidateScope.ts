@@ -1,12 +1,23 @@
 import { inspectLeanDeclarationRegions, inspectScopedLeanDeclarations, repeatedLeanLocalNames } from '../../src/math/leanSource';
 import { maskLeanComments, maskLeanCommentsAndStrings } from '../../src/math/leanSyntax';
-import { mathConstructionImports } from '../../src/math/mathConstructionSources';
+import { mathConstructionHeader, mathConstructionImports } from '../../src/math/mathConstructionSources';
 import { libraryForbiddenToken } from '../../src/math/libraryPacks';
 import { solverMathlibImports, solverSourceContext } from '../../src/solver/sourceContext';
 
 export type ResearchCandidateScopeInput = Readonly<{
   originalSource: string; baselineSource: string; candidateSource: string; targetName: string;
 }>;
+
+/** Add the trial's imports after any Lean module/prelude directives. */
+export function withResearchLibraryImports(source: string, imports: readonly string[]): string {
+  if (!imports.length) return source;
+  const added = imports.map(name => `import ${name}\n`).join('');
+  const { directivesEnd } = mathConstructionHeader(source);
+  if (!directivesEnd) return added + source;
+  const lineBreak = /^\r?\n/u.exec(source.slice(directivesEnd))?.[0];
+  const offset = directivesEnd + (lineBreak?.length ?? 0);
+  return source.slice(0, offset) + (lineBreak ? '' : '\n') + added + source.slice(offset);
+}
 
 const declarations = (source: string) => {
   const regions = new Map(inspectLeanDeclarationRegions(source).map(item => [item.startOffset, item]));

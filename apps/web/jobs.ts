@@ -60,6 +60,9 @@ export class WebJobs {
     for (const { owner, run, creation } of this.storage.loadRuns()) {
       if (creation) this.creations.set(JSON.stringify([owner, creation.requestId]), { ...creation, runId: run.id });
       const provider: WebWorkerProvider = { id: run.providerId, name: run.providerId, baseUrl: '' };
+      const tail = this.storage.recoverRunTail(owner, run);
+      const recoveredObservation = tail.observation && this.applyObservation(run, tail.observation);
+      if (tail.actionCount !== undefined) run.actions = { ...run.actions, count: tail.actionCount };
       this.jobs.set(run.id, { owner, run, provider, input: { ...run, apiKey: '' }, controller: new AbortController() });
       if (run.result && (!terminal(run) || run.phase === 'interrupted' && run.result.status === 'evaluated_passed')) {
         if (run.phase === 'interrupted') {
@@ -75,7 +78,10 @@ export class WebJobs {
         run.failure = { kind: 'interrupted' };
         delete run.queue;
         this.event(run, 'interrupted', run.error);
-      } else if (run.phase === 'interrupted' && !run.failure) run.failure = { kind: 'interrupted' };
+      } else {
+        if (run.phase === 'interrupted' && !run.failure) run.failure = { kind: 'interrupted' };
+        if (recoveredObservation || tail.actionCount !== undefined) this.persist(run);
+      }
     }
   }
 
@@ -314,31 +320,34 @@ export class WebJobs {
     this.persist(job.run);
   }
   private observe(job: Job, observation: WebObservation) {
-    const current = job.run.solverAttempt ?? (job.run.observation && {
-      solverRunId: job.run.observation.solverRunId, round: 0, sequence: job.run.observation.sequence });
-    if (observation.webRunId !== job.run.id || observation.snapshot.runId !== observation.solverRunId ||
+    if (this.applyObservation(job.run, observation)) this.persist(job.run);
+  }
+  private applyObservation(run: WebRun, observation: WebObservation) {
+    const current = run.solverAttempt ?? (run.observation && {
+      solverRunId: run.observation.solverRunId, round: 0, sequence: run.observation.sequence });
+    if (observation.webRunId !== run.id || observation.snapshot.runId !== observation.solverRunId ||
         current && (current.solverRunId !== observation.solverRunId || current.sequence >= observation.sequence)) return;
     const configuration = observation.inspection.configuration;
-    const actualHarness = configuration?.agentHarness, expectedHarness = job.run.harness ?? 'codex';
+    const actualHarness = configuration?.agentHarness, expectedHarness = run.harness ?? 'codex';
     if (actualHarness && actualHarness.id !== expectedHarness || expectedHarness !== 'codex' && !actualHarness ||
-        job.run.agentHarness && canonicalMathJson(job.run.agentHarness) !== canonicalMathJson(actualHarness)) return;
-    if ((configuration?.researchMode ?? 'legacy') !== (job.run.researchMode ?? 'legacy')) return;
+        run.agentHarness && canonicalMathJson(run.agentHarness) !== canonicalMathJson(actualHarness)) return;
+    if ((configuration?.researchMode ?? 'legacy') !== (run.researchMode ?? 'legacy')) return;
     if ((configuration?.researchDelegation?.mode === 'team' ? configuration.researchDelegation.maxAgents : undefined)
-        !== job.run.nativeTeamCapacity) return;
-    if (canonicalMathJson(configuration?.researchDelegation?.preferredProfiles ?? []) !== canonicalMathJson(job.run.nativeTeamPreferredProfiles ?? [])) return;
-    const cards = job.researchConfiguration?.personalExperts;
+        !== run.nativeTeamCapacity) return;
+    if (canonicalMathJson(configuration?.researchDelegation?.preferredProfiles ?? []) !== canonicalMathJson(run.nativeTeamPreferredProfiles ?? [])) return;
+    const cards = run.researchConfiguration?.personalExperts;
     if (configuration?.researchDelegation?.personalExperts?.digest !== (cards?.length ? personalExpertCardsDigest(cards) : undefined)) return;
-    if (job.run.researchMode === 'skill') {
-      const skill = configuration?.researchSkill, frozen = job.run.researchSkill;
-      if (!skill || skill.loading !== (job.run.skillLoading ?? 'native') ||
+    if (run.researchMode === 'skill') {
+      const skill = configuration?.researchSkill, frozen = run.researchSkill;
+      if (!skill || skill.loading !== (run.skillLoading ?? 'native') ||
           frozen && (skill.name !== frozen.name || skill.digest !== frozen.digest || skill.loading !== frozen.loading)) return;
-      job.run.researchSkill = { ...skill };
+      run.researchSkill = { ...skill };
     }
-    if (actualHarness) job.run.agentHarness = { ...actualHarness };
-    job.run.solverAttempt = { solverRunId: observation.solverRunId, round: current?.round ?? 0, sequence: observation.sequence };
-    job.run.observation = projectStoredObservationChecks(observation);
-    job.run.updatedAt = observation.observedAt;
-    this.persist(job.run);
+    if (actualHarness) run.agentHarness = { ...actualHarness };
+    run.solverAttempt = { solverRunId: observation.solverRunId, round: current?.round ?? 0, sequence: observation.sequence };
+    run.observation = projectStoredObservationChecks(observation);
+    run.updatedAt = observation.observedAt;
+    return true;
   }
   guidance(owner: string, runId: string, id: string) {
     const run = this.get(owner, runId);
@@ -509,8 +518,9 @@ export class WebJobs {
           const tally = job.run.actions ??= { count: 0 };
           if (tally.count >= webAgentActionLimits.perRun) tally.dropped = (tally.dropped ?? 0) + 1;
           else {
-            tally.count++;
-            this.storage.saveAction(job.owner, job.run.id, { ...message.action, sequence: tally.count, at: new Date().toISOString() });
+            const sequence = tally.count + 1;
+            this.storage.saveAction(job.owner, job.run.id, { ...message.action, sequence, at: new Date().toISOString() });
+            tally.count = sequence;
           }
           this.actionsChanged(job.run);
         } else if (message.type === 'artifact') {

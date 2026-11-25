@@ -16,7 +16,7 @@ import type { ResearchLibraryTrial, ResearchLibraryTrialTarget, ResearchLibraryT
   ResearchLibraryTrialHistory, ResearchLibraryTrialHistoryItem } from './researchLibraryTrialTypes';
 import { WebStorage, WebStorageError } from './storage';
 import { selectWebLibraryPack } from './frozenLibrary';
-import { researchCandidateScopeReason } from './researchCandidateScope';
+import { researchCandidateScopeReason, withResearchLibraryImports } from './researchCandidateScope';
 import { leanDiagnostics } from './precheck';
 import { researchLibraryProposalOriginSchema, type ResearchLibraryProposalOrigin } from './researchLibraryProposalOrigin';
 
@@ -162,15 +162,15 @@ export class WebResearchLibraryTrials {
     if (baseline.slice(region.bodyOffset - 2, region.bodyOffset) !== ':=') fail(409, '这个目标使用方程式声明，请从完整源码候选入口检查。');
     const imports = [...new Set(release.mathematics!.pack.modules.map(item => item.file.slice(0, -5).replaceAll('/', '.')))]
       .filter(name => !mathConstructionImports(baseline).includes(name));
-    const prefix = imports.map(name => `import ${name}\n`).join('');
     const proof = input.proof.trim(), indent = baseline.slice(baseline.lastIndexOf('\n', start - 1) + 1, start).match(/^\s*/u)?.[0] ?? '';
-    const source = prefix + baseline.slice(0, region.bodyOffset) + ' ' + proof.split('\n').map((line, index) => index ? indent + line : line).join('\n') + '\n' + baseline.slice(region.endOffset);
-    const beforeDeclarations = inspectScopedLeanDeclarations(prefix + baseline), afterDeclarations = inspectScopedLeanDeclarations(source);
+    const candidate = baseline.slice(0, region.bodyOffset) + ' ' + proof.split('\n').map((line, index) => index ? indent + line : line).join('\n') + '\n' + baseline.slice(region.endOffset);
+    const source = withResearchLibraryImports(candidate, imports), importedBaseline = withResearchLibraryImports(baseline, imports);
+    const beforeDeclarations = inspectScopedLeanDeclarations(importedBaseline), afterDeclarations = inspectScopedLeanDeclarations(source);
     if (beforeDeclarations.length !== afterDeclarations.length || beforeDeclarations.some((before, index) => {
       const after = afterDeclarations[index];
       return !after || before.kind !== after.kind || before.qualifiedName !== after.qualifiedName || before.declarationType !== after.declarationType;
     })) fail(400, '请只填写目标的证明体，不要添加、删除或重写其他声明。');
-    const reason = researchCandidateScopeReason({ originalSource: prefix + resolved.run.source, baselineSource: prefix + baseline,
+    const reason = researchCandidateScopeReason({ originalSource: withResearchLibraryImports(resolved.run.source, imports), baselineSource: importedBaseline,
       candidateSource: source, targetName: resolved.target.declaration });
     if (reason) fail(400, reason);
     const planned = resolved.run.observation?.plan?.tasks.find(item => item.id === resolved.task.id);
@@ -191,6 +191,9 @@ export class WebResearchLibraryTrials {
     return { ...copy(stored.draft), ...(this.pending.has(`${viewer}:${id}`) ? { status: 'checking' as const } : {}) };
   }
   history(viewer: string, id: string): ResearchLibraryTrialHistory {
+    return this.readHistory(viewer, id, true);
+  }
+  private readHistory(viewer: string, id: string, includeAttempt: boolean): ResearchLibraryTrialHistory {
     const stored = this.deps.storage.getRecord<Stored>(this.path(viewer, id)) ?? fail(404, '试用候选不存在或不属于当前账号。');
     const trial = copy(stored.draft), ref = trial.target.ref;
     // History retains its frozen source. Current run/release permission is still required on every read.
@@ -208,7 +211,18 @@ export class WebResearchLibraryTrials {
     let current = true, reason: string | undefined;
     try { this.get(viewer, id); } catch (error) { if (!(error instanceof WebStorageError && error.status === 409)) throw error; current = false; reason = error.message; }
     if (this.pending.has(`${viewer}:${id}`)) trial.status = 'checking';
-    return { trial, current, ...(reason ? { reason } : {}), personalAttempt: current && trial.status === 'passed' && Boolean(this.deps.jobs.get(viewer, ref.runId)),
+    let personalAttempt = false, personalAttemptReason: string | undefined;
+    if (includeAttempt && current && trial.status === 'passed') {
+      const ownRun = this.deps.jobs.get(viewer, ref.runId);
+      if (ownRun) {
+        try { this.checkedPersonalAttempt(viewer, trial, ownRun, stored, trial.digest); personalAttempt = true; }
+        catch (error) {
+          if (!(error instanceof WebStorageError && [400, 403, 404, 409].includes(error.status))) throw error;
+          personalAttemptReason = error.message;
+        }
+      }
+    }
+    return { trial, current, ...(reason ? { reason } : {}), personalAttempt, ...(personalAttemptReason ? { personalAttemptReason } : {}),
       libraryPack: copy(stored.libraryPack) as ResearchLibraryPack, dependencySources: copy(stored.dependencySources) };
   }
   historyList(viewer: string, raw: unknown = {}): { items: ResearchLibraryTrialHistoryItem[]; total: number; nextOffset?: number } {
@@ -220,7 +234,7 @@ export class WebResearchLibraryTrials {
       if (!/^trial_[a-f0-9]{32}\.json$/u.test(file)) return [];
       const stored = this.deps.storage.getRecord<Stored>([...root, file]); if (!stored || filters.runId && stored.draft.target.ref.runId !== filters.runId || filters.assetId && stored.draft.release.assetId !== filters.assetId) return [];
       try {
-        const { trial, current, reason } = this.history(viewer, stored.draft.id);
+        const { trial, current, reason } = this.readHistory(viewer, stored.draft.id, false);
         if (filters.status && trial.status !== filters.status) return [];
         return [{ id: trial.id, digest: trial.digest, release: trial.release, target: trial.target.ref, runTitle: trial.target.runTitle,
           taskTitle: trial.target.taskTitle, declaration: trial.declaration.name, createdAt: trial.createdAt, status: trial.status, current,
@@ -297,11 +311,14 @@ export class WebResearchLibraryTrials {
     parse(hash, digest);
     const trial = this.get(viewer, id), run = this.deps.jobs.get(viewer, trial.target.ref.runId) ?? fail(403, '只有原研究的所有者可以准备个人新尝试。');
     const stored = this.deps.storage.getRecord<Stored>(this.path(viewer, id))!;
+    return this.checkedPersonalAttempt(viewer, trial, run, stored, digest);
+  }
+  private checkedPersonalAttempt(viewer: string, trial: ResearchLibraryTrial, run: WebRun, stored: Stored, digest: string): ResearchLibraryPersonalAttemptPreparation {
     if (trial.digest !== digest || trial.status !== 'passed' || !trial.check?.receipt.passed || identity(trial.check.receipt) !== trial.check.receiptId
       || trial.check.receipt.draftDigest !== trial.digest || trial.check.receipt.sourceDigest !== mathDigest(trial.source)
       || trial.check.receipt.libraryPackDigest !== libraryPackDigest(stored.libraryPack) || mathDigest(trial.source) !== trial.sourceDigest)
       fail(409, '只有这份已通过独立检查的固定候选可以准备个人新尝试。');
-    return { trialId: id, originRunId: run.id, ...this.attemptConfiguration(viewer, run, trial, trial.source, stored.libraryPack as ResearchLibraryPack, stored.dependencySources) };
+    return { trialId: trial.id, originRunId: run.id, ...this.attemptConfiguration(viewer, run, trial, trial.source, stored.libraryPack as ResearchLibraryPack, stored.dependencySources) };
   }
   validateProposalOrigin(viewer: string, raw: ResearchLibraryProposalOrigin): ResearchLibraryProposalOrigin {
     const origin = parse(researchLibraryProposalOriginSchema, raw);
@@ -317,7 +334,7 @@ export class WebResearchLibraryTrials {
     const origin = run.libraryProposalOrigin;
     if (!origin || origin.projectId !== projectId || origin.feedbackId !== feedbackId || origin.trialDigest !== input.trialDigest)
       fail(409, '这次运行未记录此提案的固定来源。');
-    let project = this.deps.projects.detail(viewer, projectId);
+    const project = this.deps.projects.detail(viewer, projectId);
     const feedback = project.feedback.find(item => item.id === feedbackId), attachment = feedback?.payload && 'libraryTrial' in feedback.payload ? feedback.payload.libraryTrial : undefined;
     if (!attachment || attachment.trial.digest !== input.trialDigest || !feedback?.target) fail(404, '原提案或其固定来源当前不可访问。');
     const attached = project.runs.find(item => item.runId === run.id);
@@ -325,20 +342,15 @@ export class WebResearchLibraryTrials {
     if (!project.permissions.edit) fail(403, '只有协作者可绑定研究运行。');
     const sourceTarget = feedback?.target ?? fail(404, '来源陈述版本不存在。');
     const sourceVersion = project.versions.find(item => item.id === sourceTarget.statementVersionId) ?? fail(404, '来源陈述版本不存在。');
-    let version = project.versions.find(item => item.source === run.source && item.environment === run.environment
+    const version = project.versions.find(item => item.source === run.source && item.environment === run.environment
       && (!item.environmentDigest || item.environmentDigest === run.observation?.inspection.configuration.environmentDigest));
-    if (!version) {
-      if (!input.createStatementVersion) fail(409, '本次源码与现有陈述不同，请确认创建新的陈述版本后再关联。');
-      const requestId = `library-source-${mathDigest(input.requestId).slice(0, 48)}`;
-      project = this.deps.projects.addVersion(viewer, projectId, { requestId, expectedRevision: input.expectedRevision,
-        statement: sourceVersion.statement, source: run.source, environment: run.environment,
-        ...(sourceVersion.assumptions ? { assumptions: sourceVersion.assumptions } : {}),
-        ...(run.observation?.inspection.configuration.environmentDigest ? { environmentDigest: run.observation.inspection.configuration.environmentDigest } : {}) });
-      version = project.versions.find(item => item.source === run.source && item.environment === run.environment)!;
-    } else if (project.revision !== input.expectedRevision) fail(409, '研究项目已经更新，请刷新后重新核对。');
+    if (!version && !input.createStatementVersion) fail(409, '本次源码与现有陈述不同，请确认创建新的陈述版本后再关联。');
+    if (project.revision !== input.expectedRevision) fail(409, '研究项目已经更新，请刷新后重新核对。');
+    const statementRef = version ? { statementVersionId: version.id } : {};
+    const newStatement = version ? undefined : { statement: sourceVersion.statement, assumptions: sourceVersion.assumptions };
     return this.deps.projects.bindRun(viewer, projectId, { requestId: `library-attach-${mathDigest(input.requestId).slice(0, 48)}`,
-      expectedRevision: project.revision, runId: run.id, statementVersionId: version.id, exposure: 'members',
-      grants: { guidance: false, edit: false, approve: false, proof: false } });
+      expectedRevision: input.expectedRevision, runId: run.id, ...statementRef, exposure: 'members',
+      grants: { guidance: false, edit: false, approve: false, proof: false } }, newStatement);
   }
   private attemptConfiguration(viewer: string, run: WebRun, trial: ResearchLibraryTrial, source: string, libraryPack: ResearchLibraryPack,
     dependencySources: { file: string; source: string }[]): Omit<ResearchLibraryAttemptPreparation, 'projectId' | 'feedbackId'> {

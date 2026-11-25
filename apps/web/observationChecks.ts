@@ -1,7 +1,30 @@
+import { canonicalMathJson } from '../../src/math/mathRuntimeIo';
 import type { WebCheckReceipt, WebObservation } from './collaboration';
 
-/** Earlier frames copied each original-goal receipt onto every goal in its batch. */
 export function projectStoredObservationChecks(observation: WebObservation): WebObservation {
+  const projected = projectOriginalProblemChecks(observation);
+  // Task checks bind both statement hashes to the task revision. Older workers could also
+  // publish them as whole-problem checks, storing the actual task verdict in the batch field.
+  const isTaskCheck = ({ taskVersion, record }: WebCheckReceipt) =>
+    record.statementHash === taskVersion && record.leanStatementHash === taskVersion;
+  if (!projected.checks.some(check => isTaskCheck(check) && typeof check.record.originalProblemPassed === 'boolean')) return projected;
+
+  const taskChecks = new Set<string>();
+  const checks = projected.checks.flatMap(check => {
+    if (!isTaskCheck(check)) return [check];
+    const { originalProblemPassed, ...record } = check.record;
+    const normalized = typeof originalProblemPassed === 'boolean' ?
+      { ...check, record: { ...record, passed: originalProblemPassed } } : check;
+    const key = canonicalMathJson(normalized);
+    if (taskChecks.has(key)) return [];
+    taskChecks.add(key);
+    return [normalized];
+  });
+  return { ...projected, checks };
+}
+
+/** Earlier frames copied each original-goal receipt onto every goal in its batch. */
+function projectOriginalProblemChecks(observation: WebObservation): WebObservation {
   const targets = observation.inspection.problem?.targets ?? [];
   if (targets.length < 2 || observation.checks.length < 2) return observation;
 

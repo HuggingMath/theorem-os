@@ -71,8 +71,9 @@ export function webSampleResponse(sample: WebSampleFile, operation: string | und
   const newestFirst = [...sample.observations].reverse();
   const source = /^tasks\/([^/]+)\/source$/u.exec(operation);
   if (source) {
-    const taskId = decodeURIComponent(source[1]), version = query.get('version') ?? undefined;
-    const found = newestFirst.flatMap(item => item.sources).find(item => item.taskId === taskId && (version === undefined || item.taskVersion === version));
+    const taskId = decodeURIComponent(source[1]), version = query.get('version'), commit = query.get('commit');
+    const found = newestFirst.flatMap(item => item.sources).find(item => item.taskId === taskId &&
+      (version === null || item.taskVersion === version) && (commit === null || item.commit === commit));
     return found ? { status: 200, body: { source: found } } : { status: 404, body: { error: '该任务版本没有已保存的源码。' } };
   }
   const check = /^checks\/([^/]+)$/u.exec(operation);

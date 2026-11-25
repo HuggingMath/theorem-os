@@ -42,6 +42,7 @@ const nodeSchema = z.object({ id: digest, tactics: z.array(tactic).max(128),
   status: z.enum(['pending', 'open', 'candidate', 'rejected']), view: viewSchema.optional(), error: z.string().max(4000).optional() }).strict();
 export const proofSearchCheckpointSchema = z.object({
   schema: z.literal('theorem-os.proof-search-checkpoint.v1'), generation: natural, basis: basisSchema,
+  assignmentKey: z.string().min(1).max(4096).optional(),
   nodes: z.array(nodeSchema).min(1).max(4096),
   actions: z.array(z.object({ sequence: natural, from: digest, to: digest, replay: z.boolean(),
     requestDigest: digest.optional(), branchIndex: natural.optional(), proposal: proposalSchema.optional(),
@@ -192,7 +193,7 @@ export async function searchLeanBranches(input: {
   /** An ordinary worker search may start at the current root if its implicit resume has a different basis. */
   restartStaleImplicitResume?: boolean;
   /** Only a host-scoped independent nextCheck may replay the explicitly retained source instead of live owned files. */
-  retainedInput?: { basisDigest: string; checkpointDigest: string };
+  retainedInput?: { basisDigest: string; checkpoint: SearchCheckpointReference; assignmentKey?: string };
   onCheckpoint?: (reference: SearchCheckpointReference) => void;
 }) {
   const request = proofSearchRequestSchema.parse(input.request), scope = proofSearchScopeSchema.parse(input.scope);
@@ -206,6 +207,7 @@ export async function searchLeanBranches(input: {
   const cancelTimer = scheduleMathTimeout(() => controller.abort(), request.limits.timeoutMs);
   let projection: ReturnType<typeof prepareLeanSearchProjection> | undefined, session: ProofSearchSession | undefined;
   let reference: SearchCheckpointReference | undefined, checkpoint: ProofSearchCheckpoint | undefined;
+  let retainedCheckpoint: ProofSearchCheckpoint | undefined;
   let status: LeanProofSearchStatus = 'unavailable', reason: string | undefined;
   let candidates: { node: string; proofSource: string }[] = [];
   try {
@@ -215,14 +217,16 @@ export async function searchLeanBranches(input: {
     if (readMathFile(path.join(project, 'lean-toolchain'), 1000).bytes.toString('utf8').trim() !== backend.toolchain)
       throw new Error('proof_search_backend_toolchain_mismatch');
     if (input.retainedInput) {
-      if (!request.resume || request.resume.digest !== input.retainedInput.checkpointDigest)
+      const retained = input.retainedInput.checkpoint;
+      if (!input.retainedInput.assignmentKey && request.resume && request.resume.digest !== retained.digest)
         throw new Error('proof_search_stale_retained_checkpoint');
-      const saved = readCheckpoint(project, request.resume, history);
+      const saved = readCheckpoint(project, retained, history);
       if (mathDigest(canonicalMathJson(saved.basis)) !== input.retainedInput.basisDigest ||
           canonicalMathJson(saved.basis.scope) !== canonicalMathJson(scope) ||
           canonicalMathJson(saved.basis.target) !== canonicalMathJson({ file: input.file, theoremName: input.theoremName, type: input.type }))
         throw new Error('proof_search_stale_retained_basis');
       if (!saved.replaySources?.length) throw new Error('proof_search_unsupported_missing_replay_sources');
+      retainedCheckpoint = saved;
       projection = prepareRetainedLeanSearchProjection({ ...input, env,
         sources: saved.replaySources.map(item => ({ file: item.file!, source: item.source! })) });
     } else projection = prepareLeanSearchProjection({ ...input, env });
@@ -240,20 +244,33 @@ export async function searchLeanBranches(input: {
         const match = /^retained-(0|[1-9][0-9]*)-([a-f0-9]{64})\.json$/u.exec(name);
         return match ? [{ name, generation: Number(match[1]), digest: match[2]! }] : [];
       }).sort((a, b) => b.generation - a.generation)[0];
-      const latest = Math.max(latestLocal, projected?.generation ?? -1);
+      const localReference = () => {
+        const file = localProofSearchPath(project, basisDigest, latestLocal, history); assertMathCanonicalPath(file);
+        return { path: path.relative(project, file), digest: mathDigest(readMathFile(file, checkpointLimit).bytes) };
+      };
+      const retained = input.retainedInput;
+      // An independent history can outlive an assignment. Unpublished local files
+      // from a prior dispatch reserve generations but cannot resume the current one.
+      const local = retainedCheckpoint && retained?.assignmentKey && latestLocal > retainedCheckpoint.generation
+        ? localReference() : undefined;
+      const ownedLocal = local && readCheckpoint(project, local, history).assignmentKey === retained?.assignmentKey ? local : undefined;
+      const resumableLocal = retained?.assignmentKey && !ownedLocal ? -1 : latestLocal;
+      const latest = Math.max(resumableLocal, retainedCheckpoint?.generation ?? projected?.generation ?? -1);
       const requireLatestResume = () => {
-        if (latestLocal === latest) {
-          const file = localProofSearchPath(project, basisDigest, latest, history); assertMathCanonicalPath(file);
-          reference = { path: path.relative(project, file), digest: mathDigest(readMathFile(file, checkpointLimit).bytes) };
-        } else {
-          reference = { path: path.relative(project, path.join(directory, projected!.name)), digest: projected!.digest };
-        }
+        reference = resumableLocal === latest ? ownedLocal ?? localReference() : retained?.checkpoint ??
+          { path: path.relative(project, path.join(directory, projected!.name)), digest: projected!.digest };
         checkpoint = readCheckpoint(project, reference, history);
         validateCheckpoint(checkpoint, basis);
         throw new Error('proof_search_stale_resume_required: use the returned latest checkpoint');
       };
-      if (request.resume) {
-        checkpoint = readCheckpoint(project, request.resume, history);
+      const resume = request.resume ?? (ownedLocal && resumableLocal === latest ? ownedLocal : retained?.checkpoint);
+      if (resume) {
+        const saved = readCheckpoint(project, resume, history);
+        if (retainedCheckpoint && retained && resume.digest !== retained.checkpoint.digest &&
+            (!retained.assignmentKey || saved.assignmentKey !== retained.assignmentKey || saved.generation <= retainedCheckpoint.generation ||
+              path.resolve(project, resume.path) !== localProofSearchPath(project, basisDigest, saved.generation, history)))
+          throw new Error('proof_search_stale_retained_checkpoint');
+        checkpoint = saved;
         if (input.restartStaleImplicitResume && !input.retainedInput && !request.branches.some(branch => branch.from) &&
             canonicalMathJson(checkpoint.basis) !== canonicalMathJson(basis)) checkpoint = undefined;
         else {
@@ -269,7 +286,8 @@ export async function searchLeanBranches(input: {
           throw new Error('proof_search_unsupported_replay_source_size');
         checkpoint.replaySources = replaySources;
       }
-      let generation = Math.max(latest, checkpoint.generation);
+      if (retained?.assignmentKey) checkpoint.assignmentKey = retained.assignmentKey;
+      let generation = Math.max(latestLocal, projected?.generation ?? -1, checkpoint.generation);
       const save = (value: ProofSearchCheckpoint) => {
         value.generation = ++generation;
         proofSearchCheckpointSchema.parse(value);

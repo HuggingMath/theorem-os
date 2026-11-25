@@ -54,15 +54,16 @@ export async function runProofSearchTool(input: { projectRoot: string; request: 
   const constraints = path.join(context.project, '.lake/source-constraints.json');
   if (fs.existsSync(constraints)) assertSolverProjectSources(JSON.parse(readMathText(constraints)) as SolverSourceConstraints, context.project);
   const request = proofSearchRequestSchema.parse(input.request);
+  const assignmentKey = assignmentDeliveryFile(context.assignment);
   const implicitResume = !request.resume && context.record;
-  if (implicitResume) request.resume = implicitResume.checkpoint;
+  if (implicitResume && !context.independentSearch) request.resume = implicitResume.checkpoint;
   const queueCheckpoint = (reference: SearchCheckpointReference) => {
     const event = { kind: 'progress', id: reference.digest,
       summary: 'Saved advisory proof-search state; candidate proofs require independent verification.',
       searchCheckpoint: reference };
     const line = JSON.stringify(event) + '\n';
     if (Buffer.byteLength(line) > MAX_DELIVERY_LINE_BYTES) throw new Error('proof_search_delivery_too_large');
-    const output = path.join(context.worktree, assignmentDeliveryFile(context.assignment)); assertMathCanonicalPath(output);
+    const output = path.join(context.worktree, assignmentKey); assertMathCanonicalPath(output);
     const descriptor = fs.openSync(output, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW, 0o600);
     try { fs.writeFileSync(descriptor, line); fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
   };
@@ -71,7 +72,7 @@ export async function runProofSearchTool(input: { projectRoot: string; request: 
     history: context.history,
     restartStaleImplicitResume: Boolean(implicitResume && !context.independentSearch),
     ...(context.independentSearch && context.record ? { retainedInput: {
-      basisDigest: context.record.basisDigest, checkpointDigest: context.record.checkpoint.digest } } : {}),
+      basisDigest: context.record.basisDigest, checkpoint: context.record.checkpoint, assignmentKey } } : {}),
     signal: input.signal, env: input.env, onCheckpoint: queueCheckpoint });
   return { ...result, taskId: context.scope.taskId, taskDigest: context.scope.taskDigest,
     requestDigest: mathDigest(JSON.stringify(request)) };
