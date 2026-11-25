@@ -64,6 +64,7 @@ function mathStylesheet(web: string): string {
 export function staticReportHtml(root: string, report: StaticReportPage): string {
   const web = path.join(root, 'out/web'), pages = path.join(root, templates[report.page]);
   const mark = dataUri('image/svg+xml', bytes(path.join(web, 'assets/mark.svg')));
+  const favicon = dataUri('image/svg+xml', bytes(path.join(web, 'assets/favicon.svg')));
   // The template's tags are swapped for placeholders and checked first, so nothing inlined is read as markup.
   const inlined: Record<string, string> = {
     theme: `<script>${scriptText(read(path.join(web, 'theme.js')))}</script>`,
@@ -74,7 +75,7 @@ export function staticReportHtml(root: string, report: StaticReportPage): string
   let html = read(fs.existsSync(reportTemplate) ? reportTemplate : path.join(pages, `${report.page}.html`));
   if (html.includes('\0')) throw new Error('static_report_template_changed');
   html = once(html, '<meta charset="utf-8">', `<meta charset="utf-8">\n  <meta http-equiv="Content-Security-Policy" content="${policy}">`);
-  html = once(html, '<link rel="icon" type="image/svg+xml" href="assets/mark.svg">', `<link rel="icon" type="image/svg+xml" href="${mark}">`);
+  html = once(html, '<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">', `<link rel="icon" type="image/svg+xml" href="${favicon}">`);
   html = once(html, '<img src="assets/mark.svg"', `<img src="${mark}"`);
   html = once(html, '<script src="theme.js"></script>', '\0theme\0');
   html = once(html, '<link rel="stylesheet" href="app.css">', '\0style\0');

@@ -63,7 +63,7 @@ fs.writeFileSync(path.join(output, 'research.css'), ['research.css', 'collaborat
 const fonts = ['Geist-latin.woff2', 'Geist-OFL.txt', 'TheoremOSSerif-latin.woff2', 'Lora-OFL.txt', 'JetBrainsMono.woff2', 'JetBrainsMono-OFL.txt',
   'TheoremOSWorkbenchHeading.woff2',
   'NotoSerifSC-ui.woff2', 'NotoSerifSC-ui-extra.woff2', 'NotoSerifSC-common.woff2', 'NotoSerifSC-OFL.txt', 'NotoSansSC-ui.woff2', 'NotoSansSC-ui-extra.woff2', 'NotoSansSC-common.woff2', 'NotoSansSC-OFL.txt'];
-for (const file of ['mark.svg', ...fonts.map(font => `fonts/${font}`)])
+for (const file of ['mark.svg', 'favicon.svg', ...fonts.map(font => `fonts/${font}`)])
   fs.copyFileSync(path.join(root, 'docs/assets', file), path.join(output, 'assets', file));
 fs.mkdirSync(path.join(output, 'assets/licenses'), { recursive: true });
 fs.cpSync(path.join(root, 'node_modules/katex/dist/fonts'), path.join(output, 'assets/katex/fonts'), { recursive: true });
