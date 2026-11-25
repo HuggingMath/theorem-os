@@ -60,6 +60,7 @@ const segmentedManifestSchema = z.object({ schema: z.literal('theorem-os.declara
 const segmentSchema = z.object({ schema: z.literal('theorem-os.declaration-artifacts.segment.v1'),
   ...manifestIdentity, previous: hash.nullable(), artifacts: z.array(z.unknown()).min(1).max(manifestRecords) }).strict();
 
+const emptyDeclarationSubmission = z.object({ declarations: z.tuple([]) }).strict();
 const fail = (reason: string): never => { throw new Error(`math_declaration_artifact_${reason}`); };
 function declarationIdentity({ file, name, type, kind }: DeclarationSubmission['declarations'][number], declarationHash: string) {
   return mathDigest(canonicalMathJson({ file, name, type, ...(kind && { kind }), declarationHash }));
@@ -87,7 +88,7 @@ function submissionContent<T>(operation: () => T, correctable: readonly string[]
   }
 }
 
-export function readDeclarationSubmission(worktree: string): DeclarationSubmission | undefined {
+export function readDeclarationSubmission(worktree: string, options?: { allowEmpty?: boolean }): DeclarationSubmission | undefined {
   const file = path.join(worktree, '.scratch', DECLARATION_SUBMISSION_FILE);
   if (!fs.existsSync(file)) return undefined;
   assertMathCanonicalPath(file);
@@ -98,6 +99,7 @@ export function readDeclarationSubmission(worktree: string): DeclarationSubmissi
     if (error instanceof SyntaxError) throw new DeclarationSubmissionError('math_declaration_artifact_submission_invalid_json', { cause: error });
     throw error;
   }
+  if (options?.allowEmpty && emptyDeclarationSubmission.safeParse(value).success) return undefined;
   return parseDeclarationSubmission(value);
 }
 

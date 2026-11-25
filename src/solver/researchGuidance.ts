@@ -20,7 +20,7 @@ import { assignmentDeliveryFile, isAdvisoryTask, isFeasibilityReview, isFinalCan
 /** Static shared guidance also serves a native single-task baseline without manufacturing solver state. */
 export function buildCommonResearchGuide(problem: SolverProblem,
   access: Pick<ContextAccess, 'root' | 'tools' | 'worktree' | 'environment' | 'mathTools' | 'corpusFile' |
-    'retrievalRoot' | 'knowledgeFile' | 'knowledgeDigest' | 'libraryCatalog'>, environmentDigest: string,
+    'retrievalRoot' | 'knowledgeFile' | 'knowledgeDigest' | 'libraryCatalog' | 'assignment'>, environmentDigest: string,
   purpose: 'comparison' | 'workflow' = 'comparison') {
   const { command, help, longCommandSummary } = buildResearchToolGuide(problem, access, environmentDigest);
   materializeResearchToolHelp({ toolHelp: help.build() }, access.worktree);
@@ -125,18 +125,20 @@ export function cooperativeHelperProtocol(task: CooperativeTask, log: string): s
     (isAdvisoryTask(task) ? 'Restore your temporary Lean edits after the host acknowledges the submission and before ordinary findings delivery. ' : '');
 }
 
+export const leadPlanToolInstruction = 'Read Lead plan submission in .scratch/theoremos-help.md. Validate the draft JSON before publishing. Omit progressReview on the initial plan.\n';
+
 export function cooperativeDeliveryProtocol(action: NonNullable<ContextAccess['assignment']>, taskLog?: string): string {
   if (action.kind === 'review') return 'Review the fixed candidate and matching evidence without editing it. ' +
     'Save one JSON object in RESEARCH.md: {"verdict":"accepted|changes_requested","summary":"...","evidenceRefs":[]}, then return. ';
   if (action.kind === 'lead') {
     const nonce = action.initialPlanNonce ?? action.planNonce;
-    return 'Publish a complete task graph covering every original target exactly once, preserving current checked contracts and active assignments. ' +
+    return leadPlanToolInstruction + 'Publish a complete task graph covering every original target exactly once, preserving current checked contracts and active assignments. ' +
       'Tasks use {id,kind,objective,dependsOn}; typed lemma tasks also need proofPath, theoremName and a full closed Lean type. ' +
       'Copy exact original target names and proof paths from the fixed problem. Task status is active|paused|stopped, never host executionStatus. ' +
       `Append one JSON line to ${leadPlanDeliveryFile(action)}: ` +
       JSON.stringify({ kind: 'plan', baseVersion: action.planVersion, ...(nonce ? { dispatchNonce: nonce } : {}),
         summary: 'route and current work', tasks: [] }) + '. Replace the empty tasks array with the actual complete graph. ' +
-      'Current required researchDecisions, progressReview and nextCheckDecisions belong in that same object. ' +
+      'Include researchDecisions, nextCheckDecisions and any progressReview requested by the host in that same object. ' +
       'Assign small shared foundation lemmas before their consumers and delegate exploratory computation. To stop work on a refuted group or proof route, use retireRoutes:[{routeId,reason,evidenceRefs}] in the current plan. ' +
       'Alternatively save the complete graph in one math-plan JSON fence in RESEARCH.md and return. ' +
       'Do not truncate delivery logs, modify run state, accept unchecked tasks or wait for human plan approval yourself. ';

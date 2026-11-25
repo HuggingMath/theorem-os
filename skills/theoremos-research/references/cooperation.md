@@ -12,7 +12,7 @@ Edit only assigned source paths. Preserve other seed proofs and frozen declarati
 
 ## Lead plan
 
-Leave Lean sources unchanged and return a plan without running Lean diagnostics; assigned workers execute proof and check tasks. Publish one JSON line to the current Lead delivery log:
+Leave Lean sources unchanged and delegate Lean diagnostics to workers. Omit `progressReview` on the initial plan. Save the draft in `.scratch/plan.json` and run `theorem-os plan-validate --file .scratch/plan.json` before publishing or running `plan-apply`. Publish one JSON line to the current Lead delivery log:
 
 ```json
 {"kind":"plan","baseVersion":"CURRENT_BASE_VERSION","dispatchNonce":"CURRENT_DISPATCH_NONCE","summary":"route and consumers","tasks":[]}

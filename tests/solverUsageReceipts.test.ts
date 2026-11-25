@@ -118,6 +118,26 @@ function researchFixture(source: MathAgentSession['usageSource']) {
 const assignment = (id: string) => ({ kind: 'task', task: { id } }) as CooperativeAction;
 
 describe('usage attribution at task boundaries', () => {
+  it('ignores cumulative replays before the next turn and flags new unscoped tokens', () => {
+    const { state, research, emit, callbacks } = researchFixture('native-thread-totals');
+    state.usageBeforeThread = { totalTokens: 30 };
+    state.usage = { totalTokens: 50 };
+    callbacks.onUsage!({ totalTokens: 19 });
+    callbacks.onUsage!({ totalTokens: 20 }, { turnId: 'previous-thread-turn' });
+    expect(emit).not.toHaveBeenCalled();
+    expect(state.usage).toEqual({ totalTokens: 50 });
+
+    callbacks.onUsage!({ totalTokens: 21 });
+    expect(emit).toHaveBeenCalledExactlyOnceWith('worker_usage_unscoped',
+      expect.objectContaining({ reason: 'native-turn-identity-unavailable', reportedTotalTokens: 21 }));
+    expect(state.usage).toEqual({ totalTokens: 51 });
+
+    research.begin(assignment('next'));
+    callbacks.onUsage!({ totalTokens: 21 }, { turnId: 'next-turn' });
+    expect(emit).toHaveBeenCalledTimes(1);
+    callbacks.onUsage!({ totalTokens: 21 }, { turnId: 'unrecognized-turn' });
+    expect(emit).toHaveBeenCalledTimes(2);
+  });
   it('settles a late request into its original task without charging the next turn', () => {
     const { state, research, callbacks } = researchFixture('upstream-requests');
     research.begin(assignment('first'));

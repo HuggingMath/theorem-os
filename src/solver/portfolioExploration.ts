@@ -4,8 +4,9 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { isSimpleLeanName } from '../math/leanSyntax';
 import { mathDigest, readMathText } from '../math/mathRuntimeIo';
-import { assertMathCanonicalPath } from '../math/paths';
+import { assertMathCanonicalPath, isMathPathWithin } from '../math/paths';
 import type { MathAgentOptions, MathAgentSession } from '../runtime/agentSession';
+import { projectResearchHarnessProfile } from '../runtime/researchHarness';
 import type { SolverRunState } from './archive';
 import { withSolverWorktree } from './problem';
 import { portfolioRouteIdSchema as routeId, retiredRouteSchema } from './routeControl';
@@ -92,6 +93,8 @@ export function evaluatePortfolioGate(reports: readonly PortfolioScoutReport[], 
 export function portfolioPhase2Guidance(portfolio?: PortfolioExploration): string {
   if (portfolio?.phase !== 'completed' || !portfolio.gate) return '';
   const { gate } = portfolio;
+  if (!portfolio.scouts.some(scout => scout.reports?.length))
+    return 'Phase 1 ended without a usable report. Proceed with the frozen problem and delegate independent gaps using available worker capacity.';
   const summaries = [gate.primaryRouteId, gate.backupRouteId].flatMap(id => {
     if (!id) return [];
     const report = portfolio.scouts.flatMap(scout => scout.reports ?? []).find(report =>
@@ -127,7 +130,7 @@ export function configurePortfolioExploration(saved: PortfolioExploration | unde
 }
 
 const reportFile = 'PORTFOLIO.json';
-const instructions = (profile: ScoutProfile, ownedFiles: readonly string[]) => {
+const instructions = (profile: ScoutProfile, ownedFiles: readonly string[], budgetMs: number) => {
   const example = { reports: [{ routeId: profile, status: 'proposed', blueprintSummary: 'Reduction with explicit remaining premises.',
     keyTransformations: ['First reduction'], proposedFoundationLemmas: [{ id: 'base-identity',
       proofPath: ownedFiles[0], theoremName: 'Portfolio.baseIdentity', type: '∀ (n : Nat), n = n',
@@ -135,6 +138,8 @@ const instructions = (profile: ScoutProfile, ownedFiles: readonly string[]) => {
     falsificationEvidence: [], obstructions: [], probeRefs: [] }] };
   return [
     'Phase 1 portfolio scout: ' + profile + '. ' + profileInstructions[profile],
+    `Wall-clock budget remaining: ${Math.ceil(budgetMs / 1000)} seconds. Write an initial valid ${reportFile} by halfway, even if your finding is inconclusive. ` +
+      'Update it as evidence improves by writing a temporary file in the same directory and renaming it over the report.',
     'Inspect the fixed Lean statement. Use mathematical derivations and quick numerical or symbolic probes with Python, PARI/GP, SymPy or SAT as available.',
     'Keep original Lean files read-only. If necessary, write at most two Lean API probes of fewer than 40 lines each under .scratch/portfolio. Do not formalize full proofs.',
     'Test the key claim in your own route even when another scout is assigned to falsification. The route IDs are ' + profiles.join(', ') + '.',
@@ -193,81 +198,150 @@ export async function runPortfolioExploration(input: {
   for (const scout of eligible) if (!selected.includes(scout)) scout.status = 'failed';
   changed();
   emit('portfolio_exploration_started', { deadlineAt: portfolio.deadlineAt, profiles: selected.map(scout => scout.profile) });
-  const signal = AbortSignal.any([input.signal, AbortSignal.timeout(Math.ceil(remainingMs()))]);
+  const deadline = new AbortController();
+  const signal = AbortSignal.any([input.signal, deadline.signal]);
+  const runRoot = path.dirname(state.worktree);
+  const portfolioWorktreeRoot = path.join(runRoot, 'portfolio-worktrees');
+  const portfolioProfileRoot = path.join(runRoot, 'portfolio-profiles');
+  const timedOut = () => !input.signal.aborted && (deadline.signal.aborted || !remainingMs());
+  const deadlineTimer = setTimeout(() => deadline.abort(new Error('math_portfolio_scout_timed_out')), Math.ceil(remainingMs()));
+  deadlineTimer.unref();
   let falsifier: MathAgentSession | undefined;
   const proposals = () => portfolio.scouts.flatMap(scout => (scout.reports ?? []).filter(report => report.status === 'proposed')
     .map(({ routeId, blueprintSummary, keyTransformations }) => ({ routeId, blueprintSummary, keyTransformations })));
-  const outcomes = await Promise.allSettled(selected.map(async scout => {
-    if (!remainingMs() || !modelDispatchAllowed(state.tokenBudget!)) {
-      scout.status = remainingMs() ? 'failed' : 'timed-out'; changed(); return;
+  try {
+    if (selected.length && remainingMs() && modelDispatchAllowed(state.tokenBudget!)) {
+      const sourceProfile = path.resolve(input.profile);
+      if (isMathPathWithin(sourceProfile, portfolioProfileRoot) || isMathPathWithin(sourceProfile, portfolioWorktreeRoot))
+        throw new Error('math_portfolio_profile_must_be_separate');
+      for (const directory of [portfolioWorktreeRoot, portfolioProfileRoot]) {
+        assertMathCanonicalPath(directory);
+        fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+      }
     }
-    const profile = scout.profile;
-    // A retry uses a fresh thread. Preserve the cumulative usage already observed for the earlier attempt.
-    scout.usageBeforeThread = scout.usage;
-    scout.status = 'running'; save();
-    try {
-      await withSolverWorktree(state.worktree, state.problem.baseCommit, async worktree => {
-        const prepared = input.prepareWorkspace(worktree);
-        fs.mkdirSync(path.join(worktree, '.scratch', 'portfolio'), { recursive: true, mode: 0o700 });
-        let session: MathAgentSession | undefined, started = false, result: string | undefined;
-        const usage = new ResearchUsage({ state, research: scout, maxTotalTokens: input.maxTotalTokens,
-          signal, remainingMs, changed, emit: (event, details) => emit(event, { ...details, profile }) });
-        const sessionId = randomUUID();
-        try {
-          signal.throwIfAborted();
-          session = await input.open({ executable: input.executable, profile: input.profile, workspace: worktree,
-            proofProjectRoot: prepared.project, model: state.model, effort: state.effort, isolateProcess: true,
-            environment: { ...prepared.environment, DEEPSCIENTIST_MATH_WORKER_ID: 'portfolio-' + profile,
-              DEEPSCIENTIST_MATH_WORKER_WORKTREE: worktree },
-            instructions: instructions(profile, state.problem.ownedFiles), signal,
-            turnTimeoutMs: Math.max(1, Math.min(input.maxTurnMs, remainingMs())),
-            ...usage.bindSession(sessionId, () => session?.lastInputTokens) });
-          signal.throwIfAborted();
-          if (!modelDispatchAllowed(state.tokenBudget!) || !remainingMs()) {
-            scout.status = remainingMs() ? 'failed' : 'timed-out';
-            return;
-          }
-          usage.sessionOpened(session);
-          state.turns++; scout.turns++;
-          const counts = state.dispatchCounts ??= {};
-          counts.research = (counts.research ?? 0) + 1;
-          started = true; usage.begin(undefined, 'portfolio-' + profile);
-          emit('portfolio_scout_started', { profile });
-          const attacks = profile === 'falsification-obstruction';
-          const currentProposals = attacks ? proposals() : [];
-          result = await session.run(input.taskText + '\n\nRead the frozen statement in ' + state.problem.projectRelative + '.' +
-            (currentProposals.length ? '\nProposals to test:\n' + JSON.stringify(currentProposals) : ''), randomUUID(), worktree,
-            turnId => { usage.turnStarted(turnId); if (attacks) falsifier = session; });
-        } finally {
-          if (falsifier === session) falsifier = undefined;
+    const outcomes = await Promise.allSettled(selected.map(async scout => {
+      if (!remainingMs() || !modelDispatchAllowed(state.tokenBudget!)) {
+        scout.status = remainingMs() ? 'failed' : 'timed-out'; changed(); return;
+      }
+      const profile = scout.profile;
+      const workerId = 'portfolio-' + profile;
+      // A retry uses a fresh thread. Preserve the cumulative usage already observed for the earlier attempt.
+      scout.usageBeforeThread = scout.usage;
+      scout.status = 'running'; save();
+      try {
+        await withSolverWorktree(state.worktree, state.problem.baseCommit, async worktree => {
+          const prepared = input.prepareWorkspace(worktree);
+          fs.mkdirSync(path.join(worktree, '.scratch', 'portfolio'), { recursive: true, mode: 0o700 });
+          let session: MathAgentSession | undefined, started = false, result: string | undefined;
+          let wrapUpTimer: ReturnType<typeof setTimeout> | undefined;
+          const usage = new ResearchUsage({ state, research: scout, maxTotalTokens: input.maxTotalTokens,
+            signal, remainingMs, changed, emit: (event, details) => emit(event, { ...details, profile }) });
+          const sessionId = randomUUID();
+          const profileDirectory = path.join(portfolioProfileRoot, `${profile}-${sessionId}`);
+          const scoutProfile = path.join(profileDirectory, 'profile');
           try {
-            const stopped = await session?.stopForFreeze?.();
-            if (session && stopped?.status !== 'stopped') throw new Error('math_portfolio_scout_stop_unconfirmed');
+            signal.throwIfAborted();
+            fs.mkdirSync(profileDirectory, { mode: 0o700 });
+            if (state.agentHarness && state.agentHarness.id !== 'codex') {
+              projectResearchHarnessProfile(state.agentHarness, scoutProfile, prepared.environment, state.model);
+            } else {
+              fs.mkdirSync(scoutProfile, { mode: 0o700 });
+              // Provider environment keys and configured auth commands still work. Never copy credential stores.
+              const config = path.resolve(input.profile, 'config.toml');
+              assertMathCanonicalPath(config);
+              if (fs.existsSync(config)) fs.writeFileSync(path.join(scoutProfile, 'config.toml'), fs.readFileSync(config),
+                { flag: 'wx', mode: 0o400 });
+            }
+            const scoutBudgetMs = Math.max(1, Math.min(input.maxTurnMs, remainingMs()));
+            session = await input.open({ executable: input.executable, profile: scoutProfile, workspace: worktree,
+              proofProjectRoot: prepared.project, model: state.model, effort: state.effort, isolateProcess: true,
+              isolatedWorkspaceParent: portfolioWorktreeRoot,
+              environment: { ...prepared.environment, DEEPSCIENTIST_MATH_WORKER_ID: workerId,
+                DEEPSCIENTIST_MATH_WORKER_WORKTREE: worktree },
+              instructions: instructions(profile, state.problem.ownedFiles, scoutBudgetMs), signal,
+              turnTimeoutMs: scoutBudgetMs,
+              ...usage.bindSession(sessionId, () => session?.lastInputTokens) });
+            signal.throwIfAborted();
+            if (!remainingMs()) throw new Error('math_portfolio_scout_timed_out');
+            if (!modelDispatchAllowed(state.tokenBudget!)) {
+              scout.status = 'failed';
+              return;
+            }
+            usage.sessionOpened(session);
+            state.turns++; scout.turns++;
+            const counts = state.dispatchCounts ??= {};
+            counts.research = (counts.research ?? 0) + 1;
+            started = true; usage.begin(undefined, 'portfolio-' + profile);
+            emit('portfolio_scout_started', { profile, workerId });
+            const attacks = profile === 'falsification-obstruction';
+            const currentProposals = attacks ? proposals() : [];
+            const turnBudgetMs = Math.min(remainingMs(), scoutBudgetMs);
+            const wrapUpLeadMs = Math.min(60_000, Math.max(15_000, Math.floor(turnBudgetMs * 0.3)));
+            try {
+              const activeScout = session;
+              result = await activeScout.run(input.taskText + '\n\nRead the frozen statement in ' + state.problem.projectRelative + '.' +
+                (currentProposals.length ? '\nProposals to test:\n' + JSON.stringify(currentProposals) : ''), randomUUID(), worktree,
+                turnId => {
+                  usage.turnStarted(turnId);
+                  if (attacks) falsifier = activeScout;
+                  const remaining = Math.min(remainingMs(), turnBudgetMs);
+                  if (remaining <= 20_000) return;
+                  wrapUpTimer = setTimeout(() => {
+                    if (signal.aborted) return;
+                    const notice = `Stop starting probes and stop any running experiments. Write or finalize ${reportFile} now ` +
+                      'with your best route, exact obstruction or reproducible refutation. Use inconclusive if needed. Save it atomically and return.';
+                    void activeScout.notify?.(notice, activeScout.advisoryNotifications === 'native-history' ? { mode: 'advisory' } : undefined)
+                      .catch(async error => {
+                        // Older app-servers may lack advisory history injection. Their normal steer still works.
+                        if (!signal.aborted && activeScout.advisoryNotifications === 'native-history' &&
+                            error instanceof Error && error.message.startsWith('math_codex_rpc_failed:-32601:'))
+                          await activeScout.notify?.(notice).catch(() => {});
+                      });
+                  }, Math.max(1000, remaining - wrapUpLeadMs));
+                  wrapUpTimer.unref();
+                });
+            } catch (error) {
+              if (!signal.aborted && !timedOut()) throw error;
+            }
           } finally {
-            try { await session?.close(); }
-            finally {
-              if (started) usage.finish(result === 'completed' || result === 'submitted');
-              usage.sessionClosed(sessionId);
+            clearTimeout(wrapUpTimer);
+            if (falsifier === session) falsifier = undefined;
+            try {
+              const stopped = await session?.stopForFreeze?.();
+              if (session && stopped?.status !== 'stopped') throw new Error('math_portfolio_scout_stop_unconfirmed');
+            } finally {
+              try { await session?.close(); }
+              finally {
+                if (started) usage.finish(result === 'completed' || result === 'submitted');
+                usage.sessionClosed(sessionId);
+                fs.rmSync(profileDirectory, { recursive: true, force: true });
+              }
             }
           }
-        }
-        // Only accept validated advisory files. Reports atomically saved before a deadline remain useful.
-        if (fs.existsSync(path.join(worktree, reportFile)) && !input.signal.aborted) {
-          Object.assign(scout, readScoutReports(worktree, profile, state.problem));
-          scout.status = 'reported';
-          void falsifier?.notify?.('Scout route proposals to test:\n' + JSON.stringify(proposals()),
-            falsifier.advisoryNotifications === 'native-history' ? { mode: 'advisory' } : { waitForRequest: true }).catch(() => {});
-        } else if (!input.signal.aborted) scout.status = signal.aborted ? 'timed-out' : 'failed';
-      });
-    } catch (error) {
-      if (!input.signal.aborted) scout.status = signal.aborted ? 'timed-out' : 'failed';
-      emit('portfolio_scout_unavailable', { profile, status: scout.status,
-        reason: error instanceof Error && error.message === 'math_portfolio_scout_stop_unconfirmed' ? error.message : 'missing-or-invalid-scout-result' });
-    } finally { changed(); }
-    emit('portfolio_scout_finished', { profile, status: scout.status, reports: scout.reports?.length ?? 0 });
-  }));
-  const failure = outcomes.find(outcome => outcome.status === 'rejected');
-  if (failure?.status === 'rejected') throw failure.reason;
+          // Only accept validated advisory files. Reports atomically saved before a deadline remain useful.
+          if (fs.existsSync(path.join(worktree, reportFile))) {
+            Object.assign(scout, readScoutReports(worktree, profile, state.problem));
+            scout.status = 'reported';
+            void falsifier?.notify?.('Scout route proposals to test:\n' + JSON.stringify(proposals()),
+              falsifier.advisoryNotifications === 'native-history' ? { mode: 'advisory' } : { waitForRequest: true }).catch(() => {});
+          } else if (!input.signal.aborted) throw new Error('math_portfolio_scout_report_missing');
+        }, portfolioWorktreeRoot);
+      } catch (error) {
+        if (!input.signal.aborted) scout.status = timedOut() ? 'timed-out' : 'failed';
+        const reason = error instanceof Error ? /^math_[a-z0-9_]{1,72}(?=:|$)/u.exec(error.message)?.[0] : undefined;
+        emit('portfolio_scout_unavailable', { profile, workerId, status: scout.status,
+          reason: timedOut() ? 'math_portfolio_scout_timed_out' : reason ?? 'math_portfolio_scout_failed' });
+      } finally { changed(); }
+      emit('portfolio_scout_finished', { profile, workerId, status: scout.status, reports: scout.reports?.length ?? 0 });
+    }));
+    const failure = outcomes.find(outcome => outcome.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
+  } finally {
+    clearTimeout(deadlineTimer);
+    for (const directory of [portfolioWorktreeRoot, portfolioProfileRoot]) {
+      if (fs.existsSync(directory) && fs.readdirSync(directory).length === 0) fs.rmdirSync(directory);
+    }
+  }
   input.signal.throwIfAborted();
   input.assertCurrent?.();
   portfolio.gate = evaluatePortfolioGate(portfolio.scouts.flatMap(scout => scout.reports ?? []));
