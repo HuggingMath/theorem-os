@@ -91,8 +91,9 @@ async function save(page: Page, title: string): Promise<ResearchAccountDraftResu
     const mode = document.body.dataset.entry === 'lean' ? 'lean' : 'natural';
     let value: ProblemDraftValue;
     if (mode === 'lean') {
-      const stored = JSON.parse(sessionStorage.getItem('theorem-os.web-draft.v1') || '{}');
-      value = { mode: 'lean', draft: stored.draft };
+      const stored = JSON.parse(sessionStorage.getItem('theorem-os.web-draft.v1') || '{}').draft || {};
+      const { autoExplain: _ae, explanationLanguage: _el, continueFrom: _cf, formalization: _fm, problemBudget: _pb, ...leanDraft } = stored;
+      value = { mode: 'lean', draft: leanDraft };
     } else {
       const chatKey = Object.keys(sessionStorage).find(key => key.startsWith('theorem-os.chat-draft.') && !key.endsWith('.quotes') && !key.endsWith('.position'));
       const stored = chatKey ? JSON.parse(sessionStorage.getItem(chatKey) || '{}') : {};

@@ -42,7 +42,7 @@ async function save(page:Page,title:string):Promise<ResearchAccountDraftResult<P
  return await page.evaluate(async savedTitle=>{
   const session=await(await fetch('/api/session')).json(),owner=session.draftOwner,mode=document.body.dataset.entry==='lean'?'lean':'natural';
   let value:ProblemDraftValue;
-  if(mode==='lean'){const stored=JSON.parse(sessionStorage.getItem('theorem-os.web-draft.v1')||'{}');value={mode:'lean',draft:stored.draft};}
+  if(mode==='lean'){const stored=JSON.parse(sessionStorage.getItem('theorem-os.web-draft.v1')||'{}').draft||{};const{autoExplain:_ae,explanationLanguage:_el,continueFrom:_cf,formalization:_fm,problemBudget:_pb,...leanDraft}=stored;value={mode:'lean',draft:leanDraft};}
   else{const k=Object.keys(sessionStorage).find(x=>x.startsWith('theorem-os.chat-draft.')&&!x.endsWith('.quotes')&&!x.endsWith('.position'));const stored=k?JSON.parse(sessionStorage.getItem(k)||'{}'):{};value={mode:'natural',text:stored.text??'',settings:stored.settings};}
   const bindingKey=`theorem-os.problem-draft.${owner}.${mode}`;
   const binding=JSON.parse(sessionStorage.getItem(bindingKey)||'null')||{draftKey:crypto.randomUUID(),revision:0,title:''};
