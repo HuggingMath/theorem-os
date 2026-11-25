@@ -53,7 +53,7 @@ export function LibraryTrialHistoryReader({ id }: { id: string }) {
       <div class="research-actions">{saved.current && <a class="button" data-resume-trial href={`library.html?${new URLSearchParams({ entry: saved.trial.release.assetId, version: saved.trial.release.version, trial: saved.trial.id })}`}>{tx('回到试用编辑器', 'Return to the trial editor')}</a>}
         {!saved.current && <a class="button" data-reprepare-trial href={`library.html?${new URLSearchParams({ entry: saved.trial.release.assetId, version: saved.trial.release.version, run: saved.trial.target.ref.runId, task: saved.trial.target.ref.taskId,
           ...(saved.trial.target.ref.projectId ? { project: saved.trial.target.ref.projectId } : {}) })}`}>{tx('为当前目标准备新的试用', 'Prepare a new trial for the current goal')}</a>}</div>
-      <PersonalTrialAttempt trial={saved.trial} eligible={saved.personalAttempt} />
+      <PersonalTrialAttempt trial={saved.trial} history={saved} />
     </>}
   </section>;
 }

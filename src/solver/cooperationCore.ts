@@ -402,7 +402,7 @@ export abstract class CooperationCore {
   protected refreshNextChecks() {
     const identity = { problemReceiptDigest: this.input.state.problem.receiptDigest, environmentDigest: this.input.state.environmentDigest };
     const now = Date.now();
-    for (const proposed of [...proposedNextChecks(this.archive, identity, now),
+    for (const proposed of [...proposedNextChecks(this.archive, identity, now, path.dirname(this.lead.worktree)),
       ...proposedDefinitionContractChecks(this.archive, identity, now)]) {
       const previous = this.archive.nextChecks?.find(record => record.id === proposed.record.id);
       if (previous) {

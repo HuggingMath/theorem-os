@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { localizeMessage } from '../i18n';
 import type { ResearchLibraryTrial, ResearchLibraryProposalTarget, ResearchLibraryTrialHistory } from '../researchLibraryTrialTypes';
 import type { ResearchFeedback } from '../researchProjectTypes';
 import { base, enc, ErrorBox, Field, MutationState, theoremHref, tx, useMutation, useResource, type Item, type Items } from './researchShared';
 import { readLibraryProposalDraft, writeLibraryProposalDraft, type LibraryProposalDraft } from './researchLibraryProposalDraft';
 
-export function PersonalTrialAttempt({ trial, eligible }: { trial: ResearchLibraryTrial; eligible?: boolean }) {
-  const data = useResource<Item<ResearchLibraryTrialHistory>>(eligible === undefined && trial.status === 'passed' ? `${base}/library-trials/${enc(trial.id)}/history` : undefined);
-  const allowed = eligible ?? data.data?.item.personalAttempt;
+export function PersonalTrialAttempt({ trial, history }: { trial: ResearchLibraryTrial; history?: ResearchLibraryTrialHistory }) {
+  const data = useResource<Item<ResearchLibraryTrialHistory>>(!history && trial.status === 'passed' ? `${base}/library-trials/${enc(trial.id)}/history` : undefined);
+  const eligibility = history ?? data.data?.item;
   return <div class="research-personal-trial-attempt" data-personal-trial-attempt>
     <ErrorBox message={data.error} />{data.error && <button type="button" class="text-button" onClick={data.refresh}>{tx('重新读取后续操作', 'Reload next steps')}</button>}
-    {allowed && <><p>{tx('把这份候选和固定库带入你的新研究草稿，核对配置后再开始。', 'Bring this candidate and fixed library into your new research draft. Review the configuration before starting.')}</p>
+    {eligibility?.personalAttemptReason && <p class="research-status">{localizeMessage(eligibility.personalAttemptReason)}</p>}
+    {eligibility?.personalAttempt && <><p>{tx('把这份候选和固定库带入你的新研究草稿，核对配置后再开始。', 'Bring this candidate and fixed library into your new research draft. Review the configuration before starting.')}</p>
       <a class="button" data-prepare-personal-trial href={`./?${new URLSearchParams({ libraryTrial: trial.id, trialDigest: trial.digest })}`}>{tx('准备个人新尝试', 'Prepare a personal attempt')}</a></>}
   </div>;
 }

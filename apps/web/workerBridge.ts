@@ -184,7 +184,8 @@ function sourceProjection(state: SolverRunState, directory: string) {
     if (commit) addSource(node, commit); else sourcePartial = true;
   }
   const wholeChecks = [state.check, ...(state.workers ?? []).map(worker => worker.check)]
-    .filter((proof): proof is ProofCheck => proof !== undefined);
+    // Cooperative workers also retain their most recent task-scoped proof in check.
+    .filter((proof): proof is ProofCheck => proof !== undefined && !('taskDigest' in proof));
   for (const [index, target] of state.problem.targets.entries()) {
     const node = state.cooperation?.tasks.find(item => item.task.kind === 'goal' &&
       item.task.proofPath === target.proofPath && item.task.theoremName === target.theoremName);

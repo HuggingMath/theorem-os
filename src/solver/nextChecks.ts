@@ -7,7 +7,7 @@ import { isAdvisoryTask, isFeasibilityReview, taskGroup, taskVersion, type Coope
 import { independentFeasibilityWorker } from './modules/organization';
 import { currentDefinitionContractCheck } from './definitionContractChecks';
 import type { ProofRoute } from './proofRoutes';
-import { proofSearchRecordMatches, type ProofSearchRecord } from './proofSearchRecords';
+import { historicalProofSearchRecord, proofSearchRecordMatches, type ProofSearchRecord } from './proofSearchRecords';
 
 type Identity = { problemReceiptDigest: string; environmentDigest: string };
 type State = { tasks: readonly TaskRecord[]; deliveries?: readonly DeliveryRecord[]; nextChecks?: readonly NextCheckRecord[];
@@ -30,7 +30,7 @@ export function nextCheckTarget(gap: Gap, state: State): CooperativeTask | undef
 
 /** Check host-adopted identity, not a worker-supplied basis or a host/worker path spelling. */
 function executionSearchSeed(check: NextCheck, target: CooperativeTask, state: State, identity: Identity,
-  requireCheckpointMatch: boolean): ProofSearchRecord | undefined | null {
+  requireCheckpointMatch: boolean, runDirectory?: string): ProofSearchRecord | undefined | null {
   const execution = check.execution;
   if (execution?.kind !== 'proof-search' || !execution.checkpoint && !execution.basis && !execution.node) return;
   const scope = { ...identity, ...reference(target) };
@@ -38,8 +38,13 @@ function executionSearchSeed(check: NextCheck, target: CooperativeTask, state: S
     proofSearchRecordMatches(record, scope) && (!execution.basis || execution.basis === record.basisDigest);
   // A reported digest can identify a retained independent history. Without one, use the owner's history.
   const checkpoint = requireCheckpointMatch ? execution.checkpoint : undefined;
-  if (checkpoint) return Object.values(state.proofSearchRecords ?? {}).find(record =>
-    record.checkpoint.digest === checkpoint.digest && matches(record)) ?? null;
+  if (checkpoint) {
+    const latest = Object.values(state.proofSearchRecords ?? {}).find(record =>
+      record.checkpoint.digest === checkpoint.digest && matches(record));
+    if (latest || !runDirectory) return latest ?? null;
+    return historicalProofSearchRecord({ digest: checkpoint.digest, runDirectory, scope, basisDigest: execution.basis,
+      deliveries: state.deliveries ?? [], nextChecks: state.nextChecks }) ?? null;
+  }
   const owner = state.proofSearchRecords?.[target.id];
   return matches(owner) ? owner : null;
 }
@@ -80,12 +85,12 @@ function checkTask(record: Pick<NextCheckRecord, 'id' | 'taskId' | 'check' | 'sc
 }
 
 /** The same scoped question is scheduled once, even if its author republishes the same gap. */
-export function proposedNextChecks(state: State, identity: Identity, now: number) {
+export function proposedNextChecks(state: State, identity: Identity, now: number, runDirectory?: string) {
   return mathematicalGaps(state, identity).flatMap(gap => {
     if (gap.scopeStatus !== 'current-contracts' || !gap.nextCheck) return [];
     const target = nextCheckTarget(gap, state);
     if (!target) return [];
-    const proofSearchSeed = executionSearchSeed(gap.nextCheck, target, state, identity, true);
+    const proofSearchSeed = executionSearchSeed(gap.nextCheck, target, state, identity, true, runDirectory);
     if (proofSearchSeed === null) return [];
     const delivery = state.deliveries?.find(item => item.id === gap.deliveryId);
     const scope = { ...identity, parent: reference(gap.scope.source), target: reference(target),

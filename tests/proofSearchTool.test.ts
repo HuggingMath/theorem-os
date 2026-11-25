@@ -152,9 +152,9 @@ describe('proof-search worker tool without Lean or model execution', () => {
       scope: { ...identity, taskId: helper.id, taskDigest: taskVersion(helper) } });
     await runProofSearchTool({ projectRoot: f.project, request: request() });
     const call = backend.search.mock.calls[0]![0] as SearchInput;
-    expect(call.request).toMatchObject({ resume: f.record.checkpoint });
-    expect(call.request).not.toMatchObject({ resume: { path: '/previous-worker/checkpoint.json' } });
-    expect(call.retainedInput).toEqual({ basisDigest: f.check.scope.executionBasisDigest, checkpointDigest: f.record.checkpoint.digest });
+    expect(call.request).not.toHaveProperty('resume');
+    expect(call.retainedInput).toEqual({ basisDigest: f.check.scope.executionBasisDigest,
+      checkpoint: f.record.checkpoint, assignmentKey: assignmentDeliveryFile(f.assignment) });
     expect(call.history).toBe(f.check.id);
     expect(call.scope.taskId).toBe(helper.id);
     expect(f.assignment.taskId).not.toBe(helper.id);

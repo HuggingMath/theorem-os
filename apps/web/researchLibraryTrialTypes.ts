@@ -55,6 +55,6 @@ export type ResearchLibraryTrialHistoryItem = Pick<ResearchLibraryTrial, 'id' | 
   current: boolean; reason?: string; receiptId?: string; checkedAt?: string;
 };
 export type ResearchLibraryTrialHistory = {
-  trial: ResearchLibraryTrial; current: boolean; reason?: string; personalAttempt: boolean;
+  trial: ResearchLibraryTrial; current: boolean; reason?: string; personalAttempt: boolean; personalAttemptReason?: string;
   libraryPack: ResearchLibraryPack; dependencySources: { file: string; source: string }[];
 };

@@ -19,9 +19,12 @@ import type { DeliveryRecord } from './deliveries';
 import { researchRecordSchema, researchSourceDigest, restoreResearch } from './researchRecords';
 import { researchSourceTasks, scopedResearchSources, type ResearchSourceTask } from './researchSources';
 import { researchSourceKinds, researchSourceUseSchema } from './researchReferences';
-import { proofSearchCheckpointReferenceSchema } from './proofSearchRecords';
+import { installRetainedProofSearchText, MAX_PROOF_SEARCH_CHECKPOINT_BYTES, proofSearchCheckpointReferenceSchema,
+  proofSearchRecordForAssignment, proofSearchRecordSchema, readRetainedProofSearchText, relocateRetainedProofSearchRecord,
+  type ProofSearchRecord } from './proofSearchRecords';
 import { mathematicalGapSchema } from './mathematicalGaps';
 import { checkOutcomeSchema, nextCheckRecordSchema, nextCheckScopeSchema } from './nextCheckContract';
+import { currentNextCheck } from './nextChecks';
 import { goalProgressStateSchema, resetGoalProgressClock } from './goalProgress';
 import { assessTaskResponsibility, researchWorkerCanNode, researchWorkerCanTask } from './modules/organization';
 import { CAPACITY_EXPLORATION_FOCUSES, currentCapacityExploration, plannedTaskRecords, type CapacityExploration } from './capacityExploration';
@@ -108,7 +111,7 @@ const frozenCandidate = z.object({ taskId: id, taskDigest: hash, workerId: id,
   dependencies: z.array(handoffReference), sources: z.record(z.string()), seedSources: z.record(z.string()),
 }).strict();
 const researchDelivery = z.object({ id: z.string().min(1), producer: id, taskId: id, taskDigest: hash,
-  groupId: id.optional(), kind: z.literal('research'), status: z.enum(['advisory', 'superseded']),
+  groupId: id.optional(), kind: z.enum(['research', 'progress']), status: z.enum(['advisory', 'conditional', 'superseded']),
   statement: z.string(), premises: z.array(z.string()), dependencies: z.array(handoffReference),
   remainingObligations: z.array(z.string()), summary: z.string(), evidenceRefs: z.array(z.string()),
   createdAt: z.number().int().nonnegative(), commit: oid.optional(), sourceDigest: z.string().optional(),
@@ -186,6 +189,10 @@ const sourceSchema = z.object({
   history: z.unknown(),
   capacityExplorations: capacitySource.optional(),
   nextChecks: nextCheckSource.optional(),
+  proofSearch: z.object({
+    records: z.record(proofSearchRecordSchema),
+    checkpoints: z.record(hash, z.string().max(MAX_PROOF_SEARCH_CHECKPOINT_BYTES)),
+  }).strict().optional(),
   goalProgress: goalProgressStateSchema.optional(),
   completedResearch: z.array(completedResearchRecord).optional(),
   researchContext: researchContext.optional(),
@@ -278,7 +285,7 @@ const emptyInitialPlan = z.object({ tasks: z.array(z.never()).length(0), groups:
 function validateSeedPlan(state: SolverRunState, source: SeedSource): ReturnType<typeof validatePlan> {
   if (!source.initialPlanning) return validatePlan(state, source.plan);
   if (source.candidateIds.length || source.conditionalCandidates?.length || source.frozenCandidates?.length || source.capacityExplorations ||
-      source.completedResearch || source.researchContext || source.nextChecks || source.taskDrafts?.length)
+      source.completedResearch || source.researchContext || source.nextChecks || source.proofSearch || source.taskDrafts?.length)
     throw new Error('math_continuation_seed_initial_plan_invalid');
   return emptyInitialPlan.parse(source.plan);
 }
@@ -415,8 +422,9 @@ function advisoryResearchDelivery(delivery: DeliveryRecord): DeliveryRecord {
   // Publication provenance is useful; old proof evidence, references, artifacts,
   // assignment keys and acceptance statuses are never replayed into the new host.
   return researchDelivery.parse({ id: delivery.id, producer: delivery.producer, taskId: delivery.taskId,
-    taskDigest: delivery.taskDigest, groupId: delivery.groupId, kind: 'research',
-    status: delivery.status === 'superseded' ? 'superseded' : 'advisory', statement: delivery.statement,
+    taskDigest: delivery.taskDigest, groupId: delivery.groupId, kind: delivery.kind,
+    status: delivery.status === 'superseded' ? 'superseded' :
+      delivery.kind === 'progress' && delivery.status === 'conditional' ? 'conditional' : 'advisory', statement: delivery.statement,
     premises: delivery.premises, dependencies: delivery.dependencies, remainingObligations: delivery.remainingObligations,
     summary: delivery.summary, evidenceRefs: delivery.evidenceRefs, createdAt: delivery.createdAt,
     commit: delivery.commit, sourceDigest: delivery.sourceDigest, finding: delivery.finding,
@@ -432,7 +440,8 @@ function capturedResearchContext(state: SolverRunState): z.infer<typeof research
     tasks: researchSourceTasks(state.cooperation!.tasks).map(node => ({ ...node,
       proof: node.proof?.taskDigest ? node.proof : undefined,
       integratedCheck: node.integratedCheck?.taskDigest ? node.integratedCheck : undefined })),
-    deliveries: (state.cooperation!.deliveries ?? []).filter(delivery => delivery.kind === 'research' &&
+    deliveries: (state.cooperation!.deliveries ?? []).filter(delivery =>
+      (delivery.kind === 'research' || delivery.kind === 'progress' && delivery.mathematicalGap) &&
       delivery.taskId && delivery.taskDigest).map(advisoryResearchDelivery) });
 }
 
@@ -447,6 +456,66 @@ function restoredResearchDeliveries(source: SeedSource, state: SolverRunState): 
     return [delivery.id, { ...delivery, status: current ? delivery.status : 'superseded' as const }];
   }));
   return [...deliveries.values()];
+}
+
+function captureProofSearch(archived: SolverRunState, runDirectory: string): SeedSource['proofSearch'] {
+  const cooperation = archived.cooperation!, identity = { problemReceiptDigest: archived.problem.receiptDigest,
+    environmentDigest: archived.environmentDigest };
+  const records: [string, ProofSearchRecord][] = [], checkpoints: Record<string, string> = {};
+  const capture = (record: ProofSearchRecord) => {
+    const digest = record.checkpoint.digest;
+    if (Object.hasOwn(checkpoints, digest)) return true;
+    try {
+      checkpoints[digest] = readRetainedProofSearchText(runDirectory, record);
+      return true;
+    } catch { return false; }
+  };
+  for (const check of cooperation.nextChecks ?? []) {
+    if (check.status !== 'pending' || check.check.execution?.kind !== 'proof-search' ||
+        !currentNextCheck(check, cooperation, identity)) continue;
+    if (check.proofSearchSeed) capture(check.proofSearchSeed);
+    const scope = { ...identity, ...check.scope.target };
+    const selected = proofSearchRecordForAssignment(cooperation.proofSearchRecords, scope, check);
+    if (selected?.history === check.id && capture(selected)) records.push([check.taskId, selected]);
+    if (!check.proofSearchSeed && check.scope.executionBasisDigest) {
+      const owner = proofSearchRecordForAssignment(cooperation.proofSearchRecords, scope);
+      if (owner?.basisDigest === check.scope.executionBasisDigest && capture(owner)) records.push([scope.taskId, owner]);
+    }
+  }
+  if (Object.keys(checkpoints).length) return { records: Object.fromEntries(records), checkpoints };
+}
+
+function restoreProofSearch(source: SeedSource, state: SolverRunState, runDirectory: string) {
+  const artifacts = new Map<string, { record: ProofSearchRecord; text: string }>();
+  const identity = { problemReceiptDigest: state.problem.receiptDigest, environmentDigest: state.environmentDigest };
+  const restore = (record: ProofSearchRecord) => {
+    if (record.problemReceiptDigest !== identity.problemReceiptDigest || record.environmentDigest !== identity.environmentDigest) return;
+    let text = source.proofSearch?.checkpoints[record.checkpoint.digest];
+    // Older frozen continuations contain the pinned record but predate embedded checkpoint bytes.
+    if (text === undefined && !source.proofSearch) {
+      try { text = readRetainedProofSearchText(path.dirname(source.source.stateFile), record); }
+      catch { return; }
+    }
+    if (text === undefined) return;
+    const relocated = relocateRetainedProofSearchRecord(runDirectory, record);
+    artifacts.set(record.checkpoint.digest, { record: relocated, text });
+    return relocated;
+  };
+  const records = Object.fromEntries(Object.entries(source.proofSearch?.records ?? {}).flatMap(([taskId, record]) => {
+    const restored = restore(record);
+    return restored ? [[taskId, restored] as const] : [];
+  }));
+  const checks = source.nextChecks?.records.map(check => {
+    if (check.status !== 'pending' || !check.scope.executionBasisDigest) return check;
+    const seed = check.proofSearchSeed && restore(check.proofSearchSeed);
+    if (seed) return { ...check, proofSearchSeed: seed };
+    if (records[check.taskId] || !check.proofSearchSeed &&
+        records[check.scope.target.taskId]?.basisDigest === check.scope.executionBasisDigest) return check;
+    if (check.scope.problemReceiptDigest === identity.problemReceiptDigest && check.scope.environmentDigest === identity.environmentDigest)
+      return { ...check, status: 'stale' as const };
+    return check;
+  });
+  return { records, checks, artifacts };
 }
 
 const draftOutputDigest = researchCheckpointOutputDigest;
@@ -752,6 +821,8 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
   }
   const completedResearch = capturedCompletedResearch(archived, previousResearch);
   const context = capturedResearchContext(archived);
+  const proofSearch = sameProblem && archived.environmentDigest === state.environmentDigest
+    ? captureProofSearch(archived, sourceDirectory) : undefined;
   const conditionalCandidates = planned.filter(node => !isAdvisoryTask(node.task) &&
     !(node.proof?.passed && !node.proof.conditions?.length) &&
     !(node.integratedCheck?.passed && !node.integratedCheck.conditions?.length) &&
@@ -793,6 +864,7 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
     ...(archived.cooperation.nextChecks?.length ? { nextChecks: { records: archived.cooperation.nextChecks,
       tasks: archived.cooperation.tasks.filter(node => node.nextCheckId).map(node => ({ task: node.task,
         nextCheckId: node.nextCheckId!, status: node.status, ...(node.finding ? { finding: node.finding } : {}) })) } } : {}),
+    ...(proofSearch ? { proofSearch } : {}),
     ...(!added && archived.cooperation.goalProgress ? { goalProgress: archived.cooperation.goalProgress } : {}),
     ...(completedResearch.length ? { completedResearch } : {}),
     ...(completedResearch.length || context.deliveries.length ? { researchContext: context } : {}),
@@ -952,13 +1024,17 @@ export async function seedSolverContinuation(options: {
         canonicalMathJson(node.researchCompletion ?? null) === canonicalMathJson(record?.record ?? null);
     };
     const priorCooperation = state.cooperation;
+    lease.assertHeld();
+    const proofSearch = restoreProofSearch(source, state, directory);
     if (seeded && priorCooperation && (priorCooperation.planVersion !== planVersion ||
         canonicalMathJson(plannedTaskRecords(priorCooperation.tasks).map(node => node.task)) !== canonicalMathJson(plan.tasks) ||
         canonicalMathJson(capacityOrigin(capturedCapacityRecords(state))) !==
           canonicalMathJson(capacityOrigin(source.capacityExplorations?.records ?? [])) ||
         canonicalMathJson(priorCooperation.capacityExplorationInputs ?? []) !==
           canonicalMathJson(source.capacityExplorations?.inputs ?? []) ||
-        canonicalMathJson(priorCooperation.nextChecks ?? []) !== canonicalMathJson(source.nextChecks?.records ?? []) ||
+        canonicalMathJson(priorCooperation.nextChecks ?? []) !== canonicalMathJson(proofSearch.checks ?? []) &&
+          canonicalMathJson(priorCooperation.nextChecks ?? []) !== canonicalMathJson(source.nextChecks?.records ?? []) ||
+        canonicalMathJson(priorCooperation.proofSearchRecords ?? {}) !== canonicalMathJson(proofSearch.records) ||
         source.researchContext && canonicalMathJson(priorCooperation.deliveries ?? []) !==
           canonicalMathJson(restoredResearchDeliveries(source, state)) ||
         (source.completedResearch || source.researchCheckpoints) && ![pendingResearch, restoredResearch].some(records =>
@@ -1018,6 +1094,8 @@ export async function seedSolverContinuation(options: {
         throw new Error('math_continuation_seed_destination_changed');
       readContinuationSnapshot(snapshot.file, snapshot.digest, { taskDigest: state.taskDigest, problemReceiptDigest: state.problem.receiptDigest });
       saveReport();
+      for (const { record, text } of proofSearch.artifacts.values())
+        installRetainedProofSearchText(directory, record, text);
       const canonical = await withSolverWorktree(state.worktree, state.problem.baseCommit, async checkout => {
         for (const [file, text] of Object.entries(source.canonicalSources)) {
           const target = path.join(checkout, state.problem.projectRelative, file); assertMathCanonicalPath(target);
@@ -1038,9 +1116,12 @@ export async function seedSolverContinuation(options: {
         capacityExploration: record.capacityExploration, attempts: 0,
         status: record.status === 'completed' ? 'completed' : 'pending',
         ...(record.finding === undefined ? {} : { finding: record.finding }) });
-      for (const node of source.nextChecks?.tasks ?? []) tasks.push({ task: node.task, nextCheckId: node.nextCheckId,
-        attempts: 0, status: node.status === 'completed' ? 'completed' : node.status === 'blocked' ? 'blocked' : 'pending',
-        ...(node.finding ? { finding: node.finding } : {}) });
+      for (const node of source.nextChecks?.tasks ?? []) {
+        const stale = proofSearch.checks?.some(check => check.id === node.nextCheckId && check.status === 'stale');
+        tasks.push({ task: stale ? { ...node.task, status: 'stopped' } : node.task, nextCheckId: node.nextCheckId,
+          attempts: 0, status: node.status === 'completed' ? 'completed' : node.status === 'blocked' || stale ? 'blocked' : 'pending',
+          ...(node.finding ? { finding: node.finding } : {}) });
+      }
       // A timeout only grants more time to the identical tree/items/environment key;
       // it never restores proof acceptance. Retries retain this run's later timeout progress.
       if (!state.continuationDigest && source.verificationCheckpoints) state.verificationCheckpoints = source.verificationCheckpoints.map(record => ({
@@ -1052,7 +1133,8 @@ export async function seedSolverContinuation(options: {
         canonicalCommit: canonical, leadSeedCommit: canonical, planVersion, planEdited: !source.initialPlanning,
         ...(source.capacityExplorations?.inputs === undefined ? {} : {
           capacityExplorationInputs: source.capacityExplorations.inputs.map(entry => ({ ...entry })) }),
-        ...(source.nextChecks ? { nextChecks: structuredClone(source.nextChecks.records) } : {}),
+        ...(proofSearch.checks ? { nextChecks: proofSearch.checks } : {}),
+        ...(Object.keys(proofSearch.records).length ? { proofSearchRecords: proofSearch.records } : {}),
         ...(source.goalProgress ? { goalProgress: structuredClone(source.goalProgress) } : {}),
         deliveries: [], history: [...capacities.filter(record => record.archived).map(archivedCapacity),
           ...completedResearchHistory(source)], edits: [], cursors: {} };

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { canonicalMathJson, mathDigest } from '../../src/math/mathRuntimeIo';
 import { inspectScopedLeanDeclarations } from '../../src/math/leanSource';
-import { researchCandidateScopeReason } from './researchCandidateScope';
+import { researchCandidateScopeReason, withResearchLibraryImports } from './researchCandidateScope';
 import { WebResearchProjects } from './researchProjects';
 import { WebResearchAssets } from './researchAssets';
 import { researchOverview } from './researchOverview';
@@ -192,7 +192,7 @@ export class WebResearchApi {
       ? { expectedType: task.type ?? planned?.type } : {}) } : undefined;
     const attachment = submission.libraryTrial;
     const candidateTarget = attachment?.candidateTarget ?? inferredTarget;
-    const prefix = attachment?.imports.map(name => `import ${name}\n`).join('') ?? '';
+    const imports = attachment?.imports ?? [];
     const dependencySources = attachment?.dependencySources ?? baseline.dependencySources;
     const expectedKind = task?.kind === 'lemma' ? planned?.declaration === 'definition' ? 'definition' : 'theorem'
       : inspectScopedLeanDeclarations(run.source).find(item => item.qualifiedName === candidateTarget?.name)?.kind ?? 'theorem';
@@ -202,7 +202,7 @@ export class WebResearchApi {
       : declaration?.kind !== expectedKind ? expectedKind === 'definition' ? '此任务要求定义，请保留计划指定的声明种类。'
         : '此任务要求定理或引理，请勿用定义替代证明。'
       : task.kind === 'lemma' && !candidateTarget.expectedType ? '候选辅助声明的计划类型不可用，请刷新后重新选择。'
-      : researchCandidateScopeReason({ originalSource: prefix + run.source, baselineSource: prefix + baseline.source,
+      : researchCandidateScopeReason({ originalSource: withResearchLibraryImports(run.source, imports), baselineSource: withResearchLibraryImports(baseline.source, imports),
         candidateSource: submission.source, targetName: candidateTarget.name });
     const result = reason ? undefined : await this.runner.check!({ environment: run.environment, source: submission.source,
       sourceFile: base.file, dependencySources,

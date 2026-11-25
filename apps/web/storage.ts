@@ -54,6 +54,7 @@ const safeRunId = (id: string) => {
   return id;
 };
 const bySequence = <T extends { sequence: number }>(items: T[]) => items.sort((a, b) => a.sequence - b.sequence);
+const immutableRecordChanged = 'web_storage_immutable_record_changed';
 const credentialFields = new Set(['apiKey', 'api_key', 'access_token', 'refresh_token', 'authorization']);
 /** Records accept visible run data only. Credential objects never become restart state. */
 const publicRecord = <T>(value: T): T => JSON.parse(JSON.stringify(value,
@@ -154,14 +155,14 @@ export class WebStorage {
     const key = this.key(segments), text = encoded(publicRecord(value));
     if (!this.root) {
       const previous = this.memory.get(key);
-      if (immutable && previous !== undefined && previous !== text) throw new Error('web_storage_immutable_record_changed');
+      if (immutable && previous !== undefined && previous !== text) throw new Error(immutableRecordChanged);
       this.memory.set(key, text); return;
     }
     const file = path.join(this.root, key);
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     if (immutable) {
       if (fs.existsSync(file)) {
-        if (fs.readFileSync(file, 'utf8') !== text) throw new Error('web_storage_immutable_record_changed');
+        if (fs.readFileSync(file, 'utf8') !== text) throw new Error(immutableRecordChanged);
         return;
       } else writeMathFrozen(file, text);
     } else {
@@ -192,7 +193,8 @@ export class WebStorage {
   }
   getSession(id: string): StoredWebSession | undefined { return this.getRecord(['sessions', `${digestKey(id)}.json`]); }
   listSessions(): StoredWebSession[] {
-    return this.listRecords(['sessions']).map(file => this.getRecord<StoredWebSession>(['sessions', file])!);
+    return this.listRecords(['sessions']).filter(file => /^[a-f0-9]{64}\.json$/u.test(file))
+      .map(file => this.getRecord<StoredWebSession>(['sessions', file])!);
   }
   deleteSession(id: string): void { this.deleteRecord(['sessions', `${digestKey(id)}.json`]); }
 
@@ -238,6 +240,15 @@ export class WebStorage {
       .filter((item): item is StoredRun => Boolean(item)))
       .sort((a, b) => a.run.createdAt.localeCompare(b.run.createdAt));
   }
+  /** Evidence files can reach disk before their counters and pointers in run.json. */
+  recoverRunTail(owner: string, run: WebRun): { observation?: WebObservation; actionCount?: number } {
+    const directory = this.runPath(owner, run.id);
+    const frame = this.latestWrittenRecord<ObservationRecord>([...directory, 'observations'],
+      run.solverAttempt?.sequence ?? run.observation?.sequence ?? 0);
+    const action = this.latestWrittenRecord<WebAgentAction>([...directory, 'actions'], run.actions?.count ?? 0);
+    return { ...(frame ? { observation: this.hydrateObservations(directory, [frame])[0] } : {}),
+      ...(action ? { actionCount: action.sequence } : {}) };
+  }
   deletedCreation(owner: string, requestId: string): WebCreation | undefined {
     return this.getRecord([...this.ownerPath(owner), 'deleted-requests', `${digestKey(requestId)}.json`]);
   }
@@ -279,16 +290,17 @@ export class WebStorage {
     const directory = this.runPath(owner, observation.webRunId);
     const recordPath = [...directory, 'observations', `${observation.sequence}.json`];
     const existing = this.getRecord<ObservationRecord>(recordPath);
-    if (existing?.sources.some(source => typeof source.source === 'string')) {
-      // A run restored from an older server can still save its last inline observation.
-      this.saveRecord(recordPath, observation, true);
-      return;
-    }
-    const record = compactObservation(observation, (digest, source) => {
+    const inline = existing?.sources.some(source => typeof source.source === 'string');
+    const record = inline ? observation : compactObservation(observation, (digest, source) => {
       const segments = [...directory, 'source-blobs', `${digest}.json`], key = this.key(segments);
       if (!(this.root ? fs.existsSync(path.join(this.root, key)) : this.memory.has(key))) this.saveRecord(segments, source, true);
     });
-    this.saveRecord(recordPath, record, true);
+    try { this.saveRecord(recordPath, record, true); }
+    catch (error) {
+      // The read projection can normalize legacy receipts without changing the frozen observation.
+      if (!existing || !(error instanceof Error) || error.message !== immutableRecordChanged ||
+          encoded(this.hydrateObservations(directory, [existing])[0]) !== encoded(publicRecord(observation))) throw error;
+    }
   }
   private hydrateObservations(directory: string[], records: ObservationRecord[]): WebObservation[] {
     const sources = new Map<string, string>();
@@ -305,15 +317,13 @@ export class WebStorage {
     return observation && this.hydrateObservations(directory, [observation])[0];
   }
   listObservations(owner: string, runId: string): WebObservation[] {
-    const directory = this.runPath(owner, runId), observations = [...directory, 'observations'];
-    return this.hydrateObservations(directory, bySequence(this.listRecords(observations)
-      .map(file => this.getRecord<ObservationRecord>([...observations, file])!)));
+    return this.listObservationsAfter(owner, runId, 0, Number.MAX_SAFE_INTEGER);
   }
   getObservation(owner: string, runId: string, sequence?: number): WebObservation | undefined {
     const directory = this.runPath(owner, runId);
-    if (sequence === undefined) sequence = this.listRecords([...directory, 'observations'])
-      .reduce((latest, file) => /^\d+\.json$/u.test(file) ? Math.max(latest, Number.parseInt(file, 10)) : latest, 0);
-    return sequence ? this.readObservation(directory, sequence) : undefined;
+    if (sequence !== undefined) return sequence ? this.readObservation(directory, sequence) : undefined;
+    const latest = this.latestWrittenRecord<ObservationRecord>([...directory, 'observations'], 0);
+    return latest && this.hydrateObservations(directory, [latest])[0];
   }
   getTaskSource(owner: string, runId: string, taskId: string, version?: string, commit?: string): WebTaskSource | undefined {
     return this.listObservations(owner, runId).reverse().flatMap(item => item.sources)
@@ -403,9 +413,23 @@ export class WebStorage {
   }
   /** Numbered records after `after` in sequence order; reading stops at a record that cannot be parsed, to be read again later. */
   listRecordsAfter<T>(directory: string[], after: number, limit: number): T[] { return this.recordsAfter<T>(directory, after, limit); }
+  private numberedSequences(directory: string[], after: number): number[] {
+    return this.listRecords(directory).flatMap(file => /^\d+\.json$/u.test(file) ? [Number.parseInt(file, 10)] : [])
+      .filter(sequence => sequence > after);
+  }
+  private latestWrittenRecord<T extends { sequence: number }>(directory: string[], after: number): T | undefined {
+    for (const sequence of this.numberedSequences(directory, after).sort((a, b) => b - a)) {
+      try {
+        const record = this.getRecord<T>([...directory, `${sequence}.json`]);
+        if (record?.sequence === sequence) return record;
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
+        // A crash during exclusive file creation can leave a truncated final record.
+      }
+    }
+  }
   private recordsAfter<T>(directory: string[], after: number, limit: number): T[] {
-    const sequences = this.listRecords(directory).flatMap(file => /^\d+\.json$/u.test(file) ? [Number.parseInt(file, 10)] : [])
-      .filter(sequence => sequence > after).sort((a, b) => a - b).slice(0, limit);
+    const sequences = this.numberedSequences(directory, after).sort((a, b) => a - b).slice(0, limit);
     const records: T[] = [];
     for (const sequence of sequences) {
       let record: T | undefined;

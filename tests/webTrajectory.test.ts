@@ -111,6 +111,16 @@ describe('web trajectory index', () => {
     expect(webSampleResponse(sample, 'trajectory/version', 'GET', new URLSearchParams({ task: 'goal_1', commit: 'abc' })).status).toBe(404);
     expect(webSampleResponse(sample, 'trajectory/version', 'GET', new URLSearchParams()).status).toBe(400);
   });
+
+  it('serves the exact commit of a saved task source in the sample', () => {
+    const source = sample.observations.flatMap(frame => frame.sources).find(item => item.taskId === 'goal_1')!;
+    const route = `tasks/${source.taskId}/source`, version = source.taskVersion;
+    const newest = webSampleResponse(sample, route, 'GET', new URLSearchParams({ version }));
+    expect((newest.body as { source: typeof source }).source.commit).not.toBe(source.commit);
+    expect(webSampleResponse(sample, route, 'GET', new URLSearchParams({ version, commit: source.commit })))
+      .toEqual({ status: 200, body: { source } });
+    expect(webSampleResponse(sample, route, 'GET', new URLSearchParams({ version, commit: 'a'.repeat(40) })).status).toBe(404);
+  });
 });
 describe('web trajectory steps', () => {
   it('reads the sample as the mathematical steps of the run, each attempt with the version it checked', () => {
