@@ -340,7 +340,15 @@ function ChatThread(props: ChatThreadProps & { readingArea: HTMLElement }) {
     </div>;
   }
   if (!conversation) return <div class="chat-start">
-    {loading ? <p role="status">{t("正在读取对话…")}</p> : !error && <h1>{t("今天想证明什么？")}</h1>}
+    {loading ? <p role="status">{t("正在读取对话…")}</p> : !error && <>
+      <div class="chat-start-emblem" aria-hidden="true">
+        <span class="chat-start-rule" />
+        <img src="assets/mark.svg" alt="" width={18} height={18} />
+        <span class="chat-start-tag mono">LEAN 4 &#xB7; ATELIER</span>
+        <span class="chat-start-rule" />
+      </div>
+      <h1>{t("今天想证明什么？")}</h1>
+    </>}
     {errorNotice}
   </div>;
   return <div class="chat-messages" data-conversation={conversation.id}>
