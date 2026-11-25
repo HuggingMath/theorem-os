@@ -5,7 +5,9 @@ import { canonicalMathJson, mathDigest, syncMathDirectory, writeMathFrozen } fro
 import type { WebArchive, WebCheckReceipt, WebCommandResult, WebObservation, WebTaskSource } from './collaboration';
 import type { WebAccountIdentity, WebAgentAction, WebEvent, WebExplanation, WebRun, WorkerExplanationCheckpoint } from './shared';
 import type { WebShareSnapshot } from './share';
-import { compactObservation, hydrateObservation, type CompactWebObservation } from './observationSources';
+import { compactObservation, hydrateObservation, observationCompactor,
+  type CompactWebObservation, type CompactWebTaskSource } from './observationSources';
+import { projectStoredObservationChecks } from './observationChecks';
 
 export type WebCreation = { schema: 'theorem-os.web-creation.v1'; requestId: string; digest: string };
 type StoredRun = { owner: string; run: WebRun; creation?: WebCreation };
@@ -14,18 +16,28 @@ type ObservationRecord = WebObservation | CompactWebObservation;
 type StoredExplanationCheckpoint = { binding: string; checkpoint: WorkerExplanationCheckpoint };
 
 export type StoredWebSession = { id: string; csrf: string; touchedAt: number; account?: WebAccountIdentity & { id: string }; passwordResetUntil?: number };
-export type StoredWebArchive = {
-  schema: 'theorem-os.web-archive.v1';
-  summary: WebArchive;
+type ArchiveEvidence = {
   run: WebRun;
   observations: WebObservation[];
   sources: WebTaskSource[];
+};
+type ArchiveRecords = {
+  summary: WebArchive;
   checks: WebCheckReceipt[];
   events: WebEvent[];
   /** Older saved archives did not contain the separately stored Agent actions. */
   actions?: WebAgentAction[];
-  commands: WebCommandResult[];
 };
+type StoredWebArchiveV1 = ArchiveRecords & ArchiveEvidence & { schema: 'theorem-os.web-archive.v1'; commands: WebCommandResult[] };
+export type StoredWebArchiveV2 = ArchiveRecords & {
+  schema: 'theorem-os.web-archive.v2';
+  run: Omit<WebRun, 'observation'> & { observation?: CompactWebObservation };
+  observations: CompactWebObservation[];
+  sources: CompactWebTaskSource[];
+  sourceBlobs: Record<string, string>;
+  commands: (Omit<WebCommandResult, 'observation'> & { observation?: CompactWebObservation })[];
+};
+export type StoredWebArchive = StoredWebArchiveV1 | StoredWebArchiveV2;
 
 export type StoredWebShare = { token: string; createdAt: string; snapshot: WebShareSnapshot };
 type ShareIndex = { ownerDigest: string; runId: string };
@@ -48,8 +60,16 @@ const publicRecord = <T>(value: T): T => JSON.parse(JSON.stringify(value,
 
 /** All retained process evidence, with coverage of the recording rather than a claim of fresh proof acceptance. */
 export function webArchive(run: WebRun, records: { observations: WebObservation[]; events: WebEvent[];
-  actions: WebAgentAction[]; commands: WebCommandResult[] }, catalogDigest?: string): StoredWebArchive {
-  const { observations, events, actions, commands } = records;
+  actions: WebAgentAction[]; commands: WebCommandResult[] }, catalogDigest?: string): StoredWebArchiveV2 {
+  const { events, actions, commands } = records;
+  const sourceBlobs: Record<string, string> = {};
+  const referenceSources = observationCompactor((digest, source) => { sourceBlobs[digest] = source; });
+  const compact = (frame: WebObservation) => referenceSources(projectStoredObservationChecks(frame));
+  const observations = records.observations.map(compact);
+  const { observation, ...runFields } = run;
+  const archivedRun = { ...runFields, ...(observation ? { observation: compact(observation) } : {}) };
+  const archivedCommands = commands.map(({ observation: recorded, ...command }) =>
+    ({ ...command, ...(recorded ? { observation: compact(recorded) } : {}) }));
   const unique = <T>(items: T[]) => [...new Map(items.map(item => [mathDigest(encoded(item)), item])).values()];
   const sources = unique(observations.flatMap(item => item.sources)), checks = unique(observations.flatMap(item => item.checks));
   const complete = (items: { sequence: number }[], expected: number) => items.length === expected
@@ -67,8 +87,20 @@ export function webArchive(run: WebRun, records: { observations: WebObservation[
     events: events.length, observations: observations.length, actions: actions.length, commands: commands.length,
     droppedActions: run.actions?.dropped ?? 0, sources: sources.length, checks: checks.length, coverage,
     ...(catalogDigest ? { catalogDigest } : {}) };
-  const payload = publicRecord({ schema: 'theorem-os.web-archive.v1' as const, run, observations, sources, checks, events, actions, commands });
+  const payload = publicRecord({
+    schema: 'theorem-os.web-archive.v2' as const, run: archivedRun, observations, sources, sourceBlobs, checks, events, actions,
+    commands: archivedCommands,
+  });
   return { ...payload, summary: { ...identity, digest: mathDigest(encoded({ ...payload, identity })) } };
+}
+
+/** Consumers that need inline observations can read either archive format. */
+export function readWebArchiveObservations(archive: StoredWebArchive): Pick<ArchiveEvidence, 'run' | 'observations'> {
+  if (archive.schema === 'theorem-os.web-archive.v1') return { run: archive.run, observations: archive.observations };
+  const { observation, ...run } = archive.run;
+  const hydrate = (frame: CompactWebObservation) => hydrateObservation(frame, digest => archive.sourceBlobs[digest]);
+  return { run: { ...run, ...(observation ? { observation: hydrate(observation) } : {}) },
+    observations: archive.observations.map(hydrate) };
 }
 
 /** Optional web-only persistence. An omitted root keeps the same API in memory for disposable fixtures. */
@@ -246,13 +278,13 @@ export class WebStorage {
   }
   private hydrateObservations(directory: string[], records: ObservationRecord[]): WebObservation[] {
     const sources = new Map<string, string>();
-    return records.map(record => hydrateObservation(record, digest => {
+    return records.map(record => projectStoredObservationChecks(hydrateObservation(record, digest => {
       const cached = sources.get(digest);
       if (cached !== undefined) return cached;
       const text = this.getRecord<string>([...directory, 'source-blobs', `${digest}.json`]);
       if (text !== undefined) sources.set(digest, text);
       return text;
-    }));
+    })));
   }
   private readObservation(directory: string[], sequence: number): WebObservation | undefined {
     const observation = this.getRecord<ObservationRecord>([...directory, 'observations', `${sequence}.json`]);
@@ -370,7 +402,7 @@ export class WebStorage {
     return records;
   }
 
-  exportRun(owner: string, run: WebRun, catalogDigest?: string): StoredWebArchive {
+  exportRun(owner: string, run: WebRun, catalogDigest?: string): StoredWebArchiveV2 {
     if (!this.getRun(owner, run.id)) throw new WebStorageError(404, '运行不存在或不属于当前会话。');
     return webArchive(run, { observations: this.listObservations(owner, run.id), events: this.listEvents(owner, run.id),
       actions: this.listActionsAfter(owner, run.id, 0, Number.MAX_SAFE_INTEGER), commands: this.listCommands(owner, run.id) }, catalogDigest);

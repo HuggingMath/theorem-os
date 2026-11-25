@@ -30,8 +30,9 @@ export const trajectoryLimits = {
 const textLimits = { guidance: 2_000, headline: 160 } as const;
 const readLimits = { events: 5_000, observations: 40 } as const;
 
-/** One Lean check of a version; receipts recorded at the same verification time (one per target theorem) form one check. */
-export type TrajectoryCheck = { at: number; passed: boolean; status: string; receiptIds: string[]; theorems: string[]; headline?: string; observation: number };
+/** One Lean check of a task version. An original-problem check separately records the outcome of the whole batch. */
+export type TrajectoryCheck = { at: number; passed: boolean; status: string; receiptIds: string[]; theorems: string[]; headline?: string; observation: number;
+  originalProblemPassed?: boolean };
 /** A task's code at one commit, with every recorded check of it. */
 export type TrajectoryVersion = {
   key: string; taskId: string; commit: string; file?: string; source?: number; firstAt: number; checks: TrajectoryCheck[]; revision: number;
@@ -136,11 +137,13 @@ function foldCheck(index: TrajectoryIndex, receipt: WebCheckReceipt, observation
     trim(index, 'versions', index.versions, trajectoryLimits.versions);
     if (!index.versions.has(key)) return;
   }
-  let check = version.checks.find(item => item.at === at);
+  const originalProblemPassed = typeof record.originalProblemPassed === 'boolean' ? record.originalProblemPassed : undefined;
+  let check = version.checks.find(item => item.at === at && item.originalProblemPassed === originalProblemPassed);
   if (check?.receiptIds.includes(receipt.id)) return;
   if (!check) {
     if (version.checks.length >= trajectoryLimits.checks) version.checks.splice(1, 1); // The first check stays: it is the attempt itself.
-    check = { at, passed: true, status: 'kernel_verified', receiptIds: [], theorems: [], observation };
+    check = { at, passed: true, status: 'kernel_verified', receiptIds: [], theorems: [], observation,
+      ...(originalProblemPassed === undefined ? {} : { originalProblemPassed }) };
     version.checks.push(check);
     version.checks.sort((a, b) => a.at - b.at);
     version.firstAt = Math.min(version.firstAt, at);

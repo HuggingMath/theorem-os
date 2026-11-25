@@ -52,7 +52,7 @@ export function editableTaskDraft(draft: TaskDraft, unresolved = false, fixedEnv
     ? draft : { ...draft, environment };
 }
 
-const archiveSchemas = ['theorem-os.web-export.v1', 'theorem-os.web-archive.v1'];
+const archiveSchemas = ['theorem-os.web-export.v1', 'theorem-os.web-archive.v1', 'theorem-os.web-archive.v2'];
 const maximumFileBytes = 16 * 1024 * 1024;
 const encoder = new TextEncoder();
 const editableNumber = /^[+-]?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d*)?|\.)?$/;

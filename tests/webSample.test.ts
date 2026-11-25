@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { loadWebSample, webSampleResponse, webSampleRunId } from '../apps/web/sample';
-import type { StoredWebArchive } from '../apps/web/storage';
+import { readWebArchiveObservations, type StoredWebArchiveV2 } from '../apps/web/storage';
 
 const file = new URL('../apps/web/sample/run.json', import.meta.url);
 
@@ -42,9 +42,10 @@ describe('web sample run', () => {
 
   it('downloads the full read-only recording and names its smaller run snapshot separately', () => {
     const sample = loadWebSample(file)!, query = new URLSearchParams();
-    const full = webSampleResponse(sample, 'download', 'GET', query), bundle = full.body as StoredWebArchive;
-    expect(bundle.schema).toBe('theorem-os.web-archive.v1');
-    expect(bundle.events).toEqual(sample.events); expect(bundle.observations).toEqual(sample.observations);
+    const full = webSampleResponse(sample, 'download', 'GET', query), bundle = full.body as StoredWebArchiveV2;
+    expect(bundle.schema).toBe('theorem-os.web-archive.v2');
+    expect(bundle.events).toEqual(sample.events);
+    expect(readWebArchiveObservations(bundle)).toEqual({ run: sample.run, observations: sample.observations });
     expect(bundle.actions).toEqual(sample.actions); expect(bundle.commands).toEqual([]);
     expect(bundle.sources.length).toBeGreaterThan(0); expect(bundle.checks.length).toBeGreaterThan(0);
     const snapshot = webSampleResponse(sample, 'snapshot', 'GET', query);

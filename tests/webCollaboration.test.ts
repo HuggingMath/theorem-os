@@ -8,7 +8,7 @@ import { createWebService } from '../apps/web/server';
 import { readWebConfig } from '../apps/web/config';
 import { isAcceptedRun } from '../apps/web/presentation';
 import { WebJobs } from '../apps/web/jobs';
-import { WebStorage } from '../apps/web/storage';
+import { readWebArchiveObservations, WebStorage } from '../apps/web/storage';
 import type { WebCommand, WebCommandResult, WebObservation } from '../apps/web/collaboration';
 import type { WebRunner } from '../apps/web/runner';
 import { parseWorkerMessage } from '../apps/web/runner';
@@ -223,7 +223,7 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
     response.resolve({ id: 'capture', status: 'captured', observation: captured });
     const archive = await pending;
     const saved = jobs.storage.getArchive('alice', run.id, archive.id)!;
-    expect(saved.sources[0].source).toBe('-- Provider echoed [REDACTED]');
+    expect(readWebArchiveObservations(saved).observations[0].sources[0].source).toBe('-- Provider echoed [REDACTED]');
     expect(JSON.stringify(saved)).not.toContain(key);
     expect(JSON.stringify(jobs.storage.getRun('alice', run.id))).not.toContain(key);
     expect(run.status).toBe('completed');

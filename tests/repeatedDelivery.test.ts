@@ -470,6 +470,17 @@ describe('persistent typed delivery failure guards', () => {
     expect(checker).toHaveBeenCalledTimes(1);
   });
 
+  it('dispatches an independent declaration of the same type while an absent helper stays blocked', async () => {
+    reseed('theorem goal : True := by sorry\n');
+    checker.mockRejectedValue(new Error(missing)); await exhaustRepair();
+    const independent: TaskRecord = { task: task('independent'), status: 'pending', attempts: 0 };
+    state.cooperation!.tasks.push(independent);
+    (cooperative as any).refreshFailedTaskInputs();
+    expect(candidate.status).toBe('blocked'); expect(independent.status).toBe('pending');
+    expect(await cooperative.next(researcher, budget)).toMatchObject({ kind: 'task', task: { id: independent.task.id } });
+    expect(checker).toHaveBeenCalledOnce();
+  });
+
   it('preserves failure and unused repair records across serialization and restore', async () => {
     await cooperative.deliver(researcher, action, seed);
     const restored = JSON.parse(JSON.stringify(state)) as SolverRunState, resumed = create(restored);

@@ -74,7 +74,7 @@ try {
         const archive = await response.json();
         // The server persists omitted budgets as zero, the explicit unlimited value.
         assert.equal(archive.run.maxTotalTokens, cap ?? 0);
-        assert.equal(archive.schema, operation === 'download' ? 'theorem-os.web-archive.v1' : 'theorem-os.web-export.v1');
+        assert.equal(archive.schema, operation === 'download' ? 'theorem-os.web-archive.v2' : 'theorem-os.web-export.v1');
         await fs.writeFile(path.join(output, `${locale}-source-${cap ?? 'unlimited'}.json`), JSON.stringify(archive, null, 2) + '\n');
 
         await importJson(page, archive, `${locale}-real-${operation}-${cap ?? 'unlimited'}.json`);

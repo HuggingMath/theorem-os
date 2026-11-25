@@ -143,7 +143,9 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     return mathDigest(canonicalMathJson({ ...(local ? {} : { file: task.proofPath, offset: targets[0].startOffset }), source: target }));
   }
   private failedTaskBasis(task: CooperativeTask, conditions?: readonly CooperativeTask[],
-    assignment = this.node(task.id)?.assignment): { basis: BlockerBasis; inputDigest: string } {
+    assignment = this.node(task.id)?.assignment) {
+    const taskDigest = digest(task);
+    const declarationDigest = mathDigest(canonicalMathJson([task.proofPath, task.theoremName]));
     const normalized = task.kind === 'lemma' ? { ...task, theoremName: undefined, proofPath: undefined } : task;
     conditions ??= this.assignmentConditions(task, assignment);
     const node = this.node(task.id), routeId = node && selectedTaskRoute(node, this.archive.tasks)?.id;
@@ -157,8 +159,9 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       buildDigest: this.input.state.buildDigest, evaluatorDigest: this.input.state.evaluatorDigest,
       environment: projectMathematicsRuntimeEnvironment(this.input.access.get(this.lead.id)?.environment ?? {}) }));
     const previous = this.archive.failedTaskInputs?.findLast(record => record.basis.contractDigest === contractDigest &&
-      record.basis.environmentDigest === environmentDigest) ??
-      this.archive.failedTaskInputs?.findLast(record => record.basis.contractDigest === contractDigest && this.missingTaskDeclaration(record));
+      record.basis.environmentDigest === environmentDigest && this.sameFailedDeclaration(record, { taskDigest, declarationDigest })) ??
+      this.archive.failedTaskInputs?.findLast(record => record.basis.contractDigest === contractDigest &&
+        this.reusableMissingDeclaration(record, task.id));
     const basis: BlockerBasis = { contractDigest, environmentDigest,
       dependencies: Object.fromEntries(Object.entries(raw.dependencies).map(([id, entry]) => {
         const dependency = this.node(id), proof = dependency?.integratedCheck;
@@ -172,17 +175,29 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     // Dependency task IDs, revision counters and replayed receipts do not change the mathematics.
     const inputDigest = mathDigest(canonicalMathJson({ contractDigest, environmentDigest,
       dependencies: Object.values(basis.dependencies).map(entry => canonicalMathJson(entry)).sort() }));
-    return { basis, inputDigest };
+    return { basis, inputDigest, taskId: task.id, taskDigest, declarationDigest };
   }
   private missingTaskDeclaration(record: FailedTaskInput) {
     return record.targetDigest === 'declaration-count:0' && record.feedback.startsWith('math_task_missing_declaration\n');
   }
-  private sameFailedTaskBasis(record: FailedTaskInput, candidate: Pick<FailedTaskInput, 'inputDigest' | 'basis' | 'targetDigest'>) {
+  private sameFailedDeclaration(record: FailedTaskInput, candidate: Pick<FailedTaskInput, 'taskDigest' | 'declarationDigest'>) {
+    return record.declarationDigest === undefined ? record.taskDigest === candidate.taskDigest :
+      record.declarationDigest === candidate.declarationDigest;
+  }
+  private reusableMissingDeclaration(record: FailedTaskInput, taskId: string) {
+    // Preserve deduplication when a plan replaces a missing helper with a renamed version of the same contract.
+    return this.missingTaskDeclaration(record) && (record.taskId === taskId || !this.node(record.taskId));
+  }
+  private sameFailedTaskBasis(record: FailedTaskInput,
+    candidate: Pick<FailedTaskInput, 'inputDigest' | 'basis' | 'taskId' | 'taskDigest' | 'declarationDigest' | 'targetDigest'>) {
+    const sameDeclaration = this.sameFailedDeclaration(record, candidate);
+    const sameMissing = candidate.targetDigest === record.targetDigest &&
+      (sameDeclaration ? this.missingTaskDeclaration(record) : this.reusableMissingDeclaration(record, candidate.taskId));
+    if (!sameMissing && !sameDeclaration) return false;
     if (record.inputDigest === candidate.inputDigest) return true;
     // A different checker cannot materialize a declaration absent from these same sources.
     // Still reopen for changed contracts, assumptions, checked dependencies or selected route inputs.
-    if (!this.missingTaskDeclaration(record) || candidate.targetDigest !== 'declaration-count:0' ||
-        record.basis.contractDigest !== candidate.basis.contractDigest) return false;
+    if (!sameMissing || record.basis.contractDigest !== candidate.basis.contractDigest) return false;
     const dependencies = (basis: BlockerBasis) => Object.values(basis.dependencies).map(entry => canonicalMathJson(entry)).sort();
     return canonicalMathJson(dependencies(record.basis)) === canonicalMathJson(dependencies(candidate.basis));
   }
@@ -191,14 +206,15 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       record.targetDigest === candidate.targetDigest && this.sameFailedTaskBasis(record, candidate));
   }
   protected failedTaskInput(task: CooperativeTask, assignment: TaskAssignment, worktree: string, commit: string, conditions?: readonly CooperativeTask[]) {
-    const { basis, inputDigest } = this.failedTaskBasis(task, conditions, assignment), sourceDigest = this.leanSourceDigest(worktree, commit);
+    const input = this.failedTaskBasis(task, conditions, assignment), sourceDigest = this.leanSourceDigest(worktree, commit);
     const targetDigest = this.taskSourceDigest(task, worktree, commit);
     const localTargetDigest = this.taskSourceDigest(task, worktree, commit, true);
-    return { id: mathDigest(canonicalMathJson({ inputDigest, sourceDigest, targetDigest })), taskId: task.id, taskDigest: digest(task),
+    return { id: mathDigest(canonicalMathJson({ inputDigest: input.inputDigest, declarationDigest: input.declarationDigest, sourceDigest, targetDigest })),
+      ...input,
       ...(!localTargetDigest.startsWith('declaration-count:') ? {
-        attemptFingerprint: mathDigest(canonicalMathJson({ inputDigest, target: localTargetDigest })),
+        attemptFingerprint: mathDigest(canonicalMathJson({ inputDigest: input.inputDigest, target: localTargetDigest })),
       } : {}),
-      inputDigest, basis, sourceDigest, targetDigest, seedSourceDigest: this.leanSourceDigest(worktree, assignment.seedCommit),
+      sourceDigest, targetDigest, seedSourceDigest: this.leanSourceDigest(worktree, assignment.seedCommit),
       seedTargetDigest: this.taskSourceDigest(task, worktree, assignment.seedCommit),
       canonicalSourceDigest: this.leanSourceDigest(this.lead.worktree, this.archive.canonicalCommit!),
       canonicalTargetDigest: this.taskSourceDigest(task, this.lead.worktree, this.archive.canonicalCommit!) };
@@ -271,30 +287,33 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     for (const node of this.archive.tasks) {
       if (advisory(node.task) || !['pending', 'blocked'].includes(node.status) ||
           [node.proof, node.integratedCheck].some(proof => proof?.passed && proof.taskDigest === digest(node.task))) continue;
-      const { basis, inputDigest } = this.failedTaskBasis(node.task);
+      const candidate = this.failedTaskBasis(node.task);
       const worker = this.input.workers.find(worker => worker.id === node.assignment?.workerId);
       const session = worker && this.input.state.workers?.find(record => record.id === worker.id);
       const active = worker && this.active.get(worker.id)?.action;
-      const ownsOutput = worker && node.assignment?.taskDigest === digest(node.task) &&
-        (!session || session.sessionTaskId === node.task.id && (!session.sessionTaskVersion || session.sessionTaskVersion === digest(node.task))) &&
+      const ownsOutput = worker && node.assignment?.taskDigest === candidate.taskDigest &&
+        (!session || session.sessionTaskId === node.task.id && (!session.sessionTaskVersion || session.sessionTaskVersion === candidate.taskDigest)) &&
         (!active || active.kind === 'task' && active.task.id === node.task.id && active.assignment === node.assignment) &&
+        ![...this.preparingTaskTypes].some(([other, prep]) => other !== node && prep.workerId === worker.id) &&
         !this.archive.tasks.some(other => other !== node && other.status === 'running' && other.assignment?.workerId === worker.id);
-      const sourceDigest = ownsOutput ? this.leanSourceDigest(worker.worktree, git(worker.worktree, ['rev-parse', 'HEAD'])) : canonicalSourceDigest;
-      const targetDigest = ownsOutput ? this.taskSourceDigest(node.task, worker.worktree, git(worker.worktree, ['rev-parse', 'HEAD'])) :
-        this.taskSourceDigest(node.task, this.lead.worktree, this.archive.canonicalCommit!);
-      const record = this.archive.failedTaskInputs.findLast(record => this.sameFailedTaskBasis(record, { basis, inputDigest, targetDigest }) &&
-        (record.sourceDigest === sourceDigest && record.targetDigest === targetDigest || !ownsOutput &&
+      const worktree = ownsOutput ? worker.worktree : this.lead.worktree;
+      const commit = ownsOutput ? git(worktree, ['rev-parse', 'HEAD']) : this.archive.canonicalCommit!;
+      const sourceDigest = this.leanSourceDigest(worktree, commit);
+      const targetDigest = this.taskSourceDigest(node.task, worktree, commit);
+      // A host reseed can replace the failed candidate with its unchanged canonical inputs before a new session starts.
+      const record = this.archive.failedTaskInputs.findLast(record => this.sameFailedTaskBasis(record, { ...candidate, targetDigest }) &&
+        (record.sourceDigest === sourceDigest && record.targetDigest === targetDigest || sourceDigest === canonicalSourceDigest &&
           (record.seedSourceDigest === sourceDigest && record.seedTargetDigest === targetDigest ||
             record.canonicalSourceDigest === sourceDigest && record.canonicalTargetDigest === targetDigest)));
       if (record && !this.pendingTaskRepair(node, record)) {
         const feedback = this.repeatedTaskFeedback(record);
         if (node.status === 'blocked' && node.feedback === feedback) continue;
         this.moveTask(node, 'blocked', 'input-blocked'); node.feedback = feedback; this.wakeLead('task-repeated-input-blocked'); changed = true;
-        this.input.emit('task_repeated_input_blocked', { taskId: node.task.id, taskDigest: digest(node.task),
-          failureId: record.id, inputDigest, sourceDigest });
+        this.input.emit('task_repeated_input_blocked', { taskId: node.task.id, taskDigest: candidate.taskDigest,
+          failureId: record.id, inputDigest: candidate.inputDigest, sourceDigest });
       } else if (!record && node.status === 'blocked' && node.feedback?.startsWith('math_task_repeated_failed_input\n')) {
         this.moveTask(node, 'pending', 'reopened'); node.feedback = undefined; changed = true;
-        this.input.emit('task_failed_input_reopened', { taskId: node.task.id, inputDigest, sourceDigest });
+        this.input.emit('task_failed_input_reopened', { taskId: node.task.id, inputDigest: candidate.inputDigest, sourceDigest });
       }
     }
     return changed;

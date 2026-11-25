@@ -6,7 +6,7 @@ import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 import { buildTheoremKnowledge, type KnowledgeCandidate, type KnowledgeRouteFindingCandidate } from '../src/solver/theoremKnowledge';
 import type { WebObservation, WebTaskSource } from '../apps/web/collaboration';
 import type { WebRun } from '../apps/web/shared';
-import { WebStorage } from '../apps/web/storage';
+import { readWebArchiveObservations, WebStorage, type StoredWebArchive } from '../apps/web/storage';
 import { WebKnowledgeService } from '../apps/web/knowledgeService';
 import { WebModuleRegistry, freezeModuleConfiguration } from '../apps/web/moduleRegistry';
 
@@ -97,7 +97,8 @@ describe('durable web evidence and registered research configuration without mod
       coverage: { events: 'complete', observations: 'complete', actions: 'complete', commands: 'recorded', sources: 'partial', checks: 'partial' } });
     expect(bundle.run.status).toBe('cancelled'); expect(bundle.run.result).toBeUndefined();
     expect(bundle.events).toHaveLength(205); expect(restarted.getEvents('alice', saved.id)).toHaveLength(205);
-    expect(bundle.observations).toHaveLength(2); expect(bundle.sources[0]?.source).toBe(sourceText);
+    expect(bundle.observations).toHaveLength(2);
+    expect(readWebArchiveObservations(bundle).observations[0].sources[0].source).toBe(sourceText);
     expect(bundle.checks[0]?.record).toMatchObject({ passed: true, conditional: true, conditions: ['unproved-precondition'] });
     expect(bundle.actions).toHaveLength(1); expect(bundle.actions?.[0]?.command).toBe('cat Submission.lean');
     expect(bundle.commands).toEqual([{ id: 'guidance-1', status: 'delivered' }]);
@@ -129,9 +130,54 @@ describe('durable web evidence and registered research configuration without mod
     store.saveRun('alice', saved);
     expect(store.loadRuns()).toEqual([{ owner: 'alice', run: saved }]);
     const archive = store.archiveRun('alice', saved);
-    expect(store.getArchive('alice', saved.id, archive.id)?.sources[0]?.source).toBe(sourceText);
+    expect(readWebArchiveObservations(store.getArchive('alice', saved.id, archive.id)!).observations[0].sources[0].source).toBe(sourceText);
     store.deleteRun('bob', saved.id); expect(store.getRun('alice', saved.id)).toBeDefined();
     store.deleteRun('alice', saved.id); expect(store.loadRuns()).toEqual([]);
+  });
+
+  it('keeps repeated task and dependency source text once across historical frames and saved archives', () => {
+    const store = new WebStorage(root), saved = run();
+    const largeSource = 'theorem fixture : True := by trivial\n/- ' + 'z'.repeat(850_000) + '-/\n';
+    const dependency = '-- frozen dependency\n';
+    const largeTask = { ...taskSource, sourceDigest: mathDigest(largeSource), source: largeSource,
+      dependencySources: [{ file: 'Dependency.lean', source: dependency }] };
+    const frames = Array.from({ length: 66 }, (_, index) => ({ ...observation(index + 1), sources: [largeTask] }));
+    const directory = ['owners', mathDigest('alice'), 'runs', saved.id];
+    // A run can retain both older inline frames and newer frames with source references.
+    store.saveRecord([...directory, 'observations', '1.json'], frames[0], true);
+    for (const frame of frames.slice(1)) store.saveObservation('alice', frame);
+    saved.observation = frames.at(-1);
+    store.saveRun('alice', saved);
+    store.saveCommand('alice', saved.id, 'capture', { id: 'capture', status: 'captured', observation: frames[0] });
+
+    const exported = store.exportRun('alice', saved);
+    expect(exported.summary).toMatchObject({ sources: 1, observations: 66, coverage: { observations: 'complete' } });
+    expect(exported.sourceBlobs).toEqual({ [mathDigest(largeSource)]: largeSource, [mathDigest(dependency)]: dependency });
+    expect(exported.sources[0]).toMatchObject({ taskId: largeTask.taskId, source: { sha256: mathDigest(largeSource) },
+      dependencySources: [{ file: 'Dependency.lean', source: { sha256: mathDigest(dependency) } }] });
+    expect(exported.commands).toEqual([{ id: 'capture', status: 'captured', observation: exported.observations[0] }]);
+    expect(Buffer.byteLength(JSON.stringify(exported))).toBeLessThan(1_000_000);
+    expect(readWebArchiveObservations(exported)).toEqual({ run: saved, observations: frames });
+
+    const summary = store.archiveRun('alice', saved), restarted = new WebStorage(root);
+    const savedArchive = restarted.getArchive('alice', saved.id, summary.id)!;
+    expect(savedArchive).toMatchObject({ schema: 'theorem-os.web-archive.v2', summary });
+    expect(readWebArchiveObservations(savedArchive)).toEqual({ run: saved, observations: frames });
+    expect(fs.statSync(path.join(root, ...directory, 'archives', `${summary.id}.json`)).size).toBeLessThan(1_000_000);
+  });
+
+  it('reads saved v1 archives with their original digest and inline evidence', () => {
+    const store = new WebStorage(root), saved = run(), frame = saved.observation!;
+    store.saveRun('alice', saved);
+    const { digest: _digest, ...identity } = store.exportRun('alice', saved).summary;
+    const payload = { schema: 'theorem-os.web-archive.v1' as const, run: saved, observations: [frame],
+      sources: frame.sources, checks: frame.checks, events: [], commands: [] };
+    const legacy: StoredWebArchive = { ...payload, summary: { ...identity, digest: mathDigest(canonicalMathJson({ ...payload, identity }) + '\n') } };
+    const record = ['owners', mathDigest('alice'), 'runs', saved.id, 'archives', `${identity.id}.json`];
+    store.saveRecord(record, legacy, true);
+    const loaded = new WebStorage(root).getArchive('alice', saved.id, identity.id)!;
+    expect(loaded).toEqual(legacy);
+    expect(readWebArchiveObservations(loaded)).toEqual({ run: saved, observations: [frame] });
   });
 
   it('merges checked declarations and advisory findings into immutable owner-bound catalogs with reproducible worker pins', () => {

@@ -140,7 +140,7 @@ async function assertNoResultArchive(h: Harness, run: WebRun, status: 'cancelled
     assert.equal(downloaded.suggestedFilename(), `theoremos-${run.id}.json`);
     const raw = await fs.readFile((await downloaded.path())!, 'utf8');
     const archive = JSON.parse(raw) as { schema: string; run: WebRun };
-    assert.equal(archive.schema, 'theorem-os.web-archive.v1');
+    assert.equal(archive.schema, 'theorem-os.web-archive.v2');
     assert.equal(archive.run.id, run.id);
     assert.equal(archive.run.status, status);
     assert.equal(archive.run.result, undefined);

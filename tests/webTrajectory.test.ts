@@ -105,11 +105,31 @@ describe('web trajectory steps', () => {
     expect(trajectoryTaskNames(mergeTrajectory(emptyTrajectory(), first()))).toEqual(new Map([['goal_1', 'add_zero'], ['goal_2', 'zero_add']]));
     // The host's fixed proof note repeats the Lean outcome, so no attempt quotes it.
     expect(of(list, 'attempt').map(step => step.note)).toEqual([undefined, undefined]);
-    // Without a plan the names come from each task's own single-theorem checks; the assembled two-theorem check names nothing.
+    // Without a plan, each task's own receipts still identify its theorem.
     const unplanned = structuredClone(sample);
     for (const observation of unplanned.observations) observation.plan = null;
     expect(trajectoryTaskNames(mergeTrajectory(emptyTrajectory(), first(recordedTrajectory(unplanned.events, unplanned.observations)))))
       .toEqual(new Map([['goal_1', 'add_zero'], ['goal_2', 'zero_add']]));
+  });
+
+  it('uses the failed target to explain a mixed original-problem check without adding task attempts', () => {
+    const file = structuredClone(sample);
+    for (const observation of file.observations) {
+      for (const { taskId, record } of observation.checks) if (record.originalProblemPassed !== undefined) {
+        record.originalProblemPassed = false;
+        if (taskId === 'goal_2') {
+          record.passed = false;
+          record.status = 'failed';
+          record.error = 'Failure in the second target';
+        }
+      }
+    }
+    for (const event of file.events) if (event.type === 'proof_checked') event.details = { ...event.details, passed: false };
+    const list = steps(file);
+    expect(of(list, 'attempt').map(step => step.taskId)).toEqual(['goal_1', 'goal_2']);
+    expect(of(list, 'proof')).toMatchObject([{ assembled: true, outcome: 'failed',
+      ref: { version: { taskId: 'goal_2' }, check: { passed: false, originalProblemPassed: false,
+        headline: 'Failure in the second target', theorems: ['Tutorial.zero_add'] } } }]);
   });
 
   it('shows a failed attempt with its Lean reason, and the next attempt compared with it', () => {

@@ -107,10 +107,12 @@ try {
 
     await page.goto(`${origin}/?run=${run.id}`); await ready(page);
     await page.locator('[data-chat-recovery="continue-checked"]').waitFor();
-    const downloaded = await download(page, `.chat-task-actions a[href="/api/runs/${run.id}/download"]`);
+    const chatDetails = page.locator('[data-chat-result-more]');
+    if (await chatDetails.getAttribute('open') === null) await chatDetails.locator('summary').click();
+    const downloaded = await download(page, `.chat-result-more-actions a[href="/api/runs/${run.id}/download"]`);
     const archive = downloaded.body as StoredWebArchive;
     assert.equal(downloaded.filename, `theoremos-${run.id}.json`);
-    assert.equal(archive.schema, 'theorem-os.web-archive.v1');
+    assert.equal(archive.schema, 'theorem-os.web-archive.v2');
     assert.ok(archive.events.length > 200); assert.equal(archive.events[0]!.sequence, 1);
     assert.equal(archive.observations.length, 4); assert.equal(archive.actions!.length, 1);
     assert.ok(archive.sources.length > 0); assert.ok(archive.checks.length > 0);

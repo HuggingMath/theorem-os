@@ -15,6 +15,7 @@ import { WebKnowledgeService } from './knowledgeService';
 import { freezeModuleConfiguration } from './moduleRegistry';
 import { WebStorageError } from './storage';
 import { isAcceptedRun, isStatementReviewed } from './presentation';
+import { projectStoredObservationChecks } from './observationChecks';
 
 type Job = { owner: string; run: WebRun; input: WebRunInput; provider: WebWorkerProvider; controller: AbortController;
   formalization?: WorkerInput['formalization'];
@@ -327,7 +328,7 @@ export class WebJobs {
     }
     if (actualHarness) job.run.agentHarness = { ...actualHarness };
     job.run.solverAttempt = { solverRunId: observation.solverRunId, round: current?.round ?? 0, sequence: observation.sequence };
-    job.run.observation = observation;
+    job.run.observation = projectStoredObservationChecks(observation);
     job.run.updatedAt = observation.observedAt;
     this.persist(job.run);
   }

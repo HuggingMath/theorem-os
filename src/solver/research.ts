@@ -30,7 +30,7 @@ import { aggregateUsage, buildTokenBudget, initializeUsageAccounting, modelDispa
 import { ResearchUsage } from './researchUsage';
 import { inspectKnowledgeUses } from './knowledgeUsage';
 import { checkKnowledgeApplications } from './knowledgeApplications';
-import { parseMathResponse } from './deliveries';
+import { parseMathResponse, readMathResponse } from './deliveries';
 import { readCheckpointNotesDigest, savedContextCheckpoint } from './contextCheckpoint';
 import { committedSource } from './problem';
 import type { ContinuationSnapshot } from './continuationInput';
@@ -982,9 +982,9 @@ export async function runResearchWorkers(input: {
               // would cancel the response on direct-provider sessions with no host request relay.
               void activeSession.notify!(
                 'A typed proof task is now ready. Finish the current model response and tool work, then save ' +
-                'this investigation in worktree-root RESEARCH.md. Keep the exact inputs, current argument, ' +
-                'reproduction commands, results and next unresolved step. After saving, return so the host can ' +
-                'recheck the proposed switch. Leave an unfinished investigation as a draft.',
+                'worktree-root RESEARCH.md. If the investigation is complete, write the normal JSON math-result. ' +
+                'If unfinished, save a Markdown draft with the exact inputs, current argument, reproduction commands, ' +
+                'results and next unresolved step. After saving, return so the host can recheck the proposed switch.',
                 { mode: 'advisory' }).then(() => {
                 if (current()) {
                   proofNoticeDelivered = true;
@@ -1009,9 +1009,17 @@ export async function runResearchWorkers(input: {
           planningCheckpoint = usage.stopReason === 'math_initial_planning_limit';
           const resultStatus = typeof result === 'string' ? result : result && typeof result === 'object' && 'status' in result ? result.status : undefined;
           if (milestone?.requested && resultStatus === 'completed') softSliceCheckpoint = true;
-          // A natural return after the save request preserves an unfinished draft. A relay
-          // checkpoint confirms the same successor and a current draft at the unpaid boundary.
-          proofHandoffCheckpoint = handoffAtBoundary || Boolean(proofNoticeDelivered && resultStatus === 'completed');
+          const completedAfterNotice = proofNoticeDelivered && resultStatus === 'completed';
+          let submittedResult = false;
+          if (completedAfterNotice && !handoffAtBoundary && researchHandoffNotes()) {
+            // Only an explicit result distinguishes a normal return from saving prose for the handoff.
+            // The regular delivery path still validates the result and its frozen assignment.
+            try {
+              const finding = readMathResponse(worker.worktree, 'math-result');
+              submittedResult = typeof finding.summary === 'string' && Boolean(finding.summary.trim());
+            } catch { /* Missing or unfinished control responses remain handoff drafts. */ }
+          }
+          proofHandoffCheckpoint = handoffAtBoundary || (completedAfterNotice && !submittedResult);
           cooperativeCheckpoint = proofHandoffCheckpoint || checkpointRequested && (resultStatus === 'interrupted' || resultStatus === 'checkpoint' ||
             checkpointClosing && resultStatus === 'failed' && researchFailureReason(detail) === 'math_codex_transport_closed');
           completed = resultStatus === 'completed';

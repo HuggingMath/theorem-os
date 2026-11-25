@@ -441,6 +441,9 @@ try {
   await showArtifacts(page);
   const note = page.locator('[data-run-continuation]');
   await note.waitFor();
+  const continuedId = (await page.locator('.detail-heading').getAttribute('data-run'))!;
+  await waitForRun({ page }, continuedId, run => run.status === 'completed');
+  await page.locator(`.detail-heading[data-run="${continuedId}"]`).getByText('运行结束', { exact: true }).waitFor();
   assert.match(await note.innerText(), /从「zero_add · 第 2 次」继续/u);
   assert.equal(continued.length, 1);
   assert.equal(continued[0]!.continuation?.runId, run.id);
@@ -448,7 +451,6 @@ try {
   assert.equal(await page.locator('#draft-continuation').isHidden(), true, 'one submission uses the continuation');
   assert.deepEqual(await audit(page, { scope: '#run-detail' }), [], 'Continued run accessibility');
   await shot(page, 'trajectory-continued-1440.png');
-  const continuedId = (await page.locator('.detail-heading').getAttribute('data-run'))!;
   await note.getByRole('button', { name: '看原运行' }).click();
   await page.locator(`.detail-heading[data-run="${run.id}"]`).waitFor({ state: 'attached' }); await showArtifacts(page);
   // The original lists what came of it: the later run, the version it started from, and its own status.
