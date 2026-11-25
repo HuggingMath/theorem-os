@@ -121,7 +121,7 @@ export function ResearchApp() {
     };
     window.addEventListener('focus', resume); document.addEventListener('visibilitychange', resume);
     window.addEventListener('pageshow', restore); window.addEventListener('storage', accountLeft);
-    const timer = setInterval(resume, 15000);
+    const timer = setInterval(resume, 60_000);
     void read();
     return () => {
       live = false; controller.abort(); clearInterval(timer);

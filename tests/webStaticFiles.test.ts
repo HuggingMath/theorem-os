@@ -86,4 +86,31 @@ describe('static workbench files', () => {
     expect(after.status).toBe(200); expect(after.body.toString()).toBe('console.log("rebuilt");');
     fs.writeFileSync(path.join(directory, 'app.js'), script);
   });
+
+  it('caches static assets at edges while keeping HTML uncached', async () => {
+    const katex = path.join(directory, 'assets/katex/katex.min.css');
+    const font = path.join(directory, 'assets/fonts/NotoSansSC-ui.woff2');
+    const html = path.join(directory, 'index.html');
+    fs.mkdirSync(path.dirname(katex), { recursive: true });
+    fs.mkdirSync(path.dirname(font), { recursive: true });
+    fs.writeFileSync(katex, 'body{}');
+    fs.writeFileSync(font, Buffer.alloc(64, 1));
+    fs.writeFileSync(html, '<!doctype html>');
+    const assetServer = http.createServer((request, response) => {
+      const relative = new URL(request.url!, 'http://x').pathname.slice(1);
+      sendStatic(request, response, path.join(directory, relative), path.extname(relative), 'application/octet-stream', relative);
+    });
+    await new Promise<void>(resolve => assetServer.listen(0, '127.0.0.1', resolve));
+    const assetOrigin = `http://127.0.0.1:${(assetServer.address() as { port: number }).port}`;
+    try {
+      const katexRes = await fetch(`${assetOrigin}/assets/katex/katex.min.css`);
+      const fontRes = await fetch(`${assetOrigin}/assets/fonts/NotoSansSC-ui.woff2`);
+      const htmlRes = await fetch(`${assetOrigin}/index.html`);
+      expect(katexRes.headers.get('cache-control')).toBe('public, max-age=31536000, immutable, no-transform');
+      expect(fontRes.headers.get('cache-control')).toBe('public, max-age=86400, stale-while-revalidate=604800, no-transform');
+      expect(htmlRes.headers.get('cache-control')).toBe('no-cache, no-transform');
+    } finally {
+      await new Promise(resolve => assetServer.close(resolve));
+    }
+  });
 });

@@ -927,6 +927,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         if (url.pathname === '/api/runs/stream' && request.method === 'GET') {
           response.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8',
             'Cache-Control': 'no-store, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+          response.write('retry: 5000\n\n');
           let lastVersion = '';
           const notify = (version: string) => {
             if (version === lastVersion || response.destroyed || response.writableEnded) return;

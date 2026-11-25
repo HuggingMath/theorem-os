@@ -54,12 +54,15 @@ export function ResearchOverview(props: ResearchOverviewProps) {
       .catch(cause => { if (live && !controller.signal.aborted) setPersonalError(cause instanceof Error ? cause.message : tx('个人题目整理暂时无法读取。', 'Your problem organization could not be loaded.')); });
     return () => { live = false; controller.abort(); };
   }, [props.owner, props.request, revision]);
+  const hasActive = props.runs.some(run => run.status === 'queued' || run.status === 'running')
+    || props.formalizations.some(record => record.status === 'queued' || record.status === 'running');
   useEffect(() => {
     const refresh = () => { if (document.visibilityState !== 'hidden') setRevision(value => value + 1); };
-    const timer = window.setInterval(refresh, 15_000);
+    const timer = window.setInterval(refresh, hasActive ? 15_000 : 45_000);
     window.addEventListener('focus', refresh);
-    return () => { window.clearInterval(timer); window.removeEventListener('focus', refresh); };
-  }, [props.owner]);
+    document.addEventListener('visibilitychange', refresh);
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
+  }, [props.owner, hasActive]);
   const model = buildResearchOverview({ ...props, research });
   const open = (event: MouseEvent, target: { runId?: string; conversationId?: string }) => {
     if (!primary(event)) return;

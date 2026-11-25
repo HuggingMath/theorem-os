@@ -3000,7 +3000,7 @@ function schedulePoll() {
   const sessionRetryAt = cooldownFor('GET /api/session')?.retryAt ?? 0;
   const retryAt = state.connected ? runsRetryAt : Math.max(sessionRetryAt, state.session ? runsRetryAt : 0);
   const live = !hidden && state.connected && liveRefreshPending;
-  const interval = hidden ? 15_000 : runUpdates.connected ? 30_000 : active ? 1800 : 5000;
+  const interval = hidden ? 30_000 : runUpdates.connected ? 30_000 : active ? 3_000 : 12_000;
   // Give live updates a trailing refresh at a fixed interval. New events keep that deadline.
   const next = live ? lastRunsReadAt + liveRefreshIntervalMs : retryAt > now ? retryAt : now + interval;
   const delay = Math.max(next, retryAt) - now;
