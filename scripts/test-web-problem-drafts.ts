@@ -210,6 +210,7 @@ try {
   checks.push('A late restore response cannot overwrite edits made while loading.');
 
   phase = 'lean-account-save';
+  await page.goto(origin); await page.locator('#formalize-original').waitFor();
   await enterLean(page);
   assert.equal(await panel(page).count(), 0, 'Authenticated Lean editor hides idle cloud-draft panel');
   const leanSource = 'import Mathlib\n\ntheorem across_devices (n : ℕ) : n + 0 = n := by\n  sorry\n';
@@ -224,7 +225,7 @@ try {
   assert.equal(await other.locator('#max-seconds').inputValue(), '600'); assert.equal(await other.locator('#workers').inputValue(), '3');
   assert.equal(await other.locator('#api-key').inputValue(), '');
   await other.goto(`${origin}/?accountDraft=${lean.draft.id}&draftVersion=${lean.version.id}`);
-  await enterLean(other);
+  await openChatModelSettings(other); await enterLean(other);
   await openPanel(other); assert.equal(await panel(other).locator('[data-problem-draft-title]').inputValue(), 'Lean 待完成版本');
   const leanAgain = await save(other, 'Lean 待完成版本'); assert.equal(leanAgain.draft.id, lean.draft.id); assert.equal(leanAgain.conflict, false);
   await chooseVersion(other, natural); await waitOriginal(other, original);
@@ -234,7 +235,7 @@ try {
   const naturalAgain = await save(other, '待完成的归纳证明'); assert.equal(naturalAgain.draft.id, natural.draft.id);
   checks.push('Natural and Lean drafts restore across modes with correct title, independent save identity and Lean budgets.');
   await page.goto(`${origin}/?accountDraft=${lean.draft.id}&draftVersion=${lean.version.id}`);
-  await enterLean(page);
+  await openChatModelSettings(page); await enterLean(page);
   await openPanel(page);
   await page.locator('#source').fill('theorem recover_this_original : True := by\n  sorry\n');
   await chooseVersion(page, lean); await page.locator('#restore-draft').click();
