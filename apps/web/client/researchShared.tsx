@@ -13,10 +13,25 @@ export type ResearchContext = { session: ResearchSession; web: WebSession };
 export type Item<T> = { item: T };
 export type Items<T> = { items: T[]; total?: number; nextOffset?: number };
 export class ResearchHttpError extends Error {
-  constructor(message: string, readonly status: number) { super(message); }
+  constructor(message: string, readonly status: number, readonly retryAt = 0) { super(message); }
 }
 export class ResearchSessionChangedError extends ResearchHttpError {
   constructor() { super(tx('会话已更新，正在重新读取研究空间。', 'Your session changed. Reloading the research space.'), 401); }
+}
+const routeCooldowns = new Map<string, ResearchHttpError>();
+let addressCooldown: ResearchHttpError | undefined;
+export function resetResearchCooldowns() { routeCooldowns.clear(); addressCooldown = undefined; }
+function cooldownFor(route: string): ResearchHttpError | undefined {
+  const now = Date.now(), local = routeCooldowns.get(route);
+  if (local && local.retryAt <= now) routeCooldowns.delete(route);
+  if (addressCooldown && addressCooldown.retryAt <= now) addressCooldown = undefined;
+  const activeLocal = routeCooldowns.get(route);
+  return activeLocal && activeLocal.retryAt > (addressCooldown?.retryAt ?? 0) ? activeLocal : addressCooldown;
+}
+function retryAfterMs(header: string | null, now: number) {
+  if (!header) return;
+  const delay = /^\d+$/u.test(header) ? Number(header) * 1_000 : Date.parse(header) - now;
+  if (Number.isFinite(delay)) return Math.max(0, delay);
 }
 type SessionBinding = { owner: string; csrfToken: string; changed: () => void; controller: AbortController };
 let sessionBinding: SessionBinding | undefined;
@@ -39,30 +54,62 @@ function sessionChanged(binding: SessionBinding): never {
   if (sessionBinding === binding) { clearResearchSession(); binding.changed(); }
   throw new ResearchSessionChangedError();
 }
-async function responseBody<T>(response: Response): Promise<T> {
+async function responseBody<T>(response: Response, route?: string): Promise<T> {
+  const challenged = response.headers.get('cf-mitigated') === 'challenge';
   let payload: unknown;
-  try { payload = response.status === 204 ? undefined : await response.json(); }
+  try { payload = challenged || response.status === 204 ? undefined : await response.json(); }
   catch (cause) {
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause;
     if (response.ok) throw new Error(tx('服务器响应未能完整读取，请重试。当前输入已保留。',
       'The server response could not be read completely. Please retry. Your input is preserved.'));
   }
-  if (!response.ok) {
-    const error = payload && typeof payload === 'object' && 'error' in payload ? String(payload.error) : tx('请求失败', 'Request failed');
-    throw new ResearchHttpError(localizeMessage(error), response.status);
+  if (!response.ok || challenged) {
+    const body = payload && typeof payload === 'object'
+      ? payload as { error?: unknown; cloudflare_error?: unknown; error_code?: unknown; retryable?: unknown; retry_after?: unknown }
+      : undefined;
+    const cloudflare = body?.cloudflare_error === true ? body : undefined;
+    const limited = response.status === 429 || cloudflare?.error_code === 1015;
+    const now = Date.now();
+    let delay = retryAfterMs(response.headers.get('Retry-After'), now);
+    if (delay === undefined && cloudflare?.retryable === true && typeof cloudflare.retry_after === 'number'
+      && Number.isSafeInteger(cloudflare.retry_after) && cloudflare.retry_after >= 0) delay = cloudflare.retry_after * 1_000;
+    if (delay === undefined && (challenged || limited)) delay = 30_000;
+    const retryAt = delay !== undefined && (challenged || limited) ? now + delay : 0;
+    const limitMessage = tx('请求太频繁，请稍后再试。', 'Too many requests; please try again shortly.');
+    const error = challenged ? tx('Cloudflare 安全验证阻止了请求，请稍后重试', 'Cloudflare security challenge blocked the request; please try again shortly.')
+      : !cloudflare && typeof body?.error === 'string' ? body.error
+      : limited ? limitMessage
+      : tx('请求失败', 'Request failed');
+    const failure = new ResearchHttpError(localizeMessage(error), limited && !challenged ? 429 : response.status, retryAt);
+    if (retryAt > now) {
+      if (!challenged && !cloudflare && limited && response.headers.get('X-Theoremos-Rate-Limit-Scope') === 'api') {
+        if (retryAt > (addressCooldown?.retryAt ?? 0)) addressCooldown = new ResearchHttpError(limitMessage, 429, retryAt);
+      } else if (route && retryAt > (routeCooldowns.get(route)?.retryAt ?? 0)) {
+        routeCooldowns.set(route, failure);
+      }
+    }
+    throw failure;
   }
   return payload as T;
 }
 /** Bootstrap reads do not borrow the previous page's owner or CSRF token. */
 export async function readResearchWebSession(signal?: AbortSignal): Promise<WebSession> {
+  const cooldown = cooldownFor('GET /api/session');
+  if (cooldown && cooldown.retryAt > Date.now()) throw cooldown;
   const bound = sessionBinding?.controller.signal;
   const readSignal = bound ? signal ? AbortSignal.any([bound, signal]) : bound : signal;
-  return responseBody(await fetch('/api/session', { headers: { Accept: 'application/json' }, signal: readSignal, credentials: 'same-origin', cache: 'no-store' }));
+  return responseBody(await fetch('/api/session', { headers: { Accept: 'application/json' }, signal: readSignal, credentials: 'same-origin', cache: 'no-store' }), 'GET /api/session');
 }
 export async function readResearchSession(web: WebSession, signal?: AbortSignal): Promise<ResearchSession> {
+  const route = `GET ${base}/session`;
+  const cooldown = cooldownFor(route);
+  if (cooldown && cooldown.retryAt > Date.now()) throw cooldown;
   const response = await fetch(`${base}/session`, { headers: { Accept: 'application/json' }, signal, credentials: 'same-origin', cache: 'no-store' });
-  if (response.headers.get('X-Theoremos-Owner') !== webDraftOwner(web)) throw new ResearchSessionChangedError();
-  return responseBody(response);
+  if (response.headers.get('X-Theoremos-Owner') !== webDraftOwner(web)) {
+    if (response.status === 429 || response.headers.get('cf-mitigated') === 'challenge') return responseBody(response, route);
+    throw new ResearchSessionChangedError();
+  }
+  return responseBody(response, route);
 }
 async function confirmSession(binding: SessionBinding, signal?: AbortSignal) {
   const web = await readResearchWebSession(signal);
@@ -78,7 +125,10 @@ export async function api<T>(url: string, init: RequestInit = {}): Promise<T> {
   const binding = sessionBinding;
   if (!binding) throw new ResearchSessionChangedError();
   const signal = init.signal ? AbortSignal.any([binding.controller.signal, init.signal]) : binding.controller.signal;
-  const method = init.method ?? 'GET';
+  const method = (init.method ?? 'GET').toUpperCase();
+  const route = `${method} ${url.split('?', 1)[0]}`;
+  const cooldown = cooldownFor(route);
+  if (cooldown && cooldown.retryAt > Date.now()) throw cooldown;
   const headers = new Headers(init.headers);
   headers.set('Accept', 'application/json');
   if (method !== 'GET' && method !== 'HEAD') {
@@ -92,9 +142,10 @@ export async function api<T>(url: string, init: RequestInit = {}): Promise<T> {
   currentSession(binding);
   const owner = response.headers.get('X-Theoremos-Owner');
   if (owner && owner !== binding.owner) sessionChanged(binding);
+  const challenged = response.headers.get('cf-mitigated') === 'challenge';
   // A signed-out public read has no owner header. Confirm it before displaying its data in a private page.
-  if (!owner && (response.ok || response.status === 401 || response.status === 403)) await confirmSession(binding, signal);
-  const result = await responseBody<T>(response);
+  if (!owner && !challenged && (response.ok || response.status === 401 || response.status === 403)) await confirmSession(binding, signal);
+  const result = await responseBody<T>(response, route);
   currentSession(binding);
   return result;
 }
@@ -109,27 +160,44 @@ export function useResource<T>(url: string | undefined, interval = 0) {
   const refresh = useCallback(() => setRevision(value => value + 1), []);
   useEffect(() => {
     if (!url) { setValue({ loading: false }); return; }
-    let live = true, timer: ReturnType<typeof setTimeout> | undefined;
+    let live = true, timer: ReturnType<typeof setTimeout> | undefined, skipped = false, retryAt = 0;
     const controller = new AbortController();
     const read = async () => {
+      skipped = false;
+      retryAt = 0;
       setValue(previous => ({ ...previous, loading: previous.url !== url || !previous.data }));
       try {
         const data = await api<T>(url, { signal: controller.signal });
         if (live) setValue({ url, data, loading: false });
       } catch (error) {
-        if (live && !controller.signal.aborted && sessionBinding && (error instanceof ResearchSessionChangedError ||
-          error instanceof DOMException && error.name === 'AbortError')) {
+        if (live && !controller.signal.aborted && sessionBinding && !(error instanceof ResearchHttpError && error.retryAt > Date.now())
+          && (error instanceof ResearchSessionChangedError || error instanceof DOMException && error.name === 'AbortError')) {
           // Same-owner reauthentication keeps this component; restore reads cancelled with its old session.
           void read(); return;
         }
+        if (error instanceof ResearchHttpError && error.retryAt > Date.now()) retryAt = error.retryAt;
         const unavailable = error instanceof ResearchHttpError && [401, 403, 404].includes(error.status);
         if (live) setValue(previous => ({ url, data: previous.url === url && !unavailable ? previous.data : undefined,
           error: errorText(error), errorStatus: error instanceof ResearchHttpError ? error.status : undefined, loading: false }));
       }
-      if (live && interval) timer = setTimeout(() => void read(), interval);
+      if (live && interval) {
+        const delay = Math.max(interval, retryAt > Date.now() ? retryAt - Date.now() : 0);
+        clearTimeout(timer);
+        if (!document.hidden) timer = setTimeout(() => void read(), delay);
+        else skipped = true;
+      }
     };
+    const visible = () => {
+      if (!live || document.hidden || !interval || !skipped) return;
+      skipped = false;
+      const wait = retryAt > Date.now() ? retryAt - Date.now() : 0;
+      clearTimeout(timer);
+      if (wait > 0) timer = setTimeout(() => void read(), wait);
+      else void read();
+    };
+    document.addEventListener('visibilitychange', visible);
     void read();
-    return () => { live = false; controller.abort(); clearTimeout(timer); };
+    return () => { live = false; controller.abort(); clearTimeout(timer); document.removeEventListener('visibilitychange', visible); };
   }, [url, revision, interval]);
   return { data: value.url === url ? value.data : undefined, error: value.url === url ? value.error : undefined, errorStatus: value.url === url ? value.errorStatus : undefined,
     loading: value.url !== url ? Boolean(url) : value.loading, refresh };

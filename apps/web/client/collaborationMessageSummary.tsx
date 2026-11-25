@@ -6,14 +6,23 @@ import { base, ErrorBox, errorText, tx } from './researchShared';
 export function CollaborationMessageSummary({ request }: { request: WebApi }) {
   const [data, setData] = useState<ResearchCollaborationInbox>(), [error, setError] = useState(''), [revision, setRevision] = useState(0);
   useEffect(() => {
-    let live = true, timer: ReturnType<typeof setTimeout>;
+    let live = true, timer: ReturnType<typeof setTimeout> | undefined, skipped = false;
     const controller = new AbortController(); setData(undefined);
+    const schedule = (delay = 30_000) => {
+      clearTimeout(timer);
+      if (live && !document.hidden) timer = setTimeout(() => void read(), delay);
+      else if (live) skipped = true;
+    };
     const read = async () => {
+      skipped = false;
       try { const result = await request<ResearchCollaborationInbox>(`${base}/collaboration/inbox`, { signal: controller.signal }); if (live) { setData(result); setError(''); } }
       catch (cause) { if (live && !controller.signal.aborted) setError(errorText(cause)); }
-      if (live) timer = setTimeout(() => void read(), 15000);
+      schedule();
     };
-    void read(); return () => { live = false; controller.abort(); clearTimeout(timer); };
+    const visible = () => { if (live && !document.hidden && skipped) void read(); };
+    document.addEventListener('visibilitychange', visible);
+    void read();
+    return () => { live = false; controller.abort(); clearTimeout(timer); document.removeEventListener('visibilitychange', visible); };
   }, [request, revision]);
   return <div class="collaboration-message-summary" data-inbox-summary>
     <ErrorBox message={error} />{error && <button class="text-button" type="button" onClick={() => setRevision(value => value + 1)}>{tx('重新读取消息', 'Reload messages')}</button>}

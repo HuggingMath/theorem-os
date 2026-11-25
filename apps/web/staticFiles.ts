@@ -58,9 +58,12 @@ export function sendStatic(request: http.IncomingMessage, response: http.ServerR
   // Each encoding is its own representation, so it gets its own validator.
   const etag = encoding ? `${item.etag.slice(0, -1)}-${encoding}"` : item.etag;
   // no-transform keeps proxies from rewriting pages; Cloudflare would otherwise inject an analytics script the CSP blocks.
-  const immutable = relative && (versionedEntryFile.test(relative) || bundledChunk.test(relative));
+  const immutable = relative && (versionedEntryFile.test(relative) || bundledChunk.test(relative) || relative.startsWith('assets/katex/'));
+  const cacheableAsset = relative?.startsWith('assets/');
   const headers: http.OutgoingHttpHeaders = { 'Content-Type': contentType, ETag: etag,
-    'Cache-Control': immutable ? 'public, max-age=31536000, immutable, no-transform' : 'no-cache, no-transform' };
+    'Cache-Control': immutable ? 'public, max-age=31536000, immutable, no-transform'
+      : cacheableAsset ? 'public, max-age=86400, stale-while-revalidate=604800, no-transform'
+        : 'no-cache, no-transform' };
   if (item.br) headers.Vary = 'Accept-Encoding';
   // Proxies that re-encode weaken the tag; the bytes it names are still the same file.
   const matches = String(request.headers['if-none-match'] ?? '').split(',').some(tag => tag.trim().replace(/^W\//u, '') === etag);

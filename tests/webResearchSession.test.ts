@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, bindResearchSession, clearResearchSession, errorText, readResearchWebSession, ResearchHttpError } from '../apps/web/client/researchShared';
+import { api, bindResearchSession, clearResearchSession, errorText, readResearchWebSession, ResearchHttpError, resetResearchCooldowns } from '../apps/web/client/researchShared';
 import type { WebSession } from '../apps/web/shared';
 
 const web = (csrfToken = 'first-session', draftOwner = 'same-person') => ({ csrfToken, draftOwner } as WebSession);
@@ -10,7 +10,7 @@ function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done; });
   return { promise, resolve };
 }
-afterEach(() => { clearResearchSession(); vi.unstubAllGlobals(); });
+afterEach(() => { clearResearchSession(); resetResearchCooldowns(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe('research session generations and readable receipts', () => {
   it('keeps same-session work but cancels old requests when the same person signs in again', async () => {
@@ -84,5 +84,34 @@ describe('research session generations and readable receipts', () => {
     await expect(api('/api/research/library')).rejects.toMatchObject({ status: 409 });
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204, headers: { 'X-Theoremos-Owner': 'same-person' } })));
     await expect(api('/api/research/library')).resolves.toBeUndefined();
+  });
+
+  it('honors Retry-After address limits and Cloudflare 1015/challenge cooldowns without repeating requests', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-25T05:00:00Z'));
+    const fetcher = vi.fn(async (url: string) => url === '/api/research/overview'
+      ? new Response(JSON.stringify({ error: '请求过于频繁，请稍后重试。' }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '15', 'X-Theoremos-Owner': 'same-person', 'X-Theoremos-Rate-Limit-Scope': 'api' },
+      })
+      : json({ items: [] }));
+    vi.stubGlobal('fetch', fetcher);
+    bindResearchSession(web(), vi.fn());
+
+    await expect(api('/api/research/overview')).rejects.toMatchObject({ status: 429 });
+    await expect(api('/api/research/people')).rejects.toMatchObject({ status: 429 });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(15_001);
+    await expect(api('/api/research/people')).resolves.toEqual({ items: [] });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+
+    const challengeFetcher = vi.fn(async () => new Response('<html>Challenge</html>', {
+      status: 403, headers: { 'cf-mitigated': 'challenge' },
+    }));
+    vi.stubGlobal('fetch', challengeFetcher);
+    await expect(api('/api/research/theorems')).rejects.toMatchObject({ status: 403 });
+    await expect(api('/api/research/theorems')).rejects.toMatchObject({ status: 403 });
+    expect(challengeFetcher).toHaveBeenCalledTimes(1);
   });
 });

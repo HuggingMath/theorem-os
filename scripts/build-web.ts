@@ -37,8 +37,8 @@ const bundle = (entries: string[], directory: string, englishOnDemand = false) =
           export const en = locale === 'en' ? (await import(${JSON.stringify(path.join(root, 'apps/web/i18n/en.ts'))})).en : ${JSON.stringify(contentEnglish)};` }));
     } }] : [],
     jsx: 'automatic', jsxImportSource: 'preact' });
-// Build online entries together so they share one English chunk.
-await bundle(['app', 'login', 'share', 'guide', 'legal', 'formalize', 'research', 'practice'], output, true);
+// Bundle each online entry individually so dynamic imports stay lazy without creating dozens of shared chunk requests.
+for (const entry of ['app', 'login', 'share', 'guide', 'legal', 'formalize', 'research', 'practice']) await bundle([entry], output, true);
 // Theme runs before CSS. Theme, explain and math are also inlined in standalone reports.
 await bundle(['theme', 'explain', 'math'], output);
 await bundle(['formalization'], reports);
