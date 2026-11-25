@@ -10,7 +10,7 @@
 
 `Verify TheoremOS` 在面向 `main` 的 pull request 和 `main` 推送上运行，也可手动运行。它以只读仓库权限执行 TypeScript 检查、运行时与网页构建、离线浏览器回归，以及 Lean 4.33.0 和 4.34.1 上的求解器回归。验证和镜像发布均使用 Ubuntu 24.04。
 
-推送 `v*` 标签或运行 `gh workflow run images.yml --ref main` 会触发 `Publish workbench images`。发布流程在同一提交上调用上述验证，通过后分别构建和推送 web、worker。两个镜像都使用完整源码 SHA 作为 GHCR 标签，并写入 OCI revision 和 `THEOREMOS_SOURCE_COMMIT`。Web 前端的 `build-info.json` 也记录这个 SHA。两张镜像均推送成功后，流程才上传 `image-release-<SHA>`，其中 `image-release.json` 记录提交及两个 registry digest。
+推送 `v*` 标签或运行 `gh workflow run images.yml --ref main` 会触发 `Publish workbench images`。发布流程在同一提交上调用上述验证，通过后分别构建和推送 web、worker、tex。三个镜像都使用完整源码 SHA 作为 GHCR 标签，并写入 OCI revision 和 `THEOREMOS_SOURCE_COMMIT`。Web 前端的 `build-info.json` 也记录这个 SHA。三张镜像均推送成功后，流程才上传 `image-release-<SHA>`，其中 `image-release.json` 记录提交及三个 registry digest。
 
 本地可执行同一组无模型求解器回归，包含协作回放脚本的研究决策协议检查。Linux CI 与 Worker 构建使用 `scripts/install-elan.sh` 安装固定的 elan 4.2.4，校验官方发布包 SHA-256，并通过 Lean 的发布 JSON 获取工具链，避免旧版 elan 抓取 GitHub 发布页面失败。先安装相应 elan 工具链，再显式选择版本，避免机器上较新的 Lean 候选版替代实际支持的版本：
 
@@ -226,6 +226,6 @@ curl --fail --silent https://workbench.example.org/readyz
 scripts/web-deploy-record.sh https://workbench.example.org >> /private/theoremos-deploys.jsonl
 ```
 
-原有 `web-deploy-record.sh` 默认检查本地镜像名；使用 GHCR 时同时设置 `THEOREMOS_WEB_IMAGE` 与 `THEOREMOS_WEB_WORKER_IMAGE` 为本次完整 SHA 镜像名。记录应包含干净源码版本、两镜像 ID、运行容器 ID、健康结果和实际前端摘要。
+原有 `web-deploy-record.sh` 默认检查本地镜像名；使用 GHCR 时同时设置 `THEOREMOS_WEB_IMAGE`、`THEOREMOS_WEB_WORKER_IMAGE` 与 `THEOREMOS_WEB_TEX_IMAGE` 为本次完整 SHA 镜像名。记录应包含干净源码版本、三镜像 ID、运行容器 ID、健康结果和实际前端摘要。
 
 上线检查失败时重新开启维护，等待新任务结束，使用上一次记录中的完整 SHA 重建 web。只切回镜像不回滚用户数据；需要恢复旧数据时必须单独验证兼容性并重新处理删除请求。以上脚本不会自动执行数据覆盖或回滚。

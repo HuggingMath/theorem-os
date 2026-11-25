@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 import { z } from 'zod';
 import type { WebConfig } from './config';
 import type { WorkerExplanationInput, WorkerExplanationMessage, WorkerInput, WorkerMessage } from './shared';
-import { webArtifactMaxBytes, webExplanationPhases, webExplanationReason, webFailureKinds, webFailureReason } from './shared';
+import { webArtifactMaxBytes, webExplanationPhases, webExplanationReason, webFailureKinds, webFailureReason, webPaperLimits } from './shared';
 import { isWebEventDetails } from './moduleTelemetry';
 import { explanationCheckpointSchema, maxExplanationMessageBytes } from './explanationCheckpoint';
 import { isWebAgentActionBody } from './agentActions';
@@ -43,7 +43,16 @@ export type WebRunner = {
   formalize?(input: WorkerFormalizationInput, onMessage: (message: WorkerFormalizationMessage) => void, signal: AbortSignal): Promise<void>;
   /** Reviews an already available statement in a separate background container. */
   auditFormalization?(input: WorkerFormalizationAuditInput, onMessage: (message: WorkerFormalizationAuditMessage) => void, signal: AbortSignal): Promise<void>;
+  /** Compiles the two files of a saved paper draft in a disposable TeX container. */
+  compilePaper?(input: WebPaperCompileInput, signal: AbortSignal): Promise<WebPaperCompileOutput>;
 };
+export type WebPaperCompileInput = { template: string; main: string };
+export type WebPaperCompileOutput = { pdf: Buffer };
+export class WebPaperCompileError extends Error {
+  constructor(readonly code: string, readonly detail?: string, readonly file?: string, readonly line?: number) {
+    super(code);
+  }
+}
 const execute = promisify(execFile);
 const object = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value));
 /**
@@ -198,7 +207,76 @@ export function parseFormalizationMessage(line: string): WorkerFormalizationMess
 export class DockerWebRunner implements WebRunner {
   private cached?: { at: number; result: Awaited<ReturnType<WebRunner['readiness']>>; workerControl: boolean };
   private active = new Set<string>();
-  constructor(private readonly config: Pick<WebConfig, 'workerImage'>) {}
+  constructor(private readonly config: Pick<WebConfig, 'workerImage'> & Partial<Pick<WebConfig, 'texImage'>>) {}
+
+  /**
+   * Compile only the saved template and body. The TeX image is separate from the Lean worker and the container has no
+   * network, no shell escape, a read-only image and bounded writable tmpfs mounts.
+   */
+  compilePaper: WebRunner['compilePaper'] = async ({ template, main }, signal) => {
+    signal.throwIfAborted();
+    if (Buffer.byteLength(template) + Buffer.byteLength(main) > webPaperLimits.maxSourceBytes)
+      throw new WebPaperCompileError('paper_pdf_source_too_large');
+    const image = this.config.texImage || 'theorem-os-tex:local';
+    const name = `theoremos-paper-${crypto.randomUUID()}`;
+    const script = [
+      'set -eu',
+      "python3 -c 'import json,pathlib,sys; p=json.load(sys.stdin); pathlib.Path(\"/work/template.tex\").write_text(p[\"template\"],encoding=\"utf-8\"); pathlib.Path(\"/work/main.tex\").write_text(p[\"main\"],encoding=\"utf-8\")'",
+      'if latexmk -pdfxe -xelatex -no-shell-escape -interaction=nonstopmode -halt-on-error -file-line-error -outdir=/work /work/template.tex >/work/latexmk.log 2>&1; then',
+      "python3 -c 'import base64,json,pathlib; p=pathlib.Path(\"/work/template.pdf\"); print(json.dumps({\"ok\":True,\"pdf\":base64.b64encode(p.read_bytes()).decode(\"ascii\")}))'",
+      'else',
+      "python3 -c 'import json,pathlib; p=pathlib.Path(\"/work/latexmk.log\"); print(json.dumps({\"ok\":False,\"log\":p.read_text(encoding=\"utf-8\",errors=\"replace\")[-65536:]}))'",
+      'fi',
+    ].join('\n');
+    const remove = () => execute('docker', ['rm', '--force', '--volumes', name], { timeout: 15_000 }).then(() => {}, () => {});
+    try {
+      await execute('docker', ['create', '--interactive', '--pull=never', '--name', name, '--network=none', '--log-driver=none',
+        '--read-only', '--user', '10001:10001', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--cpus=2', '--memory=1g', '--memory-swap=1g',
+        '--pids-limit=128', '--ulimit', 'nofile=1024:1024', '--env', 'HOME=/tmp',
+        '--tmpfs', '/work:rw,nosuid,nodev,size=67108864,uid=10001,gid=10001,mode=0700',
+        '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=268435456,mode=1777', '--entrypoint', 'sh', image, '-c', script],
+        { timeout: 30_000, maxBuffer: 8_192 });
+    } catch { await remove(); throw new WebPaperCompileError('paper_pdf_container_failed'); }
+    try {
+      signal.throwIfAborted();
+      const output = await new Promise<string>((resolve, reject) => {
+        const child = spawn('docker', ['start', '--attach', '--interactive', name], { stdio: ['pipe', 'pipe', 'ignore'] });
+        let text = '', settled = false;
+        const finish = (error?: Error) => {
+          if (settled) return;
+          settled = true; clearTimeout(timer); signal.removeEventListener('abort', abort);
+          if (error) { child.kill('SIGKILL'); reject(error); } else resolve(text);
+        };
+        const abort = () => finish(new WebPaperCompileError('paper_pdf_cancelled'));
+        const timer = setTimeout(() => finish(new WebPaperCompileError('paper_pdf_timeout')), webPaperLimits.maxRunSeconds * 1_000);
+        signal.addEventListener('abort', abort, { once: true });
+        child.stdout.setEncoding('utf8');
+        child.stdout.on('data', chunk => {
+          text += chunk;
+          if (Buffer.byteLength(text) > webPaperLimits.maxPdfBytes * 2) finish(new WebPaperCompileError('paper_pdf_output_too_large'));
+        });
+        child.stdin.on('error', () => {});
+        child.once('error', () => finish(new WebPaperCompileError('paper_pdf_container_failed')));
+        child.once('close', code => finish(code ? new WebPaperCompileError('paper_pdf_compile_failed') : undefined));
+        child.stdin.end(JSON.stringify({ template, main }));
+      });
+      let packet: unknown;
+      try { packet = JSON.parse(output.trim()); } catch { throw new WebPaperCompileError('paper_pdf_invalid_output'); }
+      if (!packet || typeof packet !== 'object' || Array.isArray(packet)) throw new WebPaperCompileError('paper_pdf_invalid_output');
+      const result = packet as { ok?: unknown; pdf?: unknown; log?: unknown };
+      if (result.ok !== true || typeof result.pdf !== 'string') {
+        const log = typeof result.log === 'string' ? result.log.slice(-webPaperLimits.maxLogBytes).replaceAll('\r', '') : undefined;
+        const match = log?.match(/(?:^|\n)([^\n:]{1,256}):(\d+):/u);
+        const detail = log?.match(/(?:^|\n)(?:!\s*|(?:LaTeX|Package)[^\n]*Error:\s*)([^\n]{1,240})/u)?.[1]?.trim();
+        throw new WebPaperCompileError('paper_pdf_compile_failed', detail, match?.[1], match ? Number(match[2]) : undefined);
+      }
+      let pdf: Buffer;
+      try { pdf = Buffer.from(result.pdf, 'base64'); } catch { throw new WebPaperCompileError('paper_pdf_invalid_output'); }
+      if (!pdf.length || pdf.length > webPaperLimits.maxPdfBytes || pdf.subarray(0, 5).toString() !== '%PDF-')
+        throw new WebPaperCompileError('paper_pdf_missing_output');
+      return { pdf };
+    } finally { await remove(); }
+  };
 
   async command(id: string, command: WebCommand): Promise<WebCommandResult> {
     if (!this.active.has(id)) throw new Error('运行环境尚未就绪或已结束。');

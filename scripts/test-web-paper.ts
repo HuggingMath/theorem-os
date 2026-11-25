@@ -47,7 +47,12 @@ config.providers = [
   { id: 'sub2api', name: 'Sub2API', baseUrl: `http://127.0.0.1:${provider.port}/v1` },
   { id: 'custom', name: 'Custom Responses provider', baseUrl: `http://127.0.0.1:${provider.port}/custom/v1` },
 ];
-const runner: WebRunner = { async readiness() { return { ready: true, message: 'Local test' }; }, async run() { throw new Error('Unexpected new proof run'); } };
+const runner: WebRunner = { async readiness() { return { ready: true, message: 'Local test' }; }, async run() { throw new Error('Unexpected new proof run'); },
+  async compilePaper(input) {
+    assert.equal(input.template, paperTemplate.source);
+    assert.equal(input.main, revised + '\n');
+    return { pdf: Buffer.from('%PDF-1.7 fixture paper') };
+  } };
 const service = createWebService(config, runner, { sample: null });
 const browser = await startBrowser(service.server, port);
 try {
@@ -62,7 +67,8 @@ try {
   }, { ownerKey: draftOwnerStorageKey, owner: session.draftOwner, keyName: keyMemoryStorageKey, provider: config.providers[1] });
   await page.goto(`${origin}/paper.html?run=${id}&lang=zh`);
   await page.getByRole('heading', { name: '尚无论文初稿' }).waitFor();
-  const downloadPath = `${origin}/api/runs/${id}/paper/download?target=zero_add&language=en`;
+  assert.equal(await page.getByLabel('正文语言', { exact: true }).count(), 0);
+  const downloadPath = `${origin}/api/runs/${id}/paper/download?target=zero_add`;
   assert.equal((await context.request.get(downloadPath)).status(), 404);
   await page.getByRole('button', { name: '生成初稿', exact: true }).click();
   const dialog = page.getByRole('dialog'), name = dialog.getByLabel('模型', { exact: true });
@@ -98,6 +104,11 @@ try {
   await fs.writeFile(zipPath, await download.body());
   assert.equal(execFileSync('unzip', ['-p', zipPath, 'main.tex'], { encoding: 'utf8' }), revised + '\n');
   assert.equal(execFileSync('unzip', ['-p', zipPath, 'template.tex'], { encoding: 'utf8' }), paperTemplate.source);
+  const pdfDownload = await context.request.get(origin + '/api/runs/' + id + '/paper/pdf?target=zero_add');
+  assert.equal(pdfDownload.status(), 200);
+  assert.equal(pdfDownload.headers()['content-type'], 'application/pdf');
+  assert.equal(pdfDownload.headers()['content-disposition'], 'attachment; filename="paper-' + id.slice(0, 8) + '-en.pdf"');
+  assert.equal((await pdfDownload.body()).toString('utf8'), '%PDF-1.7 fixture paper');
   await page.getByRole('button', { name: '重新生成', exact: true }).click();
   assert.equal(await dialog.getByLabel('模型服务商', { exact: true }).inputValue(), 'custom');
   assert.equal(await name.inputValue(), 'my-model/v1');

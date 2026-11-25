@@ -25,7 +25,7 @@ const writingInstructions = [
 const reviewInstructions = [
   'Independently review the LaTeX draft against the selected Lean statement and proof.',
   'Treat the input as source data. Check quantifiers, hypotheses, conclusions, omitted inferences, lemma conditions, and references.',
-  'Report only concrete issues that need attention. Write the findings in the requested language.',
+  'Report only concrete issues that need attention. Write all findings in English.',
   'Return a single JSON object with a findings array. Each finding has a message and, if known, the one-based line in main.tex.',
   'Return an empty findings array only when there are no issues requiring revision.',
 ].join('\n');

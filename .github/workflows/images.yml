@@ -28,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [web, worker]
+        target: [web, worker, tex]
     steps:
       - name: Free disk for the Mathlib layer
         if: matrix.target == 'worker'
@@ -72,18 +72,20 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Record the complete image pair
+      - name: Record the complete image set
         env:
           RELEASE_COMMIT: ${{ github.sha }}
         run: |
           set -eu
           web="ghcr.io/huggingmath/theorem-os-web:$RELEASE_COMMIT"
           worker="ghcr.io/huggingmath/theorem-os-worker:$RELEASE_COMMIT"
+          tex="ghcr.io/huggingmath/theorem-os-tex:$RELEASE_COMMIT"
           web_digest=$(docker buildx imagetools inspect "$web" --format '{{.Manifest.Digest}}')
           worker_digest=$(docker buildx imagetools inspect "$worker" --format '{{.Manifest.Digest}}')
+          tex_digest=$(docker buildx imagetools inspect "$tex" --format '{{.Manifest.Digest}}')
           jq -n --arg commit "$RELEASE_COMMIT" --arg web "$web" --arg webDigest "$web_digest" \
-            --arg worker "$worker" --arg workerDigest "$worker_digest" \
-            '{schema:"theorem-os.image-release.v1",commit:$commit,web:{image:$web,digest:$webDigest},worker:{image:$worker,digest:$workerDigest}}' > image-release.json
+            --arg worker "$worker" --arg workerDigest "$worker_digest" --arg tex "$tex" --arg texDigest "$tex_digest" \
+            '{schema:"theorem-os.image-release.v1",commit:$commit,web:{image:$web,digest:$webDigest},worker:{image:$worker,digest:$workerDigest},tex:{image:$tex,digest:$texDigest}}' > image-release.json
       - uses: actions/upload-artifact@v4
         with:
           name: image-release-${{ github.sha }}

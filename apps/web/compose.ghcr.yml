@@ -1,5 +1,5 @@
 # Run the images published by .github/workflows/images.yml instead of building them locally:
-#   docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml pull worker web
+#   docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml pull worker web tex
 #   docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml up -d --no-build web
 # Set THEOREMOS_IMAGE_TAG to the full SHA from a successful image-release artifact.
 # The workflow publishes no moving main tag. Verify both images before replacing a running service.
@@ -8,5 +8,8 @@ services:
     image: ghcr.io/huggingmath/theorem-os-web:${THEOREMOS_IMAGE_TAG:?Set THEOREMOS_IMAGE_TAG to a verified full commit SHA}
     environment:
       THEOREMOS_WEB_WORKER_IMAGE: ghcr.io/huggingmath/theorem-os-worker:${THEOREMOS_IMAGE_TAG:?Set THEOREMOS_IMAGE_TAG to a verified full commit SHA}
+      THEOREMOS_WEB_TEX_IMAGE: ghcr.io/huggingmath/theorem-os-tex:${THEOREMOS_IMAGE_TAG:?Set THEOREMOS_IMAGE_TAG to a verified full commit SHA}
   worker:
     image: ghcr.io/huggingmath/theorem-os-worker:${THEOREMOS_IMAGE_TAG:?Set THEOREMOS_IMAGE_TAG to a verified full commit SHA}
+  tex:
+    image: ghcr.io/huggingmath/theorem-os-tex:${THEOREMOS_IMAGE_TAG:?Set THEOREMOS_IMAGE_TAG to a verified full commit SHA}

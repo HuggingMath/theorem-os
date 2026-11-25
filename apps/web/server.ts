@@ -28,6 +28,7 @@ import { loadWebSample, webSampleResponse, webSampleRunId, type WebSampleFile } 
 import { PrecheckSuperseded, WebPrechecker } from './precheck';
 import { proofOutline, verificationKit, zip } from './verificationKit';
 import { WebPaperDrafts } from './paperDrafts';
+import { WebPaperPdf, WebPaperPdfError } from './paperPdf';
 import type { WebPaperOverview } from './paperTypes';
 import { paperTemplate } from '../../src/math/paperDraft';
 import { acceptedEncoding, sendStatic } from './staticFiles';
@@ -150,6 +151,23 @@ const providerModel = (provider: WebProvider) => provider.id === SUB2API_PROVIDE
 class HttpError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
 }
+function paperPdfHttpError(error: WebPaperPdfError): HttpError {
+  const location = error.file && Number.isSafeInteger(error.line) ? '（' + error.file + ':' + error.line + '）' : '';
+  const detail = error.detail ? ' ' + error.detail : '';
+  switch (error.code) {
+    case 'paper_pdf_busy': return new HttpError(429, 'PDF 编译任务较多，请稍后重试。');
+    case 'paper_pdf_runtime_unavailable': return new HttpError(503, 'PDF 编译环境尚未配置。');
+    case 'paper_pdf_timeout': return new HttpError(504, 'PDF 编译超时，请稍后重试。');
+    case 'paper_pdf_source_too_large': return new HttpError(413, '论文源稿过大。');
+    case 'paper_pdf_output_too_large': return new HttpError(413, 'PDF 编译产物过大。');
+    case 'paper_pdf_cancelled': return new HttpError(499, 'PDF 编译已取消。');
+    case 'paper_pdf_container_failed': return new HttpError(503, 'PDF 编译容器不可用。');
+    case 'paper_pdf_invalid_output': return new HttpError(502, 'PDF 编译结果无效。');
+    case 'paper_pdf_missing_output': return new HttpError(422, 'PDF 编译未生成产物。');
+    default: return new HttpError(422, location ? 'PDF 编译失败' + location + '。' + (detail || '请检查 LaTeX 源码。')
+      : 'PDF 编译失败。' + (detail || '请检查 LaTeX 源码。'));
+  }
+}
 const equal = (left: string, right: string) => /^[a-f0-9]{64}$/.test(left) &&
   /^[a-f0-9]{64}$/.test(right) && crypto.timingSafeEqual(Buffer.from(left), Buffer.from(right));
 /** The coding each request accepts, so JSON bodies can be compressed without passing the request along. */
@@ -237,6 +255,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   // null disables the sample; omitted loads the one shipped with the image.
   const sample = options.sample === undefined ? loadWebSample() : options.sample ?? undefined;
   const papers = new WebPaperDrafts(storage);
+  const paperPdf = new WebPaperPdf(runner);
   const knowledge = new WebKnowledgeService(storage);
   const registry = new WebModuleRegistry(storage);
   const sessions = new Map<string, Session>(storage.listSessions().map(session => [session.id, session]));
@@ -1192,7 +1211,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         const run = jobs.get(owner, match[1]);
         if (!run) throw new HttpError(404, '运行不存在或不属于当前会话。');
         const operation = match[2];
-        if (operation === 'paper' || operation === 'paper/download') {
+        if (operation === 'paper' || operation === 'paper/download' || operation === 'paper/pdf') {
           const creating = operation === 'paper' && request.method === 'POST';
           if (!creating && request.method !== 'GET') throw new HttpError(405, '请求方法不受支持。');
           const proof = run.result?.proof;
@@ -1213,6 +1232,19 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             response.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Length': content.length,
               'Content-Disposition': `attachment; filename="paper-${run.id.slice(0, 8)}-${language}.zip"`, 'Cache-Control': 'no-store' });
             response.end(content); return;
+          }
+          if (operation === 'paper/pdf') {
+            if (!job?.draft) throw new HttpError(404, '论文初稿还没有生成。');
+            try {
+              const { pdf } = await paperPdf.compile({ template: job.draft.template, main: job.draft.main });
+              response.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': pdf.length,
+                'Content-Disposition': `attachment; filename="paper-${run.id.slice(0, 8)}-${language}.pdf"`, 'Cache-Control': 'no-store' });
+              response.end(pdf);
+            } catch (error) {
+              if (error instanceof WebPaperPdfError) throw paperPdfHttpError(error);
+              throw error;
+            }
+            return;
           }
           const providers = providersFor(session).filter(provider => webProviderHarness(provider) === 'codex');
           const defaultProvider = providers.find(provider => provider.id === job?.providerId)
@@ -1442,7 +1474,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     prechecker?.close();
     for (const streams of runStreams.values()) for (const stop of streams) stop();
     server.closeIdleConnections();
-    const closed = await Promise.allSettled([jobs.close(), research.close(), explanations.close(), papers.close(), formalizations.close(), conversations.close(), new Promise<void>(resolve => server.close(() => resolve()))]);
+    const closed = await Promise.allSettled([jobs.close(), research.close(), explanations.close(), papers.close(), paperPdf.close(), formalizations.close(), conversations.close(), new Promise<void>(resolve => server.close(() => resolve()))]);
     for (const result of closed) if (result.status === 'rejected') throw result.reason;
   };
   return { server, jobs, research, explanations, formalizations, conversations, storage, knowledge, registry, auth, close };

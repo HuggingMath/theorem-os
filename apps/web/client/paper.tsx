@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { locale, localeTag, localizeMessage } from '../i18n';
 import type { WebSession } from '../shared';
 import type { WebPaperOverview, WebPaperDraftJob } from '../paperTypes';
-import type { PaperDraft, PaperLanguage } from '../../../src/math/paperDraft';
+import type { PaperDraft } from '../../../src/math/paperDraft';
 import { Icon, Spinner } from './ui/Icon';
 import { rememberedKey, ownedTabKeyStorage } from './keyMemory';
 
@@ -41,7 +41,7 @@ function errorMessage(error?: string) {
   }
 }
 
-function Source({ draft, language }: { draft: PaperDraft; language: PaperLanguage }) {
+function Source({ draft }: { draft: PaperDraft }) {
   const [file, setFile] = useState<'main.tex' | 'template.tex'>('main.tex');
   const [jump, setJump] = useState<{ line: number }>();
   const [message, setMessage] = useState('');
@@ -77,7 +77,7 @@ function Source({ draft, language }: { draft: PaperDraft; language: PaperLanguag
         <button class="paper-copy" type="button" onClick={() => void copy()}><Icon name="copy" />{tx('复制', 'Copy')}</button>
       </div>
       <span class="sr-only" role="status">{message}</span>
-      <pre class="paper-code" aria-label={file} ref={code} lang={file === 'main.tex' ? language : undefined}><code>
+      <pre class="paper-code" aria-label={file} ref={code} lang={file === 'main.tex' ? 'en' : undefined}><code>
         {content.trimEnd().split('\n').map((line, index) => <span key={index} data-line={index + 1}
           class={`paper-code-line${file === 'main.tex' && jump?.line === index + 1 ? ' paper-marked' : ''}`} tabIndex={-1}>
           <span class="paper-line-number" aria-hidden="true">{index + 1}</span>
@@ -108,14 +108,14 @@ function Source({ draft, language }: { draft: PaperDraft; language: PaperLanguag
 }
 
 function Paper({ session }: { session: WebSession }) {
-  const [selection, setSelection] = useState({ target: params.get('target') ?? '',
-    language: (params.get('language') === 'zh' ? 'zh' : 'en') as PaperLanguage });
+  const [selection, setSelection] = useState({ target: params.get('target') ?? '' });
   const [overview, setOverview] = useState<WebPaperOverview>();
   const [reading, setReading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [modelProviderId, setModelProviderId] = useState('');
   const [model, setModel] = useState('');
   const [failure, setFailure] = useState('');
+  const [pdfExporting, setPdfExporting] = useState(false);
   const [reload, setReload] = useState(0);
   const dialog = useRef<HTMLDialogElement>(null);
   const modelSettings = useRef<HTMLDetailsElement>(null);
@@ -123,8 +123,8 @@ function Paper({ session }: { session: WebSession }) {
   const modelUrl = session.providers.find(provider => provider.id === modelProviderId)?.baseUrl;
   const tabKey = modelProvider?.key === 'required' && modelUrl ? rememberedKey(ownedTabKeyStorage(session), modelProvider.id, modelUrl) : undefined;
   const target = selection.target || overview?.target || '';
-  const query = new URLSearchParams({ ...(selection.target ? { target: selection.target } : {}), language: selection.language });
-  const job = !reading && overview?.language === selection.language && overview.target === target ? overview.job : undefined;
+  const query = new URLSearchParams({ ...(selection.target ? { target: selection.target } : {}), language: 'en' });
+  const job = !reading && overview?.language === 'en' && overview.target === target ? overview.job : undefined;
   const busy = active(job);
   const draft = job?.draft;
   const downloadable = Boolean(draft && !busy);
@@ -154,7 +154,6 @@ function Paper({ session }: { session: WebSession }) {
   function select(next: typeof selection) {
     const url = new URL(location.href);
     if (next.target) url.searchParams.set('target', next.target);
-    url.searchParams.set('language', next.language);
     history.replaceState(history.state, '', url);
     setReading(true); setFailure(''); setSelection(next);
   }
@@ -175,7 +174,7 @@ function Paper({ session }: { session: WebSession }) {
       const started = await request<{ job: WebPaperDraftJob }>(base, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken },
-        body: JSON.stringify({ target, language: selection.language, providerId: modelProvider.id, model: model.trim(), apiKey: apiKey || tabKey || '' }),
+        body: JSON.stringify({ target, language: 'en', providerId: modelProvider.id, model: model.trim(), apiKey: apiKey || tabKey || '' }),
       });
       setOverview({ ...overview, job: started.job });
       dialog.current?.close();
@@ -185,10 +184,30 @@ function Paper({ session }: { session: WebSession }) {
     } finally { setSubmitting(false); }
   }
 
+  async function exportPdf() {
+    if (pdfExporting || !downloadable) return;
+    setFailure(''); setPdfExporting(true);
+    try {
+      const response = await fetch(`${base}/pdf?${query}`, { cache: 'no-store', signal: AbortSignal.timeout(135_000) });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ? localizeMessage(body.error) : tx('PDF 导出失败，请稍后重试。', 'PDF export failed. Try again shortly.'));
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a'); link.href = url; link.download = `paper-${run?.slice(0, 8) ?? 'draft'}-en.pdf`;
+      document.body.append(link); link.click(); link.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (error) {
+      setFailure(error instanceof Error ? error.message : tx('PDF 导出失败，请稍后重试。', 'PDF export failed. Try again shortly.'));
+    } finally { setPdfExporting(false); }
+  }
+
   return <>
     {overview && <div class="paper-heading">
       <div><h1>{overview.title}</h1><p class="paper-statement paper-target-name"><code>{target}</code></p></div>
       <div class="paper-actions">
+        {downloadable && <button class="paper-button paper-primary" type="button" disabled={pdfExporting} onClick={() => void exportPdf()}>
+          <Icon name="download" />{pdfExporting ? tx('正在导出 PDF…', 'Exporting PDF…') : tx('导出 PDF', 'Export PDF')}
+        </button>}
         {downloadable && <a class="paper-button paper-primary" href={`${base}/download?${query}`} download>
           <Icon name="download" />{draft?.review === 'pending' ? tx('下载待审源稿', 'Download draft for review') : tx('下载 LaTeX 源稿', 'Download LaTeX source')}
         </a>}
@@ -200,11 +219,6 @@ function Paper({ session }: { session: WebSession }) {
           {overview.targets.map(name => <option key={name} value={name}>{name}</option>)}
         </select>
       </label>}
-      <label>{tx('正文语言', 'Draft language')}
-        <select value={selection.language} disabled={submitting} onChange={event => select({ target, language: event.currentTarget.value === 'zh' ? 'zh' : 'en' })}>
-          <option value="en">{tx('英文', 'English')}</option><option value="zh">{tx('中文', 'Chinese')}</option>
-        </select>
-      </label>
       <button class="paper-button" type="button" disabled={reading || busy || !overview.providers.length} onClick={openSettings}>
         <Icon name={draft ? 'rotate-ccw' : 'file-pen'} />{draft ? tx('重新生成', 'Regenerate') : tx('生成初稿', 'Generate draft')}
       </button>
@@ -213,11 +227,11 @@ function Paper({ session }: { session: WebSession }) {
     {job?.error && <p class="paper-error" role="alert">{errorMessage(job.error)}</p>}
     {busy && job && <p class="paper-progress" role="status"><Spinner />{phaseText[job.status as keyof typeof phaseText]}
       <span>{tx('可以离开页面，稍后回来查看。', 'You can leave this page and return later.')}</span></p>}
-    {draft ? <Source key={job.id} draft={draft} language={selection.language} /> : !busy && !failure && <section class="paper-panel paper-empty">
+    {draft ? <Source key={job.id} draft={draft} /> : !busy && !failure && <section class="paper-panel paper-empty">
       <div class="paper-empty-icon"><Icon name="file-pen" /></div>
       <div><h2>{reading ? tx('正在读取验收证明…', 'Loading the accepted proof…') : tx('尚无论文初稿', 'No paper draft yet')}</h2>
         {!reading && <p>{!overview?.providers.length ? tx('请先为工作台配置支持 Responses API 的模型服务商。', 'Configure a Responses API provider for the workbench to generate a draft.')
-          : tx('选择正文语言并点击「生成初稿」，模型会根据已验收的 Lean 证明撰写正文。', 'Choose the draft language and select Generate draft to write from the accepted Lean proof.')}</p>}
+          : tx('点击「生成初稿」，模型会根据已验收的 Lean 证明撰写英文正文。', 'Select Generate draft to write the English paper from the accepted Lean proof.')}</p>}
       </div>
     </section>}
     <dialog class="paper-dialog" ref={dialog} aria-labelledby="paper-settings-title" onClose={() => setFailure('')}>

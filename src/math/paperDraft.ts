@@ -10,15 +10,13 @@ export type PaperDraft = {
 };
 
 export const paperTemplate = {
-  version: 'article-v1',
+  version: 'article-v2',
   source: [
-    '\\documentclass[UTF8,scheme=plain]{ctexart}',
+    '\\documentclass{article}',
     '\\usepackage{amsmath,amssymb,amsthm}',
     '',
     '\\newtheorem{theorem}{Theorem}',
     '\\newtheorem{lemma}[theorem]{Lemma}',
-    '\\newtheorem{dingli}[theorem]{定理}',
-    '\\newtheorem{yinli}[theorem]{引理}',
     '',
     '\\begin{document}',
     '\\input{main}',
