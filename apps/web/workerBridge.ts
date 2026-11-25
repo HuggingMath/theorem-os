@@ -14,16 +14,20 @@ import { parseCooperationPlan, taskGroup, taskVersion, type TaskRecord } from '.
 import { allowedKnowledgeFile, buildTheoremKnowledge, validateTheoremKnowledge, type TheoremKnowledgeBase } from '../../src/solver/theoremKnowledge';
 import { importKnowledgeRuns } from '../../src/solver/theoremKnowledgeRuns';
 import { proofReceiptsMatch, type ProofCheck } from '../../src/solver/modules/evidence';
-import type { WebCheckReceipt, WebCommand, WebCommandResult, WebObservation, WebTaskSource } from './collaboration';
+import type { WebCheckReceipt, WebCommand, WebCommandResult, WebLibraryRestart, WebObservation, WebTaskSource } from './collaboration';
 import type { WorkerMessage } from './shared';
 import { projectWebDeclarationArtifacts } from './declarationArtifacts';
 import { projectWebNativeTeam } from './nativeTeamObservation';
 import { maxWorkerObservationBytes, standaloneObservationFrame, type WorkerObservationFrame } from './observationSources';
 
 export const webActiveRunFile = '/work/active-run.json';
+const libraryRestartSchema = z.object({ previousSolverRunId: z.string().min(1).max(128),
+  round: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict();
+type LibraryRestart = Omit<WebLibraryRestart, 'solverRunId'>;
 const activeRunSchema = z.object({ schema: z.literal('theorem-os.web-active-run.v1'),
-  webRunId: z.string().min(1).max(128), directory: z.string().min(1), output: z.string().min(1) }).strict();
-type ActiveRun = z.infer<typeof activeRunSchema>;
+  webRunId: z.string().min(1).max(128), directory: z.string().min(1), output: z.string().min(1),
+  libraryRestart: libraryRestartSchema.optional() }).strict();
+type ActiveRun = { webRunId: string; directory: string; output: string; libraryRestart?: LibraryRestart };
 const metaSchema = z.object({ schema: z.literal('theorem-os.web-bridge.v1'), webRunId: z.string(), solverRunId: z.string(),
   libraryRound: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   sequence: z.number().int().nonnegative(), contentDigest: z.string(),
@@ -37,14 +41,15 @@ const childOf = (directory: string, file: string) => path.isAbsolute(file) && fi
 const relativePath = (file: string) => file && !path.isAbsolute(file) && !file.includes('\\') &&
   file.split('/').every(part => part && part !== '.' && part !== '..');
 
-export function writeWebActiveRun(input: { webRunId: string; directory: string; output: string }, file = webActiveRunFile): void {
+export function writeWebActiveRun(input: ActiveRun, file = webActiveRunFile): void {
   const directory = fs.realpathSync(input.directory), output = path.resolve(input.output);
   if (!childOf(directory, output)) throw new Error('web_bridge_output_outside_run');
-  writeMathJsonDurable(file, { schema: 'theorem-os.web-active-run.v1', webRunId: input.webRunId, directory, output });
+  writeMathJsonDurable(file, activeRunSchema.parse({ schema: 'theorem-os.web-active-run.v1',
+    webRunId: input.webRunId, directory, output, libraryRestart: input.libraryRestart }));
 }
 
 function readActiveRun(file: string): ActiveRun {
-  const value = activeRunSchema.parse(JSON.parse(readMathText(file, 8_192)));
+  const value = activeRunSchema.parse(JSON.parse(readMathText(file, 8_192))) as ActiveRun;
   if (path.resolve(value.directory) !== value.directory || fs.realpathSync(value.directory) !== value.directory ||
       !childOf(value.directory, value.output)) throw new Error('web_bridge_active_run_invalid');
   return value;
@@ -57,7 +62,6 @@ export function freezeWebKnowledge(directory: string, catalog?: unknown): string
   return file;
 }
 
-type LibraryRestart = { previousSolverRunId: string; round: number };
 function bridgeMeta(file: string, webRunId: string, solverRunId: string, restart?: LibraryRestart): BridgeMeta | undefined {
   if (!fs.existsSync(file)) return;
   const value = metaSchema.parse(JSON.parse(readMathText(file, 32 * 1024)));
@@ -141,7 +145,7 @@ function sourceProjection(state: SolverRunState, directory: string) {
     for (const receipt of proof.verification.results) {
       if (receipt.proofPath !== node.task.proofPath || receipt.theoremName !== node.task.theoremName) continue;
       const id = receipt.receiptId || `observation-${mathDigest(canonicalMathJson(receipt))}`;
-      const key = canonicalMathJson([node.task.id, version, proof.commit, id]);
+      const key = canonicalMathJson([node.task.id, version, proof.commit, id, proof.verification.checkedAt, original ? proof.passed : null]);
       if (checkIds.has(key)) continue;
       // The original-problem check can pass one target while failing the batch.
       const passed = original ? proofReceiptsMatch({ ...proof.verification, status: receipt.status, results: [receipt] }, proof.commit, [{
@@ -181,13 +185,21 @@ function sourceProjection(state: SolverRunState, directory: string) {
   }
   const wholeChecks = [state.check, ...(state.workers ?? []).map(worker => worker.check)]
     .filter((proof): proof is ProofCheck => proof !== undefined);
-  for (const node of state.cooperation?.tasks ?? []) if (node.task.kind === 'goal') {
-    const target = state.problem.targets.find(item => item.proofPath === node.task.proofPath && item.theoremName === node.task.theoremName);
-    if (!target) continue;
-    for (const proof of wholeChecks) if (proof.verification.results.some(receipt =>
-      receipt.proofPath === target.proofPath && receipt.theoremName === target.theoremName)) addProof(node, proof, target);
+  for (const [index, target] of state.problem.targets.entries()) {
+    const node = state.cooperation?.tasks.find(item => item.task.kind === 'goal' &&
+      item.task.proofPath === target.proofPath && item.task.theoremName === target.theoremName);
+    // Direct and independent runs use the same frozen target identity as their knowledge evidence.
+    const task = node?.task ?? { id: `original_goal_${index + 1}`, kind: 'goal' as const,
+      objective: `Prove ${target.theoremName}`, revision: 0, dependsOn: [], ...target };
+    let found = false;
+    for (const proof of wholeChecks) {
+      if (proof.verification.results.some(receipt => receipt.proofPath === target.proofPath && receipt.theoremName === target.theoremName)) {
+        addProof({ task }, proof, target);
+        found = true;
+      } else checkPartial = true;
+    }
+    if (!node && !found) sourcePartial = true;
   }
-  if (!state.cooperation?.tasks.length && state.problem.targets.length) sourcePartial = true;
   return { sources, checks, coverage: { sources: sourcePartial ? 'partial' as const : 'recorded' as const,
     checks: checkPartial ? 'partial' as const : 'recorded' as const } };
 }
@@ -211,9 +223,11 @@ export function createWebWorkerBridge(options: {
       !options.libraryRestart.previousSolverRunId)) throw new Error('web_bridge_run_identity_changed');
   // Each new bridge starts with a self-contained frame. Retain only the previous frame's digests.
   let emittedSources = new Set<string>();
-  async function capture(input: { includeCatalog?: boolean; force?: boolean } = {}) {
+  let captured = false;
+  async function capture(input: { includeCatalog?: boolean; force?: boolean; waitMs?: number } = {}) {
     const messages: WorkerMessage[] = [];
-    const result = await withMathRuntimeLease({ lockPath: path.join(directory, 'web-bridge.lock'), flockExecutable: '/usr/bin/flock' }, async lease => {
+    const result = await withMathRuntimeLease({ lockPath: path.join(directory, 'web-bridge.lock'), flockExecutable: '/usr/bin/flock',
+      waitMs: input.waitMs }, async lease => {
       const stored = readRunInspection(options.output), { state, stateFile } = stored;
       if (options.libraryRestart?.previousSolverRunId === state.runId) throw new Error('web_bridge_run_identity_changed');
       const { agentTeam, ...report } = buildRunInspection(state, stored.result);
@@ -245,8 +259,10 @@ export function createWebWorkerBridge(options: {
       const contentDigest = mathDigest(canonicalMathJson({ ...frame.observation, observedAt: '' }));
       const changed = restarted || previous?.contentDigest !== contentDigest;
       const sequence = (previous?.sequence ?? 0) + Number(changed);
-      if (restarted) messages.push({ type: 'library_restart', previousSolverRunId: previous!.solverRunId,
-        solverRunId: state.runId, round: options.libraryRestart!.round });
+      const libraryRestart = previous && options.libraryRestart && { ...options.libraryRestart, solverRunId: state.runId };
+      // Capture through docker exec can commit the new metadata before the streaming worker does.
+      const announceRestart = libraryRestart && options.onMessage && !captured;
+      if (announceRestart) messages.push({ type: 'library_restart', ...libraryRestart });
       observation.sequence = sequence;
       frame.observation.sequence = sequence;
       let frameJson = JSON.stringify(frame);
@@ -291,9 +307,10 @@ export function createWebWorkerBridge(options: {
       }
       lease.assertHeld();
       if (!previous || canonicalMathJson(previous) !== canonicalMathJson(meta)) writeMathJsonDurable(metaFile, meta);
-      if (changed || input.force) messages.push({ type: 'observation', observation });
+      captured = true;
+      if (changed || input.force || announceRestart) messages.push({ type: 'observation', observation });
       if (catalog) messages.push({ type: 'catalog', catalog });
-      return { frame, result: { observation, ...(catalog ? { catalog } : {}) } };
+      return { frame, result: { observation, ...(catalog ? { catalog } : {}), ...(libraryRestart ? { libraryRestart } : {}) } };
     });
     for (const message of messages) {
       if (!options.onMessage) break;
@@ -357,8 +374,9 @@ const commandSchema = z.discriminatedUnion('type', [
 export async function handleWebWorkerCommand(value: unknown, options: { activeRunFile?: string } = {}): Promise<WebCommandResult> {
   const command = commandSchema.parse(value) as WebCommand;
   const active = readActiveRun(options.activeRunFile ?? webActiveRunFile);
-  const bridge = createWebWorkerBridge({ webRunId: active.webRunId, directory: active.directory, output: active.output });
-  if (command.type === 'capture') return { id: 'capture', status: 'captured', ...await bridge.capture({ includeCatalog: true, force: true }) };
+  const bridge = createWebWorkerBridge({ ...active, libraryRestart: command.type === 'capture' ? active.libraryRestart : undefined });
+  if (command.type === 'capture') return { id: 'capture', status: 'captured',
+    ...await bridge.capture({ includeCatalog: true, force: true, waitMs: 5_000 }) };
   const { state, stateFile } = readRunInspection(active.output);
   if (command.type === 'guidance') {
     try {

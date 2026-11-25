@@ -2,13 +2,13 @@ import { webProviderExecutionDigest, webProviderHarness, webHarnessResearchError
 import crypto from 'node:crypto';
 import type { WebConfig } from './config';
 import type { WebRunner } from './runner';
-import type { WebEvent, WebEventDetails, WebProvider, WebWorkerProvider, WebRun, WebRunInput, WorkerInput, WorkerMessage } from './shared';
+import type { WebEvent, WebEventDetails, WebProvider, WebResult, WebWorkerProvider, WebRun, WebRunInput, WorkerInput, WorkerMessage } from './shared';
 import { webResearchModeError, webSkillWithoutCooperation, webDefaultSkillLoading } from './researchMode';
 import { normalizeWebTeamPreferences } from './nativeTeamProfiles';
 import { personalExpertCardsDigest } from '../../src/solver/personalExperts';
-import { isProgressEvent, parseWebFailure, webAgentActionLimits, webLimits } from './shared';
+import { isProgressEvent, parseWebFailure, webAgentActionLimits, webLimits, webRunEventLimit } from './shared';
 import { recordWebModuleEvent, sanitizeWebEventDetails } from './moduleTelemetry';
-import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
+import type { WebCommand, WebCommandResult, WebLibraryRestart, WebObservation } from './collaboration';
 import { canonicalMathJson } from '../../src/math/mathRuntimeIo';
 import { WebStorage, type WebCreation } from './storage';
 import { WebKnowledgeService } from './knowledgeService';
@@ -61,7 +61,15 @@ export class WebJobs {
       if (creation) this.creations.set(JSON.stringify([owner, creation.requestId]), { ...creation, runId: run.id });
       const provider: WebWorkerProvider = { id: run.providerId, name: run.providerId, baseUrl: '' };
       this.jobs.set(run.id, { owner, run, provider, input: { ...run, apiKey: '' }, controller: new AbortController() });
-      if (!terminal(run)) {
+      if (run.result && (!terminal(run) || run.phase === 'interrupted' && run.result.status === 'evaluated_passed')) {
+        if (run.phase === 'interrupted') {
+          delete run.error;
+          delete run.failure;
+          delete run.finishedAt;
+        }
+        const last = run.events.at(-1);
+        this.finishResult(run, run.result, last?.type === 'finished' ? last.at : run.updatedAt);
+      } else if (!terminal(run)) {
         run.status = 'error'; run.phase = 'interrupted'; run.finishedAt = new Date().toISOString();
         run.error = '服务已重启；保留最后观测与已有证据。本次运行未恢复执行。';
         run.failure = { kind: 'interrupted' };
@@ -295,7 +303,7 @@ export class WebJobs {
       for (const listener of this.listeners.get(owner) ?? []) listener(version);
     });
   }
-  private libraryRestart(job: Job, message: Extract<WorkerMessage, { type: 'library_restart' }>) {
+  private libraryRestart(job: Job, message: WebLibraryRestart) {
     const current = job.run.solverAttempt ?? (job.run.observation && {
       solverRunId: job.run.observation.solverRunId, round: 0, sequence: job.run.observation.sequence });
     if (!current || current.solverRunId !== message.previousSolverRunId ||
@@ -421,6 +429,7 @@ export class WebJobs {
       const apiKey = job.input.apiKey;
       const capture = clean(await this.runner.command(id, { type: 'capture' }), apiKey);
       if (this.jobs.get(id) !== job) throw new WebStorageError(404, '运行不存在或不属于当前会话。');
+      if (capture.libraryRestart) this.libraryRestart(job, capture.libraryRestart);
       if (capture.observation) this.observe(job, capture.observation);
       if (capture.catalog) job.run.knowledgeCatalogDigest = this.knowledge.importCatalog(owner, capture.catalog).digest;
     }
@@ -442,7 +451,7 @@ export class WebJobs {
     const event: WebEvent = { sequence, at: run.updatedAt, type, message: message.slice(0, 2_000), ...(details ? { details } : {}) };
     recordWebModuleEvent(run, event);
     run.events.push(event);
-    if (run.events.length > 200) run.events.shift();
+    if (run.events.length > webRunEventLimit) run.events.shift();
     this.persist(run);
   }
   private pump() {
@@ -466,11 +475,27 @@ export class WebJobs {
       this.changed(job.owner);
     });
   }
+  private finishResult(run: WebRun, result: WebResult, finishedAt: string, beforeFinished?: () => void) {
+    run.status = result.status === 'runtime_error' ? 'error' : 'completed';
+    run.phase = result.status;
+    run.finishedAt ??= finishedAt;
+    delete run.queue;
+    beforeFinished?.();
+    if (run.events.at(-1)?.type === 'finished') { this.persist(run); return; }
+    const acceptance = !run.formalization ? '完整原题通过独立 Lean 验收'
+      : !isStatementReviewed(run) ? '候选 Lean 陈述通过独立验收；原题含义尚未审核通过。'
+      : run.formalization.confirmation === 'manual' ? 'Lean 陈述通过独立 Lean 验收；原题含义已由你确认。Lean 验收不能替代自然语言原意核对。'
+        : run.formalization.confirmation === 'automatic' ? 'Lean 陈述通过独立 Lean 验收；原题含义仅经模型审核，未经人工确认。Lean 验收不能替代自然语言原意核对。'
+          : 'Lean 陈述通过独立 Lean 验收；原题含义未记录确认方式，请核对 Lean 陈述。Lean 验收不能替代自然语言原意核对。';
+    this.event(run, 'finished', result.status === 'evaluated_passed' ? acceptance : '运行结束，请查看验收状态');
+  }
   private async execute(job: Job) {
     const key = job.input.apiKey;
     let messageError: unknown;
     const handle = (raw: WorkerMessage) => {
-      if (messageError || this.jobs.get(job.run.id) !== job || terminal(job.run) && !['observation', 'catalog'].includes(raw.type)) return;
+      if (messageError || this.jobs.get(job.run.id) !== job || terminal(job.run) &&
+          raw.type !== 'observation' && raw.type !== 'catalog' &&
+          !(job.run.status === 'cancelled' && raw.type === 'library_restart')) return;
       try {
         const message = clean(raw, key);
         if (message.type === 'progress') {
@@ -529,18 +554,12 @@ export class WebJobs {
       if (messageError) throw messageError;
       if (!terminal(job.run)) {
         if (!job.run.result) throw new Error(job.run.error || '没有收到运行结果。');
-        job.run.status = job.run.result.status === 'runtime_error' ? 'error' : 'completed';
         const accepted = job.run.result.status === 'evaluated_passed';
-        // Transfer credentials only to the explanation queue, before the solver releases them. The queue saves its
-        // initial records before the finished notification; proof acceptance never depends on explanation success.
-        if (accepted) try { this.onProofAccepted?.(job.owner, job.run, { apiKey: job.input.apiKey, provider: job.provider }); }
-        catch { this.event(job.run, 'explanation_queue_failed', '证明已验收，自动讲解未能保存；请稍后重试。'); }
-        const acceptance = !job.run.formalization ? '完整原题通过独立 Lean 验收'
-          : !isStatementReviewed(job.run) ? '候选 Lean 陈述通过独立验收；原题含义尚未审核通过。'
-          : job.run.formalization.confirmation === 'manual' ? 'Lean 陈述通过独立 Lean 验收；原题含义已由你确认。Lean 验收不能替代自然语言原意核对。'
-            : job.run.formalization.confirmation === 'automatic' ? 'Lean 陈述通过独立 Lean 验收；原题含义仅经模型审核，未经人工确认。Lean 验收不能替代自然语言原意核对。'
-              : 'Lean 陈述通过独立 Lean 验收；原题含义未记录确认方式，请核对 Lean 陈述。Lean 验收不能替代自然语言原意核对。';
-        this.event(job.run, 'finished', accepted ? acceptance : '运行结束，请查看验收状态');
+        this.finishResult(job.run, job.run.result, new Date().toISOString(), accepted ? () => {
+          // The explanation queue receives credentials before the solver releases them.
+          try { this.onProofAccepted?.(job.owner, job.run, { apiKey: job.input.apiKey, provider: job.provider }); }
+          catch { this.event(job.run, 'explanation_queue_failed', '证明已验收，自动讲解未能保存；请稍后重试。'); }
+        } : undefined);
         if (accepted && isStatementReviewed(job.run)) this.onAccepted?.(job.owner);
       }
     } catch (error) {

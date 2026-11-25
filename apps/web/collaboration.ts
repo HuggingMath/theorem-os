@@ -211,6 +211,7 @@ export type WebCommand =
   | { type: 'guidance-withdraw'; id: string; guidanceId: string }
   | { type: 'plan-approval'; approval: WebPlanApprovalInput }
   | { type: 'capture' };
+export type WebLibraryRestart = { previousSolverRunId: string; solverRunId: string; round: number };
 export type WebCommandResult = {
   id: string; status: string; baseVersion?: string; planVersion?: string; reason?: string;
   commandDigest?: string;
@@ -220,6 +221,7 @@ export type WebCommandResult = {
   edit?: WebHumanEdit;
   observation?: WebObservation;
   catalog?: unknown;
+  libraryRestart?: WebLibraryRestart;
 };
 export type WebArchive = {
   id: string; runId: string; createdAt: string; digest: string;

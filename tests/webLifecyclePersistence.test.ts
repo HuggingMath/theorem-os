@@ -12,6 +12,8 @@ import type { WebRunner } from '../apps/web/runner';
 import { createWebService } from '../apps/web/server';
 import type { WebRun, WebRunInput, WorkerExplanationInput, WorkerExplanationMessage, WorkerInput, WorkerMessage } from '../apps/web/shared';
 import { WebStorage } from '../apps/web/storage';
+import { isAcceptedRun } from '../apps/web/presentation';
+import { mathDigest } from '../src/math/mathRuntimeIo';
 import { buildTheoremKnowledge } from '../src/solver/theoremKnowledge';
 
 // Disposable files and a fake worker only. Calls retain the real input reference to check credential cleanup.
@@ -96,6 +98,57 @@ function setup(kind: Kind, concurrency = 1, dataRoot?: string) {
   return { service, storage, runner };
 }
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
+
+describe('research restart with partially written run state', () => {
+  const restart = (root: string, writeTail?: (storage: WebStorage) => void) => {
+    // Copy the crash image so cleanup of the simulated old process cannot write into the restored run.
+    const crashImage = fs.mkdtempSync(path.join(os.tmpdir(), 'web-lifecycle-crash-'));
+    cleanups.push(async () => { fs.rmSync(crashImage, { recursive: true, force: true }); });
+    fs.cpSync(root, crashImage, { recursive: true });
+    const storage = new WebStorage(crashImage);
+    writeTail?.(storage);
+    return new WebJobs(new Runner(), { concurrency: 1, queueLimit: 8 }, { storage });
+  };
+
+  it('recovers the durable events before recording an interrupted run', async () => {
+    const { service, storage } = setup('research');
+    const id = service.create('alice');
+    await settle();
+    const run = storage.getRun('alice', id)!;
+    const next = { sequence: run.events.at(-1)!.sequence + 1, at: new Date().toISOString(),
+      type: 'evaluation_started', message: 'The event reached disk before the run summary.' };
+    const jobs = restart(storage.root!, crash => {
+      crash.saveRecord(['owners', mathDigest('alice'), 'runs', id, 'events', `${next.sequence}.json`], next, true);
+      expect(crash.getRun('alice', id)?.events).toEqual(run.events);
+    });
+    const recovered = jobs.get('alice', id)!;
+    expect(recovered).toMatchObject({ status: 'error', phase: 'interrupted' });
+    expect(recovered.events.slice(-2)).toEqual([next, expect.objectContaining({ sequence: next.sequence + 1, type: 'interrupted' })]);
+    expect(jobs.storage.listEvents('alice', id)).toEqual(recovered.events);
+    await jobs.close();
+  });
+
+  it.each([false, true])('preserves saved Lean acceptance across restart (finished event durable: %s)', async eventWritten => {
+    const { service, storage, runner } = setup('research');
+    const id = service.create('alice');
+    await settle();
+    runner.calls[0]!.late(); // Deliberately leave the runner in cleanup.
+    const run = storage.getRun('alice', id)!;
+    expect(run).toMatchObject({ status: 'running', result: { status: 'evaluated_passed', proof } });
+    const jobs = restart(storage.root!, eventWritten ? crash => {
+      const sequence = run.events.at(-1)!.sequence + 1;
+      crash.saveRecord(['owners', mathDigest('alice'), 'runs', id, 'events', `${sequence}.json`],
+        { sequence, at: run.updatedAt, type: 'finished', message: '完整原题通过独立 Lean 验收' }, true);
+    } : undefined);
+    const recovered = jobs.get('alice', id)!;
+    expect(isAcceptedRun(recovered)).toBe(true);
+    expect(recovered).toMatchObject({ status: 'completed', phase: 'evaluated_passed', result: run.result });
+    expect(recovered.finishedAt).toBe(run.updatedAt);
+    expect(jobs.storage.listEvents('alice', id).filter(event => event.type === 'finished')).toHaveLength(1);
+    expect(recovered.events.some(event => event.type === 'interrupted')).toBe(false);
+    await jobs.close();
+  });
+});
 
 describe.each<Kind>(['research', 'formalization', 'explanation'])('%s lifecycle with failed terminal persistence', kind => {
   it('stops its worker instead of throwing out of an asynchronous message callback when persistence fails', async () => {

@@ -64,6 +64,30 @@ describe('web trajectory index', () => {
     expect(trajectories.page(owner, run.id, { after: 0, since: 0, instance: page.instance }).instance).not.toBe(page.instance);
   });
 
+  it('loads a check with receipts first seen in different chunks without dropping older receipts', () => {
+    const frame = sample.observations.find(item => item.checks.length && item.sources.length)!;
+    const check = frame.checks[0]!;
+    const observed = Array.from({ length: 70 }, (_, position) => ({ ...frame, sequence: position + 1,
+      sources: position === 0 ? frame.sources : [],
+      checks: [{ ...check, id: String(position), record: { ...check.record, verification: { checkedAt: 1_000 } } }] }));
+    observed.push({ ...frame, sequence: 71, sources: [],
+      checks: [{ ...check, id: '0', record: { ...check.record, verification: { checkedAt: 2_000 } } }] });
+    const trajectories = new WebTrajectories({
+      listEventsAfter: () => [],
+      listObservationsAfter: (_owner, _run, after, limit) => observed.slice(after, after + limit),
+      getObservation: (_owner, _run, sequence) => observed[sequence - 1],
+    });
+    const ids = observed.slice(0, 70).map(item => item.checks[0]!.id);
+    // This selector is in the second chunk even though the same check and commit were seen in the first.
+    const detail = trajectories.version('owner', frame.webRunId, check.taskId, check.commit, check.taskVersion, ids.at(-1))!;
+    expect(detail.checks.map(receipt => receipt.id)).toEqual(ids);
+    expect(trajectories.version('owner', frame.webRunId, check.taskId, check.commit, 'other-version', ids.at(-1))).toBeUndefined();
+    const recheck = trajectories.version('owner', frame.webRunId, check.taskId, check.commit, check.taskVersion, '0', 2_000)!;
+    expect(recheck.checks).toEqual(observed[70]!.checks);
+    const aggregate = trajectories.version('owner', frame.webRunId, check.taskId, check.commit)!;
+    expect(aggregate.checks.map(receipt => receipt.id)).toEqual([...ids, '0']);
+  });
+
   it('validates cursors and version parameters and takes a one-line Lean reason from a failed receipt', () => {
     expect(trajectoryQuery(new URLSearchParams({ after: '3', since: '2', instance: 'abc-1' }))).toEqual({ after: 3, since: 2, instance: 'abc-1' });
     for (const params of [{ after: '-1' }, { since: '1.5' }, { instance: 'A B' }]) expect(trajectoryQuery(new URLSearchParams(params))).toBeUndefined();

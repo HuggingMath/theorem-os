@@ -8,6 +8,7 @@ import { scheduleMathTimeout } from './mathTimers';
 import { resolveMathematicsRuntimeEnvironment } from './mathRuntimeEnvironment';
 import { prepareLeanSearchProjection, prepareRetainedLeanSearchProjection } from './leanSearchProjection';
 import { openPantographSession, readPantographBackend, type ProofSearchSession } from './pantographSession';
+import { localProofSearchPath, projectedProofSearchPath, proofSearchDirectory } from './proofSearchCheckpointPath';
 
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const identity = z.string().min(1).max(256);
@@ -79,13 +80,14 @@ function validateCheckpoint(checkpoint: ProofSearchCheckpoint, basis: ProofSearc
     throw new Error('proof_search_checkpoint_invalid');
 }
 
-function readCheckpoint(project: string, reference: SearchCheckpointReference) {
+function readCheckpoint(project: string, reference: SearchCheckpointReference, history?: string) {
   const file = path.resolve(project, reference.path); assertMathCanonicalPath(file);
   const bytes = readMathFile(file, checkpointLimit).bytes;
   if (mathDigest(bytes) !== reference.digest) throw new Error('proof_search_stale_checkpoint_digest');
   const value = proofSearchCheckpointSchema.parse(JSON.parse(bytes.toString('utf8')));
   const basisDigest = mathDigest(canonicalMathJson(value.basis));
-  if (file !== path.join(project, '.lake/proof-search', basisDigest, `${value.generation}.json`))
+  if (file !== localProofSearchPath(project, basisDigest, value.generation, history) &&
+      file !== projectedProofSearchPath(project, basisDigest, value.generation, reference.digest, history))
     throw new Error('proof_search_stale_checkpoint_path');
   validateCheckpoint(value, value.basis);
   return value;
@@ -185,6 +187,8 @@ export type LeanProofSearchStatus = 'candidate' | 'exhausted' | 'budget-exhauste
 export async function searchLeanBranches(input: {
   projectRoot: string; file: string; theoremName: string; type: string; scope: LeanProofSearchScope;
   request: unknown; env?: NodeJS.ProcessEnv; signal?: AbortSignal;
+  /** Host-assigned history for a search performed as part of an independent check. */
+  history?: string;
   /** An ordinary worker search may start at the current root if its implicit resume has a different basis. */
   restartStaleImplicitResume?: boolean;
   /** Only a host-scoped independent nextCheck may replay the explicitly retained source instead of live owned files. */
@@ -192,6 +196,7 @@ export async function searchLeanBranches(input: {
   onCheckpoint?: (reference: SearchCheckpointReference) => void;
 }) {
   const request = proofSearchRequestSchema.parse(input.request), scope = proofSearchScopeSchema.parse(input.scope);
+  const history = digest.optional().parse(input.history);
   const startedAt = Date.now();
   const env = resolveMathematicsRuntimeEnvironment(input.env ?? process.env), project = fs.realpathSync(input.projectRoot);
   const controller = new AbortController(), abort = () => controller.abort();
@@ -212,7 +217,7 @@ export async function searchLeanBranches(input: {
     if (input.retainedInput) {
       if (!request.resume || request.resume.digest !== input.retainedInput.checkpointDigest)
         throw new Error('proof_search_stale_retained_checkpoint');
-      const saved = readCheckpoint(project, request.resume);
+      const saved = readCheckpoint(project, request.resume, history);
       if (mathDigest(canonicalMathJson(saved.basis)) !== input.retainedInput.basisDigest ||
           canonicalMathJson(saved.basis.scope) !== canonicalMathJson(scope) ||
           canonicalMathJson(saved.basis.target) !== canonicalMathJson({ file: input.file, theoremName: input.theoremName, type: input.type }))
@@ -224,20 +229,31 @@ export async function searchLeanBranches(input: {
     const basis: ProofSearchBasis = { scope, sourceDigest: projection.sourceDigest, projectionDigest: projection.projectionDigest,
       backendDigest: backend.digest, target: { file: input.file, theoremName: input.theoremName, type: input.type },
       environment: projection.environment, sourceFiles: projection.sourceFiles };
-    const basisDigest = mathDigest(canonicalMathJson(basis)), directory = path.join(project, '.lake/proof-search', basisDigest);
+    const basisDigest = mathDigest(canonicalMathJson(basis)), directory = proofSearchDirectory(project, basisDigest, history);
     assertMathCanonicalPath(directory); fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     await withMathRuntimeLease({ lockPath: path.join(directory, 'writer.lock'), flockExecutable: '/usr/bin/flock' }, async () => {
       controller.signal.throwIfAborted();
-      const generations = fs.readdirSync(directory).filter(name => /^\d+\.json$/u.test(name)).map(name => Number(name.slice(0, -5)));
-      const latest = generations.length ? Math.max(...generations) : -1;
+      const names = fs.readdirSync(directory);
+      const generations = names.filter(name => /^\d+\.json$/u.test(name)).map(name => Number(name.slice(0, -5)));
+      const latestLocal = generations.length ? Math.max(...generations) : -1;
+      const projected = names.flatMap(name => {
+        const match = /^retained-(0|[1-9][0-9]*)-([a-f0-9]{64})\.json$/u.exec(name);
+        return match ? [{ name, generation: Number(match[1]), digest: match[2]! }] : [];
+      }).sort((a, b) => b.generation - a.generation)[0];
+      const latest = Math.max(latestLocal, projected?.generation ?? -1);
       const requireLatestResume = () => {
-        const file = path.join(directory, `${latest}.json`); assertMathCanonicalPath(file);
-        reference = { path: path.relative(project, file), digest: mathDigest(readMathFile(file, checkpointLimit).bytes) };
-        checkpoint = readCheckpoint(project, reference); validateCheckpoint(checkpoint, basis);
+        if (latestLocal === latest) {
+          const file = localProofSearchPath(project, basisDigest, latest, history); assertMathCanonicalPath(file);
+          reference = { path: path.relative(project, file), digest: mathDigest(readMathFile(file, checkpointLimit).bytes) };
+        } else {
+          reference = { path: path.relative(project, path.join(directory, projected!.name)), digest: projected!.digest };
+        }
+        checkpoint = readCheckpoint(project, reference, history);
+        validateCheckpoint(checkpoint, basis);
         throw new Error('proof_search_stale_resume_required: use the returned latest checkpoint');
       };
       if (request.resume) {
-        checkpoint = readCheckpoint(project, request.resume);
+        checkpoint = readCheckpoint(project, request.resume, history);
         if (input.restartStaleImplicitResume && !input.retainedInput && !request.branches.some(branch => branch.from) &&
             canonicalMathJson(checkpoint.basis) !== canonicalMathJson(basis)) checkpoint = undefined;
         else {
@@ -259,7 +275,7 @@ export async function searchLeanBranches(input: {
         proofSearchCheckpointSchema.parse(value);
         const text = canonicalMathJson(value);
         if (Buffer.byteLength(text) > checkpointLimit) throw new Error('proof_search_checkpoint_size_limit');
-        const file = path.join(directory, `${value.generation}.json`); assertMathCanonicalPath(file);
+        const file = localProofSearchPath(project, basisDigest, value.generation, history); assertMathCanonicalPath(file);
         if (fs.existsSync(file)) throw new Error('proof_search_checkpoint_generation_conflict');
         writeMathTextDurable(file, text, 0o400);
         reference = { path: path.relative(project, file), digest: mathDigest(text) };
@@ -287,12 +303,12 @@ export async function searchLeanBranches(input: {
   }
   // Full fragments remain in scratch. The command response is a bounded preview even for long resumed paths.
   const candidateArtifacts = candidates.map(candidate => {
-    const relative = `.lake/proof-search/${mathDigest(canonicalMathJson(checkpoint!.basis))}/candidate-${candidate.node}.lean`;
-    const file = path.join(project, relative); assertMathCanonicalPath(file);
+    const directory = proofSearchDirectory(project, mathDigest(canonicalMathJson(checkpoint!.basis)), history);
+    const file = path.join(directory, `candidate-${candidate.node}.lean`); assertMathCanonicalPath(file);
     writeMathTextDurable(file, candidate.proofSource, 0o400);
     return { node: candidate.node, proofSource: limitMathOutput(candidate.proofSource, 4000, 'head'),
       truncated: Buffer.byteLength(candidate.proofSource) > 4000,
-      artifact: { path: relative, digest: mathDigest(candidate.proofSource), bytes: Buffer.byteLength(candidate.proofSource) } };
+      artifact: { path: path.relative(project, file), digest: mathDigest(candidate.proofSource), bytes: Buffer.byteLength(candidate.proofSource) } };
   });
   const frontier = checkpoint?.nodes.filter(node => node.status === 'open').slice(-8).map(node => ({ node: node.id,
     preview: limitMathOutput(JSON.stringify(node.view ?? null), 1600, 'head'),

@@ -1,4 +1,3 @@
-import { proofSearchRecordMatches } from './proofSearchRecords';
 import { isAdvisoryTask as advisory } from './tasks';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -1285,8 +1284,7 @@ export class CooperativeResearch extends CooperationInputs {
     if (action?.kind === 'lead' && !this.active.has(this.lead.id) && !this.presentedNextCheckOutcomes.has(action))
       this.presentedNextCheckOutcomes.set(action, (this.archive.nextChecks ?? []).flatMap(record =>
         record.status === 'awaiting-decision' && record.outcome ? [{ checkId: record.id, outcomeDeliveryId: record.outcome.deliveryId }] : []));
-    const searchScope = action?.kind === 'task' ? this.proofSearchScope(action) : undefined;
-    const searchRecord = searchScope && this.archive.proofSearchRecords?.[searchScope.taskId];
+    const searchRecord = action?.kind === 'task' ? this.proofSearchAssignment(action).record : undefined;
     const guidance = checkpointWorkerId ? readHumanGuidance(path.join(path.dirname(this.lead.worktree), 'state.json'), this.input.state.runId)
       .filter(item => {
         if (item.status !== 'delivered' || !item.deliveredTo?.includes(checkpointWorkerId)) return false;
@@ -1302,8 +1300,7 @@ export class CooperativeResearch extends CooperationInputs {
         leadResearchInputIds: this.presentedResearchInputs.get(action)!.shown.map(record => record.id),
         leadResearchInputCount: this.presentedResearchInputs.get(action)!.total,
       } : {}),
-      proofSearchRecords: searchScope && proofSearchRecordMatches(searchRecord, searchScope)
-        ? { [searchScope.taskId]: searchRecord } : undefined,
+      proofSearchRecords: searchRecord ? { [searchRecord.taskId]: searchRecord } : undefined,
       goalProgress: action?.kind === 'lead' || worker?.id === this.lead.id ? this.archive.goalProgress :
         action?.kind === 'task' ? goalProgressForTask(this.archive.goalProgress, action.task) : undefined,
       goalPathReview: action?.kind === 'lead' || worker?.id === this.lead.id ? this.goalPathReview() : undefined,

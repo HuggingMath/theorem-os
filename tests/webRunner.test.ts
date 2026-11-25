@@ -317,6 +317,10 @@ async function main() {
     while (!fs.existsSync(path.join(root, 'approve'))) await new Promise(resolve => setTimeout(resolve, 10));
     process.stdout.write(JSON.stringify({ type: 'progress', event: 'plan_approval_wait_ended', message: 'Approved' }) + '\\n');
     process.stdout.write(JSON.stringify({ type: 'result', result: { status: 'incomplete', proof: '', report: {} } }) + '\\n');
+  } else if (args[0] === 'exec') {
+    let input = ''; for await (const chunk of process.stdin) input += chunk;
+    if (JSON.parse(input).type !== 'capture') process.exit(1);
+    process.stdout.write(fs.readFileSync(path.join(root, 'capture.json')));
   } else if (args[0] === 'rm') fs.rmSync(path.join(root, 'container'), { force: true });
   else process.exit(1);
 }
@@ -332,6 +336,11 @@ main().catch(() => process.exit(1));
           providerId: config.providers[0].id, apiKey: 'sk-offline-fixture', source: 'theorem goal : True := by sorry',
           task: 'Offline human review fixture', maxRunSeconds, workers: 2, planApproval },
       };
+      const observation = { ...loadWebSample()!.observations[0]!, webRunId: request.id };
+      const libraryRestart = { previousSolverRunId: 'solver-first', solverRunId: observation.solverRunId, round: 1 };
+      const frame = standaloneObservationFrame(observation);
+      fs.writeFileSync(path.join(root, 'capture.json'), JSON.stringify({ id: 'capture', status: 'captured',
+        libraryRestart, observation: frame.observation, sourceBlobs: frame.sourceBlobs }));
       let waiting!: () => void;
       const ready = new Promise<void>(resolve => { waiting = resolve; }), messages: WorkerMessage[] = [];
       complete = new DockerWebRunner(config).run(request, message => {
@@ -351,7 +360,11 @@ main().catch(() => process.exit(1));
       expect(calls.filter(args => args[0] === 'rm')).toHaveLength(1);
       expect(fs.existsSync(path.join(root, 'container'))).toBe(false);
       expect(messages.map(message => message.type === 'progress' ? message.event : message.type)).toEqual(decision === 'approve'
-        ? ['plan_approval_wait_started', 'plan_approval_wait_ended', 'result'] : ['plan_approval_wait_started']);
+        ? ['plan_approval_wait_started', 'plan_approval_wait_ended', 'result'] : ['plan_approval_wait_started', 'library_restart', 'observation']);
+      if (decision === 'cancel') {
+        expect(messages.slice(-2)).toEqual([{ type: 'library_restart', ...libraryRestart }, { type: 'observation', observation }]);
+        expect(calls.map(args => args[0])).toEqual(['create', 'start', 'exec', 'rm']);
+      }
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       fs.writeFileSync(path.join(root, 'approve'), 'cleanup');

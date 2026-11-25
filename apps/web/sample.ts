@@ -3,7 +3,7 @@ import type { WebObservation } from './collaboration';
 import { projectStoredObservationChecks } from './observationChecks';
 import { webArchive } from './storage';
 import { webAgentActionLimits, webSampleRunId, type WebAgentAction, type WebEvent, type WebRun } from './shared';
-import { recordedTrajectory, trajectoryPage, trajectoryQuery, trajectoryVersion, trajectoryVersionDetail, trajectoryVersionQuery, type TrajectoryIndex } from './trajectory';
+import { recordedTrajectory, selectTrajectoryChecks, trajectoryPage, trajectoryQuery, trajectoryVersion, trajectoryVersionDetail, trajectoryVersionQuery, type TrajectoryIndex } from './trajectory';
 
 export { webSampleRunId };
 
@@ -62,9 +62,11 @@ export function webSampleResponse(sample: WebSampleFile, operation: string | und
   if (operation === 'trajectory/version') {
     const index = sampleTrajectory(sample);
     const wanted = trajectoryVersionQuery(query), version = wanted && trajectoryVersion(index, wanted.taskId, wanted.commit);
-    if (!version || (wanted.taskVersion !== undefined && !version.checks.some(check => check.taskVersion === wanted.taskVersion)))
-      return { status: wanted ? 404 : 400, body: { error: wanted ? '这个版本没有记录或已超出保留范围。' : '版本参数无效。' } };
-    return { status: 200, body: { version: trajectoryVersionDetail(index, version, sequence => sample.observations.find(item => item.sequence === sequence), wanted.taskVersion) } };
+    if (!wanted) return { status: 400, body: { error: '版本参数无效。' } };
+    const checks = version && selectTrajectoryChecks(version, wanted.taskVersion, wanted.receiptId, wanted.checkAt);
+    if (!version || !checks?.length) return { status: 404, body: { error: '这个版本没有记录或已超出保留范围。' } };
+    return { status: 200, body: { version: trajectoryVersionDetail(index, version,
+      sequence => sample.observations.find(item => item.sequence === sequence), wanted.taskVersion, checks) } };
   }
   const newestFirst = [...sample.observations].reverse();
   const source = /^tasks\/([^/]+)\/source$/u.exec(operation);

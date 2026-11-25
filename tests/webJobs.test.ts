@@ -161,6 +161,23 @@ describe('web job ownership, scheduling and secret lifetime without provider cal
     runner.calls[0].finish({ status: 'incomplete', proof: '', report: {} }); await tick();
   });
 
+  it('saves the new round evidence delivered during cancellation without accepting a late result', async () => {
+    const { jobs, runner } = setup(), run = jobs.create('owner', input(), provider);
+    await tick();
+    const { send } = runner.calls[0]!;
+    send({ type: 'observation', observation: observation(run.id, 'solver-first', 1) });
+    jobs.cancel('owner', run.id);
+    send({ type: 'library_restart', previousSolverRunId: 'unrelated', solverRunId: 'solver-next', round: 1 });
+    expect(run.observation?.solverRunId).toBe('solver-first');
+    send({ type: 'library_restart', previousSolverRunId: 'solver-first', solverRunId: 'solver-next', round: 1 });
+    send({ type: 'observation', observation: observation(run.id, 'solver-next', 2) });
+    send({ type: 'result', result: result() });
+    expect(run).toMatchObject({ status: 'cancelled', phase: 'cancelled',
+      observation: { solverRunId: 'solver-next', acceptance: 'not-assessed' } });
+    expect(run.result).toBeUndefined();
+    expect(jobs.storage.listObservations('owner', run.id).map(item => item.solverRunId)).toEqual(['solver-first', 'solver-next']);
+  });
+
   it('starts queued jobs in order, respects concurrency and rejects excess active work', async () => {
     const { jobs, runner } = setup(2, 4);
     const runs = Array.from({ length: 4 }, (_, index) => jobs.create('owner', { ...input(), task: `Task ${index}` }, provider));

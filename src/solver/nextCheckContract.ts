@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { nextCheckSchema } from './mathematicalGapContract';
 import { knowledgeApplicationReportSchema } from './knowledgeUsageContract';
+import { proofSearchRecordSchema } from './proofSearchRecords';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const text = z.string().trim().min(1).max(2000);
@@ -31,6 +32,8 @@ export const nextCheckRecordSchema = z.object({
   origin: z.literal('definition-contract').optional(),
   id: hash, gapDeliveryId: z.string().min(1).optional(), taskId: z.string().min(1), taskDigest: hash,
   check: nextCheckSchema, scope: nextCheckScopeSchema,
+  /** Exact host-adopted checkpoint from which this independent search starts. */
+  proofSearchSeed: proofSearchRecordSchema.optional(),
   status: z.enum(['pending', 'awaiting-decision', 'decided', 'stale']),
   createdAt: z.number().int().nonnegative(),
   outcome: checkOutcomeSchema.extend({ deliveryId: z.string().min(1), commit: z.string().optional() }).strict().optional(),

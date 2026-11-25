@@ -7,7 +7,7 @@ import { isAdvisoryTask, isFeasibilityReview, taskGroup, taskVersion, type Coope
 import { independentFeasibilityWorker } from './modules/organization';
 import { currentDefinitionContractCheck } from './definitionContractChecks';
 import type { ProofRoute } from './proofRoutes';
-import type { ProofSearchRecord } from './proofSearchRecords';
+import { proofSearchRecordMatches, type ProofSearchRecord } from './proofSearchRecords';
 
 type Identity = { problemReceiptDigest: string; environmentDigest: string };
 type State = { tasks: readonly TaskRecord[]; deliveries?: readonly DeliveryRecord[]; nextChecks?: readonly NextCheckRecord[];
@@ -29,16 +29,19 @@ export function nextCheckTarget(gap: Gap, state: State): CooperativeTask | undef
 }
 
 /** Check host-adopted identity, not a worker-supplied basis or a host/worker path spelling. */
-function executionSearchBasis(check: NextCheck, target: CooperativeTask, state: State, identity: Identity,
-  requireCheckpointMatch: boolean): string | undefined | null {
+function executionSearchSeed(check: NextCheck, target: CooperativeTask, state: State, identity: Identity,
+  requireCheckpointMatch: boolean): ProofSearchRecord | undefined | null {
   const execution = check.execution;
   if (execution?.kind !== 'proof-search' || !execution.checkpoint && !execution.basis && !execution.node) return;
-  const record = state.proofSearchRecords?.[target.id];
-  if (!record || record.taskId !== target.id || record.taskDigest !== taskVersion(target) ||
-      record.problemReceiptDigest !== identity.problemReceiptDigest || record.environmentDigest !== identity.environmentDigest ||
-      execution.basis && execution.basis !== record.basisDigest ||
-      requireCheckpointMatch && execution.checkpoint && execution.checkpoint.digest !== record.checkpoint.digest) return null;
-  return record.basisDigest;
+  const scope = { ...identity, ...reference(target) };
+  const matches = (record: ProofSearchRecord | undefined): record is ProofSearchRecord =>
+    proofSearchRecordMatches(record, scope) && (!execution.basis || execution.basis === record.basisDigest);
+  // A reported digest can identify a retained independent history. Without one, use the owner's history.
+  const checkpoint = requireCheckpointMatch ? execution.checkpoint : undefined;
+  if (checkpoint) return Object.values(state.proofSearchRecords ?? {}).find(record =>
+    record.checkpoint.digest === checkpoint.digest && matches(record)) ?? null;
+  const owner = state.proofSearchRecords?.[target.id];
+  return matches(owner) ? owner : null;
 }
 
 const shellQuote = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
@@ -57,8 +60,10 @@ function executionInstructions(record: Pick<NextCheckRecord, 'id' | 'check' | 's
     'Write a request file at ' + requestFile + ' using this template, then fill its tactics array with finite candidates:\n' +
     canonicalMathJson({ branches: [{ ...(execution.node ? { from: execution.node } : {}), tactics: [] }],
       limits: { timeoutMs: 60_000, maxTransitions: 32 } }) + '\n' +
-    'For continuation, read the matching worker-local COOPERATION.json.proofSearchRecords[taskId].checkpoint and require the bound basis; ' +
-    'set request.resume to that worker-local checkpoint. Host checkpoint paths are not worker paths. A changed basis requires a new scoped check.\n' +
+    (record.scope.executionBasisDigest ?
+      'Continue from the matching worker-local COOPERATION.json.proofSearchRecords[taskId].checkpoint using request.resume. ' +
+      'Host checkpoint paths are not worker paths. A changed basis requires a new scoped check.\n' :
+      'Start with the current worker source. To continue this check, use its worker-local checkpoint from COOPERATION.json.proofSearchRecords.\n') +
     'theorem-os proof-search --worktree . --file ' + shellQuote(record.scope.executionContext!.file) +
     ' --theorem ' + shellQuote(record.scope.executionContext!.declaration) + ' --request-file ' + shellQuote(requestFile) + '\n' +
     'Retain the valid prefix, stuck goals, tried candidates and checkpoint artifact in checkOutcome.evidenceRefs. ' +
@@ -80,15 +85,15 @@ export function proposedNextChecks(state: State, identity: Identity, now: number
     if (gap.scopeStatus !== 'current-contracts' || !gap.nextCheck) return [];
     const target = nextCheckTarget(gap, state);
     if (!target) return [];
-    const executionBasisDigest = executionSearchBasis(gap.nextCheck, target, state, identity, true);
-    if (executionBasisDigest === null) return [];
+    const proofSearchSeed = executionSearchSeed(gap.nextCheck, target, state, identity, true);
+    if (proofSearchSeed === null) return [];
     const delivery = state.deliveries?.find(item => item.id === gap.deliveryId);
     const scope = { ...identity, parent: reference(gap.scope.source), target: reference(target),
       consumer: reference(gap.scope.consumer), dependencies: gap.scope.dependencies,
       gapScopeDigest: hash(gap.scope), ...(gap.commit ? { sourceCommit: gap.commit } : {}),
       ...(delivery?.sourceDigest ? { sourceDigest: delivery.sourceDigest } : {}),
       ...(gap.nextCheck.execution ? { executionContext: { file: target.proofPath!, declaration: target.theoremName! } } : {}),
-      ...(executionBasisDigest ? { executionBasisDigest } : {}) };
+      ...(proofSearchSeed ? { executionBasisDigest: proofSearchSeed.basisDigest } : {}) };
     // Notes-only commits do not create another investigation of identical mathematical inputs.
     const execution = gap.nextCheck.execution;
     const check = execution?.kind === 'proof-search' && execution.checkpoint
@@ -97,7 +102,8 @@ export function proposedNextChecks(state: State, identity: Identity, now: number
     const taskId = `gap_check_${id.slice(0, 40)}`;
     const task = checkTask({ id, taskId, check: gap.nextCheck, scope }, gap);
     const record: NextCheckRecord = { id, gapDeliveryId: gap.deliveryId, taskId, taskDigest: taskVersion(task),
-      check: gap.nextCheck, scope, status: 'pending', createdAt: now };
+      check: gap.nextCheck, scope, status: 'pending', createdAt: now,
+      ...(proofSearchSeed ? { proofSearchSeed } : {}) };
     return [{ record, node: { task, status: 'pending' as const, attempts: 0, nextCheckId: id } }];
   });
 }
@@ -115,8 +121,17 @@ export function currentNextCheck(record: NextCheckRecord, state: State, identity
   if (record.check.execution) {
     if (!record.scope.executionContext || record.scope.executionContext.file !== target.proofPath ||
         record.scope.executionContext.declaration !== target.theoremName) return false;
-    const basis = executionSearchBasis(record.check, target, state, identity, false);
-    if (basis === null || basis !== record.scope.executionBasisDigest) return false;
+    if (record.proofSearchSeed) {
+      const { proofSearchSeed: seed } = record, execution = record.check.execution;
+      if (execution.kind !== 'proof-search' || !record.scope.executionBasisDigest ||
+          !proofSearchRecordMatches(seed, { ...identity, ...reference(target) }) ||
+          seed.basisDigest !== record.scope.executionBasisDigest ||
+          execution.basis && execution.basis !== seed.basisDigest ||
+          execution.checkpoint && execution.checkpoint.digest !== seed.checkpoint.digest) return false;
+    } else {
+      const seed = executionSearchSeed(record.check, target, state, identity, false);
+      if (seed === null || seed?.basisDigest !== record.scope.executionBasisDigest) return false;
+    }
   } else if (record.scope.executionContext || record.scope.executionBasisDigest) return false;
   const gap = state.deliveries?.find(delivery => delivery.id === record.gapDeliveryId);
   return Boolean(gap && gap.status !== 'superseded' && gap.mathematicalGap?.nextCheck && gap.mathematicalGapScope &&

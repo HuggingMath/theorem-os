@@ -1,5 +1,5 @@
 import type { ResearchModulePlan, ResearchModuleSlot } from '../../src/solver/modules/policy';
-import type { WebObservation, WebArchive } from './collaboration';
+import type { WebObservation, WebArchive, WebLibraryRestart } from './collaboration';
 import type { WebFormalizationBackgroundReview } from './formalizationTypes';
 import type { ResearchLibraryProposalOrigin } from './researchLibraryProposalOrigin';
 import { webTaskEnvironment } from './environment';
@@ -129,6 +129,7 @@ export type WebEventDetails = {
   reason?: string;
 };
 export type WebEvent = { sequence: number; at: string; type: string; message: string; details?: WebEventDetails };
+export const webRunEventLimit = 200;
 export type WebModuleSnapshot = { eventCount: number; firstAt: string; lastEvent: WebEvent; activeWorkers: string[] };
 export const webArtifactMaxBytes = 128 * 1024;
 export type WebArtifact = {
@@ -326,7 +327,7 @@ export type WorkerMessage =
   | { type: 'progress'; event: string; message: string; details?: WebEventDetails }
   | { type: 'action'; action: WebAgentActionBody }
   | { type: 'artifact'; artifact: WebArtifact }
-  | { type: 'library_restart'; previousSolverRunId: string; solverRunId: string; round: number }
+  | ({ type: 'library_restart' } & WebLibraryRestart)
   | { type: 'observation'; observation: WebObservation }
   | { type: 'catalog'; catalog: unknown }
   | { type: 'result'; result: WebResult }

@@ -140,7 +140,8 @@ describe('machine-readable scoped next checks', () => {
     expect(currentNextCheck(proposed.record, state, identity)).toBe(true);
     expect(proposedNextChecks(state, identity, 3)).toEqual([]);
     state.proofSearchRecords[helper.id] = { ...advanced, basisDigest: '5'.repeat(64) };
-    expect(currentNextCheck(proposed.record, state, identity)).toBe(false);
+    expect(currentNextCheck(proposed.record, state, identity)).toBe(true);
+    expect(currentNextCheck({ ...proposed.record, proofSearchSeed: undefined }, state, identity)).toBe(false);
   });
 
   it('does not use a worker-reported basis, stale checkpoint or wrong environment to schedule a continuation', () => {
@@ -154,6 +155,19 @@ describe('machine-readable scoped next checks', () => {
       const state = fixture({ ...baseCheck, execution }); state.proofSearchRecords[helper.id] = record;
       expect(proposedNextChecks(state, identity, 2)).toEqual([]);
     }
+  });
+
+  it('pins a requested independent checkpoint without replacing the owner history', () => {
+    const owner = checkpointRecord();
+    const independent = { ...owner, history: '6'.repeat(64),
+      checkpoint: { ...owner.checkpoint, digest: '7'.repeat(64) } };
+    const state = fixture({ ...baseCheck, execution: search({ checkpoint: independent.checkpoint }) });
+    state.proofSearchRecords[helper.id] = owner;
+    state.proofSearchRecords['previous-check'] = independent;
+    const { record } = proposedNextChecks(state, identity, 3)[0]!;
+    expect(record.proofSearchSeed).toBe(independent);
+    expect(state.proofSearchRecords[helper.id]).toBe(owner);
+    expect(currentNextCheck(record, state, identity)).toBe(true);
   });
 
   it('expires executable checks on target, source, environment or bound context changes', () => {

@@ -4,15 +4,21 @@ import { z } from 'zod';
 import type { NextCheckRecord } from './nextCheckContract';
 import { assertMathCanonicalPath } from '../math/paths';
 import { canonicalMathJson, mathDigest, parseMathJson, readMathFile, writeMathTextDurable } from '../math/mathRuntimeIo';
+import { localProofSearchPath, projectedProofSearchPath } from '../math/proofSearchCheckpointPath';
 
-/** Select a host-authorized next-check target from the current projected records, otherwise the assigned task. */
-export function proofSearchTargetForAssignment(assignment: { taskId: string; taskDigest: string },
+export function proofSearchCheckForAssignment(assignment: { taskId: string; taskDigest: string },
   currentChecks: readonly NextCheckRecord[], identity: { problemReceiptDigest: string; environmentDigest: string }) {
-  const check = currentChecks.find(record => record.taskId === assignment.taskId && record.taskDigest === assignment.taskDigest &&
+  return currentChecks.find(record => record.taskId === assignment.taskId && record.taskDigest === assignment.taskDigest &&
     record.status === 'pending' && record.scope.problemReceiptDigest === identity.problemReceiptDigest &&
     record.scope.environmentDigest === identity.environmentDigest && record.check.execution?.kind === 'proof-search' &&
     record.check.execution.taskId === record.scope.target.taskId && record.check.execution.taskDigest === record.scope.target.taskDigest);
-  return check ? { ...check.scope.target } : { taskId: assignment.taskId, taskDigest: assignment.taskDigest };
+}
+
+/** The Lean target is shared. The assigned check owns its separate history. */
+export function proofSearchTargetForAssignment(assignment: { taskId: string; taskDigest: string },
+  currentChecks: readonly NextCheckRecord[], identity: { problemReceiptDigest: string; environmentDigest: string }) {
+  return proofSearchCheckForAssignment(assignment, currentChecks, identity)?.scope.target ??
+    { taskId: assignment.taskId, taskDigest: assignment.taskDigest };
 }
 
 /** Search state is advisory process history, never a proof receipt or acceptance cache. */
@@ -47,6 +53,7 @@ export const proofSearchRecordSchema = z.object({
   taskId: identity, taskDigest: identity, problemReceiptDigest: identity, environmentDigest: identity,
   sourceDigest: digest, projectionDigest: digest, backendDigest: digest, basisDigest: digest,
   generation: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  history: digest.optional(),
   workerId: identity, assignmentKey: z.string().min(1).max(4096),
   createdAt: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   checkpoint: proofSearchCheckpointReferenceSchema,
@@ -67,22 +74,22 @@ function parsedCheckpoint(reference: ProofSearchCheckpointReference, file: strin
   return { checkpoint, basisDigest, bytes };
 }
 
-function checkpointPath(projectRoot: string, basisDigest: string, generation: number): string {
-  return path.join(path.resolve(projectRoot), '.lake', 'proof-search', basisDigest, `${generation}.json`);
-}
-
 /** Read only an exact, regular project scratch checkpoint; an arbitrary artifact path is not an input. */
-export function readProofSearchCheckpoint(projectRoot: string, value: ProofSearchCheckpointReference) {
+export function readProofSearchCheckpoint(projectRoot: string, value: ProofSearchCheckpointReference, history?: string) {
   try {
     const parsed = proofSearchCheckpointReferenceSchema.safeParse(value);
     if (!parsed.success) throw invalid();
     const reference = parsed.data;
     const file = path.isAbsolute(reference.path) ? reference.path : path.join(path.resolve(projectRoot), reference.path);
     const scratch = path.join(path.resolve(projectRoot), '.lake', 'proof-search');
-    const relative = path.relative(scratch, file).split(path.sep).join('/');
-    if (path.resolve(file) !== file || !/^[a-f0-9]{64}\/(?:0|[1-9][0-9]*)\.json$/u.test(relative)) throw invalid();
+    const relative = path.relative(scratch, file).split(path.sep), name = relative.pop() ?? '';
+    if (history && relative.pop() !== digest.parse(history)) throw invalid();
+    if (path.resolve(file) !== file || relative.length !== 1 || !/^[a-f0-9]{64}$/u.test(relative[0]!) ||
+        !/^(?:0|[1-9][0-9]*|retained-(?:0|[1-9][0-9]*)-[a-f0-9]{64})\.json$/u.test(name)) throw invalid();
     const result = parsedCheckpoint(reference, file);
-    if (file !== checkpointPath(projectRoot, result.basisDigest, result.checkpoint.generation)) throw invalid();
+    const root = path.resolve(projectRoot);
+    if (file !== localProofSearchPath(root, result.basisDigest, result.checkpoint.generation, history) &&
+        file !== projectedProofSearchPath(root, result.basisDigest, result.checkpoint.generation, reference.digest, history)) throw invalid();
     return { ...result, reference: { path: file, digest: reference.digest } };
   } catch { throw invalid(); }
 }
@@ -92,13 +99,26 @@ export function proofSearchRecordMatches(record: ProofSearchRecord | undefined, 
     record.problemReceiptDigest === scope.problemReceiptDigest && record.environmentDigest === scope.environmentDigest);
 }
 
+/** The host keeps one record per independent task, or starts the check at its pinned seed. */
+export function proofSearchRecordForAssignment(records: Readonly<Record<string, ProofSearchRecord>> | undefined,
+  scope: ProofSearchScope, check?: NextCheckRecord) {
+  const target = records?.[scope.taskId];
+  if (!check) return proofSearchRecordMatches(target, scope) ? target : undefined;
+  const basis = check.scope.executionBasisDigest;
+  const own = records?.[check.taskId];
+  if (proofSearchRecordMatches(own, scope) && own.history === check.id && (!basis || own.basisDigest === basis)) return own;
+  const seed = check.proofSearchSeed ?? target; // Older archives only retained the target's latest checkpoint.
+  if (basis && proofSearchRecordMatches(seed, scope) && seed.basisDigest === basis) return seed;
+}
+
 /** Capture the worker's exact bytes before its scratch directory is reset or reassigned. */
 export function retainProofSearchCheckpoint(input: {
   projectRoot: string; runDirectory: string; reference: ProofSearchCheckpointReference; scope: ProofSearchScope;
-  workerId: string; assignmentKey: string; now?: number;
+  workerId: string; assignmentKey: string; now?: number; history?: string; requiredBasisDigest?: string;
 }): ProofSearchRecord {
-  const { checkpoint, basisDigest, bytes } = readProofSearchCheckpoint(input.projectRoot, input.reference);
-  if (canonicalMathJson(checkpoint.basis.scope) !== canonicalMathJson(input.scope))
+  const { checkpoint, basisDigest, bytes } = readProofSearchCheckpoint(input.projectRoot, input.reference, input.history);
+  if (canonicalMathJson(checkpoint.basis.scope) !== canonicalMathJson(input.scope) ||
+      input.requiredBasisDigest && basisDigest !== input.requiredBasisDigest)
     throw new Error('math_proof_search_checkpoint_scope_changed');
   const directory = path.join(path.resolve(input.runDirectory), 'proof-search-artifacts');
   const usage = toolUsageSchema.safeParse(checkpoint.counters);
@@ -113,7 +133,7 @@ export function retainProofSearchCheckpoint(input: {
       schema: 'theorem-os.proof-search-record.v1', ...input.scope,
       sourceDigest: checkpoint.basis.sourceDigest, projectionDigest: checkpoint.basis.projectionDigest,
       backendDigest: checkpoint.basis.backendDigest, basisDigest, generation: checkpoint.generation,
-      workerId: input.workerId, assignmentKey: input.assignmentKey, createdAt: input.now ?? Date.now(),
+      history: input.history, workerId: input.workerId, assignmentKey: input.assignmentKey, createdAt: input.now ?? Date.now(),
       checkpoint: { path: file, digest: input.reference.digest },
       ...(usage.success ? { toolUsage: usage.data } : {}),
       evidence: 'advisory-proof-search', proofAcceptance: 'not-accepted',
@@ -130,7 +150,7 @@ export function latestProofSearchRecord(current: ProofSearchRecord | undefined, 
 
 /** Project host-retained bytes to an accessible worker scratch path; old/missing records remain unusable. */
 export function projectProofSearchRecord(input: {
-  record: ProofSearchRecord | undefined; scope: ProofSearchScope; projectRoot: string; runDirectory: string;
+  record: ProofSearchRecord | undefined; scope: ProofSearchScope; projectRoot: string; runDirectory: string; history?: string;
 }): ProofSearchRecord | undefined {
   if (!proofSearchRecordMatches(input.record, input.scope)) return;
   try {
@@ -142,7 +162,8 @@ export function projectProofSearchRecord(input: {
         canonicalMathJson(checkpoint.basis.scope) !== canonicalMathJson(input.scope) ||
         checkpoint.basis.sourceDigest !== record.sourceDigest || checkpoint.basis.projectionDigest !== record.projectionDigest ||
         checkpoint.basis.backendDigest !== record.backendDigest) return;
-    const file = checkpointPath(input.projectRoot, basisDigest, checkpoint.generation);
+    const file = projectedProofSearchPath(path.resolve(input.projectRoot), basisDigest, record.generation, record.checkpoint.digest,
+      digest.optional().parse(input.history ?? record.history));
     assertMathCanonicalPath(file);
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     assertMathCanonicalPath(file);

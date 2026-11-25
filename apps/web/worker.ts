@@ -357,9 +357,10 @@ async function main(watchdog: ReturnType<typeof createWebHostDisconnectWatchdog>
       watchdog.signal.throwIfAborted();
       output = round.output;
       solverRunId = undefined;
-      writeWebActiveRun({ webRunId: request.id, directory, output }, path.join(workspaceRoot, 'active-run.json'));
-      bridge = createWebWorkerBridge({ webRunId: request.id, directory, output, apiKey: key, onMessage: send,
-        ...(round.previousSolverRunId ? { libraryRestart: { previousSolverRunId: round.previousSolverRunId, round: round.round } } : {}) });
+      const active = { webRunId: request.id, directory, output,
+        ...(round.previousSolverRunId ? { libraryRestart: { previousSolverRunId: round.previousSolverRunId, round: round.round } } : {}) };
+      writeWebActiveRun(active, path.join(workspaceRoot, 'active-run.json'));
+      bridge = createWebWorkerBridge({ ...active, apiKey: key, onMessage: send });
       sampleArtifact = createWebArtifactSampler({ directory, output, workers: request.input.workers,
         source: request.input.source, apiKey: key, onArtifact: artifact => {
           latestArtifact = artifact;

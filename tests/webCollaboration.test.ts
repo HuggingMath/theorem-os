@@ -451,9 +451,11 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
     const { owner, request: alice } = await login(), { request: bob } = await login();
     const run = (await (await alice('/api/runs', input())).json()).run; await tick();
     const failed = observation(run.id);
-    failed.checks[0]!.record = { passed: false, status: 'failed', theoremName: 'helper', stdoutPreview: 'Submission.lean:1:1: error: The rfl tactic failed.' };
+    const firstAt = Date.parse(failed.observedAt), secondAt = firstAt + 1;
+    failed.checks[0]!.record = { passed: false, status: 'failed', theoremName: 'helper', checkedAt: firstAt,
+      stdoutPreview: 'Submission.lean:1:1: error: The rfl tactic failed.' };
     runner.calls[0].send({ type: 'observation', observation: failed });
-    runner.calls[0].finish(); await tick();
+    await tick();
     const route = `/api/runs/${run.id}/explain`, question = { taskId: 'helper', commit: 'a'.repeat(40), question: 'Why did it fail?' };
     expect((await alice(route, question)).status).toBe(400);
     expect(asked).toHaveLength(0);
@@ -474,10 +476,27 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
       expect(context).toContain(part);
     expect(asked[0]!.body.input[2]!.content[0]!.text).toBe('Why did it fail?');
 
+    const recheck = observation(run.id, 2), changedPlan = observation(run.id, 3);
+    recheck.checks[0]!.record = { passed: false, status: 'failed', theoremName: 'helper', checkedAt: secondAt,
+      stdoutPreview: 'Submission.lean:1:1: error: The second tactic failed.' };
+    changedPlan.inspection.tasks[0]!.version = 'version-2';
+    changedPlan.inspection.tasks[0]!.objective = changedPlan.plan!.tasks[0]!.objective = 'New objective after both checks';
+    changedPlan.checks = [];
+    runner.calls[0].send({ type: 'observation', observation: recheck });
+    runner.calls[0].send({ type: 'observation', observation: changedPlan });
+    runner.calls[0].finish(); await tick();
+
+    const selected = { ...question, apiKey: key, taskVersion: 'version-1', receiptId: 'fixture-check', checkAt: firstAt };
+    expect((await alice(route, { ...selected, checkAt: undefined })).status).toBe(409);
+    expect((await alice(route, { ...selected, receiptId: 'unknown-check' })).status).toBe(404);
+    expect((await alice(route, { ...selected, taskVersion: 'version-2' })).status).toBe(404);
     mode = 'hold';
-    const stop = new AbortController(), held = alice(route, { ...question, apiKey: key }, stop.signal).catch(() => undefined);
+    const stop = new AbortController(), held = alice(route, selected, stop.signal).catch(() => undefined);
     for (let wait = 0; asked.length < 2 && wait < 100; wait++) await new Promise(resolve => setTimeout(resolve, 10));
-    const busy = await alice(route, { ...question, apiKey: key });
+    expect(asked[1]!.body.input[0]!.content[0]!.text).toContain('The rfl tactic failed.');
+    expect(asked[1]!.body.input[0]!.content[0]!.text).toContain('Conditional fixture helper');
+    expect(asked[1]!.body.input[0]!.content[0]!.text).not.toMatch(/The second tactic failed|New objective after both checks/u);
+    const busy = await alice(route, { ...selected, checkAt: secondAt });
     expect(busy.status).toBe(429);
     expect(asked).toHaveLength(2);
     stop.abort(); await held;
@@ -486,8 +505,10 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
     release();
 
     mode = 'reject';
-    const rejected = await alice(route, { ...question, apiKey: key });
+    const rejected = await alice(route, { ...selected, checkAt: secondAt });
     expect(rejected.status).toBe(502);
+    expect(asked[2]!.body.input[0]!.content[0]!.text).toContain('The second tactic failed.');
+    expect(asked[2]!.body.input[0]!.content[0]!.text).not.toContain('The rfl tactic failed.');
     const body = await rejected.text();
     expect(body).toContain('模型服务拒绝了这个 API Key。'); expect(body).not.toContain(key);
     const stored = JSON.stringify([service.storage.getRun(owner, run.id), service.storage.getEvents(owner, run.id)]);

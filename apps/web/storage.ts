@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { canonicalMathJson, mathDigest, syncMathDirectory, writeMathFrozen } from '../../src/math/mathRuntimeIo';
 import type { WebArchive, WebCheckReceipt, WebCommandResult, WebObservation, WebTaskSource } from './collaboration';
 import type { WebAccountIdentity, WebAgentAction, WebEvent, WebExplanation, WebRun, WorkerExplanationCheckpoint } from './shared';
+import { webRunEventLimit } from './shared';
 import type { WebShareSnapshot } from './share';
 import { archiveObservationCompactor, compactObservation, hydrateArchiveObservation, hydrateObservation,
   type ArchivedWebObservation, type CompactWebObservation, type CompactWebTaskSource } from './observationSources';
@@ -220,7 +221,20 @@ export class WebStorage {
   }
   loadRuns(): StoredRun[] {
     return this.listRecords(['owners']).flatMap(directory => this.listRecords(['owners', directory, 'runs'])
-      .map(id => this.readRun(['owners', directory, 'runs', id]))
+      .map(id => {
+        const location = ['owners', directory, 'runs', id];
+        const stored = this.readRun(location);
+        if (!stored) return;
+        // An event may have reached disk just before the summary was replaced.
+        const events = stored.run.events;
+        for (let sequence = (events.at(-1)?.sequence ?? 0) + 1; ; sequence++) {
+          const event = this.getRecord<WebEvent>([...location, 'events', `${sequence}.json`]);
+          if (!event) break;
+          events.push(event);
+          if (events.length > webRunEventLimit) events.shift();
+        }
+        return stored;
+      })
       .filter((item): item is StoredRun => Boolean(item)))
       .sort((a, b) => a.run.createdAt.localeCompare(b.run.createdAt));
   }
