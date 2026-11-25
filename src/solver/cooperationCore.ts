@@ -60,6 +60,7 @@ export abstract class CooperationCore {
   protected lastAssembly?: string;
   private assemblyYieldedLeads = new WeakSet<CooperativeAction>();
   private waiters = new Set<() => void>();
+  protected dispatchRevision = 0;
   protected reservedTurns = new Set<string>();
   protected liveWorkers: Set<string>;
   protected checkedDeliveries = new WeakSet<TaskProof>();
@@ -67,7 +68,7 @@ export abstract class CooperationCore {
   protected readonly rejectedIntegrationBatches = new Set<string>();
   protected readonly taskTypePreflight = new TaskTypePreflightCache();
   protected preparingTaskTypes = new Map<TaskRecord, {
-    workerId: string; controller: AbortController; current: () => boolean; settled: Promise<void>;
+    workerId: string; groupId: string; controller: AbortController; current: () => boolean; settled: Promise<void>;
   }>();
   /** Exact helper contracts already tried by the host tactic battery in this process. */
   protected readonly tacticBatteryAttempts = new Set<string>();
@@ -381,13 +382,15 @@ export abstract class CooperationCore {
   protected get responsibility() {
     return { tasks: this.archive.tasks, groups: this.archive.groups, stopped: this.stoppedWorkers };
   }
+  protected workerCoolingDown(workerId: string) {
+    return this.input.state.workers?.some(worker => worker.id === workerId && worker.recovery?.phase === 'cooling-down') === true;
+  }
   protected get allocationPeers() {
     const occupied = new Set([...this.active].filter(([, active]) => active.action.kind !== 'task').map(([id]) => id));
     if (this.archive.review?.status === 'running' && this.archive.review.workerId) occupied.add(this.archive.review.workerId);
     for (const review of this.archive.statementReviews ?? []) if (review.workerId && ['translating', 'reviewing'].includes(review.status))
       occupied.add(review.workerId);
-    for (const worker of this.input.state.workers ?? []) if (worker.recovery?.phase === 'cooling-down') occupied.add(worker.id);
-    return this.livePeers.filter(worker => !occupied.has(worker.id));
+    return this.livePeers.filter(worker => !occupied.has(worker.id) && !this.workerCoolingDown(worker.id));
   }
   protected get explorationIdentity() {
     return { environmentDigest: this.input.state.environmentDigest,
@@ -442,6 +445,10 @@ export abstract class CooperationCore {
           this.input.emit('next_check_outcome', { checkId: record.id, outcomeDeliveryId: outcome.id, conclusion: outcome.checkOutcome.conclusion });
         }
       }
+      // Older continuation seeds could leave a settled check's task in the work queue.
+      if (node && (record.status === 'awaiting-decision' || record.status === 'decided') &&
+          (node.status === 'pending' || node.status === 'running'))
+        this.moveTask(node, 'completed', 'research-completed');
       if (record.status !== 'pending' && node?.assignment) {
         const active = this.active.get(node.assignment.workerId);
         if (active?.action.kind === 'task' && active.action.assignment === node.assignment && !active.cancelled) {
@@ -626,6 +633,7 @@ export abstract class CooperationCore {
         !this.actionRouteRetired(active.action)) occupy(taskGroup(active.action.task), id);
     for (const publication of this.proofPublications.values()) if (!this.actionRouteRetired(publication.action))
       occupy(taskGroup(publication.action.task), publication.workerId);
+    for (const preparation of this.preparingTaskTypes.values()) occupy(preparation.groupId, preparation.workerId);
     for (const review of this.archive.statementReviews ?? []) {
       const node = nodes.get(review.taskId);
       if (node && ['translating', 'reviewing'].includes(review.status)) occupy(taskGroup(node.task), review.workerId);
@@ -769,6 +777,7 @@ export abstract class CooperationCore {
       if (!pending.controller.signal.aborted && !pending.current()) pending.controller.abort();
   }
   protected wake() {
+    this.dispatchRevision++;
     this.cancelStaleTaskTypes();
     this.refreshPlanApproval();
     const lead = this.active.get(this.lead.id), canonical = this.archive.canonicalCommit;
@@ -786,6 +795,7 @@ export abstract class CooperationCore {
     this.waiters.clear();
   }
   modelBudgetChanged() { this.refreshGoalProgress(); this.input.save(); this.wake(); }
+  workerAvailabilityChanged() { this.wake(); }
   protected rejectWorkerDelivery(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>,
     submission: string, error: Error): DeliveryReceipt {
     const receipt = rejectedDeliveryReceipt({ assignment: action.assignment, workerId: worker.id,
@@ -934,6 +944,10 @@ export abstract class CooperationCore {
     this.active.set(worker.id, { action, interrupt, notify, requestReady }); this.changed();
   }
   deactivate(worker: ResearchWorker) { this.active.delete(worker.id); this.changed(); }
+  protected nextCheckDispatchable(node: TaskRecord) {
+    return !node.nextCheckId || this.archive.nextChecks?.some(record => record.id === node.nextCheckId &&
+      record.status === 'pending' && currentNextCheck(record, this.archive, this.explorationIdentity)) === true;
+  }
   current(action: CooperativeAction) {
     if (action.kind === 'assemble') return !this.failure && !this.stopping && this.liveWorkers.has(this.lead.id) && this.canAssemble(action.seedCommit);
     if (action.kind === 'lead' && this.assemblyYieldedLeads.has(action)) return false;
@@ -958,9 +972,7 @@ export abstract class CooperationCore {
     }
     return action.kind !== 'task' || !this.actionRouteRetired(action) &&
       this.archive.tasks.some(node => node.assignment === action.assignment && digest(node.task) === action.assignment.taskDigest &&
-      (!node.nextCheckId || this.archive.nextChecks?.some(record => record.id === node.nextCheckId && record.status === 'pending' &&
-        currentNextCheck(record, this.archive, { problemReceiptDigest: this.input.state.problem.receiptDigest,
-          environmentDigest: this.input.state.environmentDigest }))) &&
+      this.nextCheckDispatchable(node) &&
       (!node.capacityExploration || currentCapacityExploration(node, this.archive.tasks, this.explorationIdentity)) &&
       (!action.assignment.connectionCheck || taskReferenceDependencies(node) || taskConnectionCheckCurrent(node.task,
         action.assignment, this.archive.tasks, { environmentDigest: this.input.state.environmentDigest,
@@ -1063,8 +1075,9 @@ export abstract class CooperationCore {
     return [this.node(task.id), ...this.dependencies(task)].some(node => node &&
       (node.pendingValidation || this.preparingStatementTasks.has(node.task.id)));
   }
-  protected async waitForDispatch(): Promise<typeof RETRY_DISPATCH> {
-    await this.wait();
+  protected async waitForDispatch(observedRevision = this.dispatchRevision): Promise<typeof RETRY_DISPATCH> {
+    // A wake between checking readiness and subscribing already invalidates the selection.
+    if (observedRevision === this.dispatchRevision) await this.wait();
     return RETRY_DISPATCH;
   }
   protected visible(task: CooperativeTask): TaskRecord[] {

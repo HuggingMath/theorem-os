@@ -7,15 +7,8 @@ import { directSolverModules } from '../src/solver/modules';
 import { runSolver } from '../src/solver/run';
 import { localExample } from './helpers/solver';
 
-const host = vi.hoisted(() => ({ run: vi.fn(), beforeWrite: undefined as
-  ((file: string, value: unknown) => void) | undefined }));
-vi.mock('../src/math/mathRuntimeIo', async original => {
-  const actual = await original<typeof import('../src/math/mathRuntimeIo')>();
-  return { ...actual, writeMathJsonDurable: (...args: Parameters<typeof actual.writeMathJsonDurable>) => {
-    host.beforeWrite?.(args[0], args[1]);
-    return actual.writeMathJsonDurable(...args);
-  } };
-});
+const host = vi.hoisted(() => ({ run: vi.fn() }));
+let beforePublish: ((file: string) => void) | undefined;
 vi.mock('../src/math/mathBuildManifest', () => ({ readMathBuildManifest: vi.fn() }));
 vi.mock('../src/math/leanDiagnostics', async original => ({
   ...await original<typeof import('../src/math/leanDiagnostics')>(),
@@ -54,11 +47,16 @@ function competingLock(lockPath: string): number | null {
 }
 
 beforeEach(() => {
-  host.run.mockReset(); open.mockClear(); host.beforeWrite = undefined;
+  host.run.mockReset(); open.mockClear(); beforePublish = undefined;
+  const rename = fs.renameSync;
+  vi.spyOn(fs, 'renameSync').mockImplementation((source, destination) => {
+    beforePublish?.(String(destination));
+    rename(source, destination);
+  });
   vi.spyOn(console, 'log').mockImplementation(() => {});
 });
 afterEach(() => {
-  host.beforeWrite = undefined;
+  beforePublish = undefined;
   vi.restoreAllMocks(); vi.unstubAllEnvs();
   for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
 });
@@ -67,7 +65,7 @@ describe('run failure checkpoint ownership', () => {
   it('retains the real run lock while publishing failure state and output', async () => {
     const current = fixture(), writes: string[] = [];
     let failed = false;
-    host.beforeWrite = file => {
+    beforePublish = file => {
       if (!failed || ![current.stateFile, current.output].includes(file)) return;
       writes.push(file);
       expect(competingLock(current.lockPath)).toBe(73);
@@ -90,7 +88,7 @@ describe('run failure checkpoint ownership', () => {
   it('publishes one cancellation checkpoint and does not overwrite it after releasing the lease', async () => {
     const current = fixture(), writes: string[] = [];
     let cancelled = false;
-    host.beforeWrite = file => {
+    beforePublish = file => {
       if (!cancelled || ![current.stateFile, current.output].includes(file)) return;
       writes.push(file);
       expect(competingLock(current.lockPath)).toBe(73);
@@ -118,7 +116,7 @@ describe('run failure checkpoint ownership', () => {
   it('leaves state and output untouched after the lock inode is replaced', async () => {
     const current = fixture(), writes: string[] = [];
     let invalidated = false, before!: Buffer;
-    host.beforeWrite = file => {
+    beforePublish = file => {
       if (invalidated && [current.stateFile, current.output].includes(file)) writes.push(file);
     };
     host.run.mockImplementation(async () => {

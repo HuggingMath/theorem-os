@@ -110,7 +110,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
     console.log('Accepted proofs automatically generate audited explanations of every original target. --explanation-language zh|en selects the language (default zh; resume keeps the previous language). --no-explanations skips generation. The result.explanations field records progress and artifact/proof.md paths. Explanation failures preserve proof acceptance and exit code; --resume retries them without solving again. Explanation time and tokens are separate from solving limits.');
     console.log('--library-catalog FILE --library-catalog-sha256 DIGEST enables agent search/get/request against one pinned release. Installation requests end this frozen run for host-controlled continuation.');
     console.log('--continuation-manifest FILE attaches explicit historical sources and notes without changing the verbatim task file. Resume retains the frozen attachment identity; historical material remains advisory.');
-    console.log('--continuation-source-run OLD_RESULT_OR_STATE initializes a new cooperative run from the old run, freshly checks its saved helpers, and starts solving in the same process. Use --resume to retry an interrupted zero-turn initialization; combine with --startup-only to retain a prepared checkpoint.');
+    console.log('--continuation-source-run OLD_RESULT_OR_STATE initializes a new cooperative run from the old run, freshly checks its saved helpers, and starts solving in the same process. With --startup-only, the run freezes its continuation and checks saved helpers when resumed. Use --resume to retry an interrupted zero-turn initialization.');
     console.log('--check-statement also elaborates the target files at startup (theorem bodies may still be sorry) and fails with math_statement_check_failed on a Lean error; statement-diagnostics.json keeps the messages.');
     console.log('--plan-approval holds every worker after the first accepted plan until a person approves that exact plan version (queuePlanApproval, the web workbench). The Lead takes a revision turn only for Lead guidance written while it waits. Waiting counts toward --max-run-seconds. Requires cooperative coordination and at least 2 workers; resume requires the same setting.');
     console.log('Lead planning and ordinary research first yield a resumable scheduling checkpoint after 120 seconds, with a reminder after 90 seconds. Lead planning keeps 120-second slices; ordinary research backs off to at most 960 seconds. Saved threads and drafts survive resume. Proof turns and total solving budgets are unchanged.');
@@ -252,6 +252,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
   let ownedState: SolverRunState | undefined;
   let proofEnvironment: Awaited<ReturnType<typeof prepareMathProofEnvironment>> | undefined;
   let continuationSeeding = false;
+  let continuationSourceRun = values['continuation-source-run'];
   let ownsRun = false;
   let publishedExit: number | undefined;
   const emit = (event: string, details = {}) => console.log(JSON.stringify({ event, at: Date.now(), ...details,
@@ -397,6 +398,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
       let sourceFeedback: string | undefined;
       if (values.resume) {
         state = resumedState!;
+        continuationSourceRun ??= state.pendingContinuationSource;
         assertAgentTeamProcessesStopped(state);
         if (canonicalMathJson(state.agentHarness ?? null) !== canonicalMathJson(agentHarness ?? null))
           throw new Error('math_resume_harness_identity_changed');
@@ -660,10 +662,11 @@ export async function runSolver(args: string[], root: string, customModules?: So
       const failedPreparation = peerPreparation.find(result => result.status === 'rejected');
       if (failedPreparation?.status === 'rejected') throw failedPreparation.reason;
       let freshContinuationChecks: readonly TaskProof[] | undefined;
-      if (values['continuation-source-run']) {
+      if (continuationSourceRun) {
         save(); continuationSeeding = true;
-        await (singleSkill ? seedSingleSolverContinuation : seedSolverContinuation)({ sourceRun: values['continuation-source-run'], run: stateFile, root, buildManifest: buildFile,
+        await (singleSkill ? seedSingleSolverContinuation : seedSolverContinuation)({ sourceRun: continuationSourceRun, run: stateFile, root, buildManifest: buildFile,
           signal, lease, preparedEnvironment: env, timeoutMs: maxRunMs === Infinity ? Infinity : Math.max(1, preparationMs - (Date.now() - preparationStarted)),
+          deferChecks: values['startup-only'],
           onProgress: emit, onSeeded: (seeded, checks) => { state = ownedState = seeded; freshContinuationChecks = checks; } });
         continuationSeeding = false;
         if (!state.continuationDigest) throw new Error('math_continuation_identity_missing');
@@ -765,7 +768,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
       if (ownedState) {
         // A zero-turn continuation can retry any preparation step, including
         // snapshot distribution and startup-only output after the seed handoff.
-        if (!(preparing && values['continuation-source-run'] && ownedState.phase === 'prepared'))
+        if (!(preparing && continuationSourceRun && ownedState.phase === 'prepared'))
           ownedState.phase = 'finished';
         if (ownedState.solveStartedAt && !ownedState.solveFinishedAt) ownedState.solveFinishedAt = Date.now();
         if (executionClock) ownedState.solveWaitingMs = executionClock.waitingMs();

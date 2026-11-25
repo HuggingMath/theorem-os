@@ -35,7 +35,7 @@ import { hasDeterministicLeanFailure } from './proofReuse';
 import { VerificationCheckpointError, withVerificationCheckpoints } from './verificationCheckpoint';
 import { captureDeliveryArtifacts } from './deliveryArtifacts';
 import { rememberFreshConditionalCheck } from './freshContinuationChecks';
-import { feasibilityReviewInputDigest, researchCheckpointInputDigest, researchCheckpointLocalInputDigest, researchCheckpointOutputDigest,
+import { resumableFeasibilityReviewInput, researchCheckpointInputDigest, researchCheckpointLocalInputDigest, researchCheckpointOutputDigest,
   UNCHANGED_RESEARCH_CHECKPOINT, type ResearchCheckpoint } from './researchCheckpoints';
 import { recordRouteBlockers, validateBlockerProposals } from './routeControl';
 
@@ -197,7 +197,7 @@ type SeedSource = z.infer<typeof sourceSchema>;
 export type ContinuationSeedReport = {
   schema: 'theorem-os.continuation-seed.v1'; sourceRunId: string; runId: string; sourceStateFile: string;
   stateFile: string; sourceDigest: string; snapshotDigest?: string; canonicalCommit?: string;
-  stage: 'frozen' | 'installing' | 'checking' | 'complete' | 'interrupted'; sourcesInstalled?: boolean;
+  stage: 'frozen' | 'installing' | 'awaiting-checks' | 'checking' | 'complete' | 'interrupted'; sourcesInstalled?: boolean;
   candidates: string[]; checked: string[]; failed: string[]; error?: string;
   evidence: 'advisory-sources-require-recheck' | 'fresh-helper-receipts';
 };
@@ -559,19 +559,19 @@ function taskDraftAssignment(draft: SavedTaskDraft, task: CooperativeTask,
 
 function restorableTaskDraft(draft: SavedTaskDraft, node: TaskRecord, state: SolverRunState) {
   const worker = state.workers!.find(worker => worker.id === draft.workerId);
-  if (isFeasibilityReview(node.task) && (!draft.feasibilityInputDigest ||
-      draft.feasibilityInputDigest !== feasibilityReviewInputDigest({ task: node.task, workerId: draft.workerId,
-        tasks: state.cooperation!.tasks, deliveries: state.cooperation!.deliveries ?? [],
-        problem: state.problem, worktree: state.worktree, canonicalCommit: state.cooperation!.canonicalCommit!,
-        environmentDigest: state.environmentDigest, problemReceiptDigest: state.problem.receiptDigest,
-        retrievalDigest: state.retrievalDigest, knowledgeDigest: state.knowledgeDigest }))) return false;
-  return !draft.archived && (node.status === 'pending' ||
+  const eligible = !draft.archived && (node.status === 'pending' ||
     pausedResearchCheckpoint(node, state.cooperation!.researchCheckpoints?.[node.task.id])) && !node.alternativeRoutes?.length &&
     draft.taskId === node.task.id && draft.taskDigest === taskVersion(node.task) &&
     draft.source.environmentDigest === state.environmentDigest && draft.source.problemReceiptDigest === state.problem.receiptDigest &&
     draft.source.sourcePolicyDigest === policyDigest(state.problem) && worker &&
     assessTaskResponsibility({ ...node, assignment: undefined }, worker,
       { tasks: state.cooperation!.tasks, groups: state.cooperation!.groups }).kind === 'matches';
+  if (!eligible) return false;
+  return !isFeasibilityReview(node.task) || Boolean(resumableFeasibilityReviewInput({ task: node.task, workerId: draft.workerId,
+    tasks: state.cooperation!.tasks, deliveries: state.cooperation!.deliveries ?? [],
+    problem: state.problem, worktree: state.worktree, canonicalCommit: state.cooperation!.canonicalCommit!,
+    environmentDigest: state.environmentDigest, problemReceiptDigest: state.problem.receiptDigest,
+    retrievalDigest: state.retrievalDigest, knowledgeDigest: state.knowledgeDigest }, draft));
 }
 
 function frozenTaskAssignment(candidate: z.infer<typeof frozenCandidate>, task: CooperativeTask,
@@ -885,7 +885,7 @@ function freezeSource(source: SeedSource, directory: string) {
 export async function seedSolverContinuation(options: {
   sourceRun: string; run: string; root: string; buildManifest: string; signal: AbortSignal; timeoutMs?: number;
   onProgress?: (event: string, details: Record<string, unknown>) => void;
-  lease?: MathLease; preparedEnvironment?: NodeJS.ProcessEnv;
+  lease?: MathLease; preparedEnvironment?: NodeJS.ProcessEnv; deferChecks?: boolean;
   onSeeded?: (state: SolverRunState, freshChecks: TaskProof[]) => void;
 }): Promise<ContinuationSeedReport> {
   const target = readRunInspection(options.run), sourceStateFile = path.basename(path.resolve(options.sourceRun)) === 'state.json'
@@ -1000,6 +1000,11 @@ export async function seedSolverContinuation(options: {
     }
     lease.assertHeld();
     if (!seeded) writeMathJsonDurable(sourceFile, source, 0o400);
+    const deferChecks = options.deferChecks && candidateIds.length > 0;
+    if (deferChecks && !state.pendingContinuationSource) {
+      state.pendingContinuationSource = sourceStateFile;
+      writeSolverRunState(stateFile, state);
+    }
     const report: ContinuationSeedReport = { schema: 'theorem-os.continuation-seed.v1', sourceRunId: source.source.runId,
       runId: state.runId, sourceStateFile, stateFile, sourceDigest: mathDigest(canonicalMathJson(source)), stage: 'frozen',
       candidates: candidateIds, checked: [], failed: [], evidence: 'advisory-sources-require-recheck' };
@@ -1060,6 +1065,11 @@ export async function seedSolverContinuation(options: {
       report.sourcesInstalled = true; saveReport();
       emit('continuation_seed_installed', { sourceRunId: source.source.runId, runId: state.runId, tasks: tasks.length,
         candidates: candidateIds.length, snapshotDigest: snapshot.digest });
+      if (deferChecks) {
+        report.stage = 'awaiting-checks'; saveReport();
+        options.onSeeded?.(state, []);
+        return report;
+      }
       const environmentFile = path.join(directory, 'environment-solver.json');
       assertMathCanonicalPath(environmentFile);
       if ((fs.lstatSync(environmentFile).mode & 0o777) !== 0o400) throw new Error('math_continuation_seed_environment_not_frozen');
@@ -1322,7 +1332,8 @@ export async function seedSolverContinuation(options: {
       }
       state.cooperation.deliveries = restoredResearchDeliveries(source, state);
       const completedResearch = currentCompletedResearch(source, state, plan.tasks, tasks, state.cooperation.deliveries);
-      for (const node of tasks.filter(node => isAdvisoryTask(node.task) && !node.capacityExploration)) {
+      // Host next checks restore their lifecycle and finding with their own records.
+      for (const node of tasks.filter(node => isAdvisoryTask(node.task) && !node.capacityExploration && !node.nextCheckId)) {
         const completion = completedResearch.get(node.task.id);
         setTaskStatus(node, completion ? 'completed' : 'pending', 'reconstructed');
         node.finding = completion?.finding; node.researchCompletion = completion?.record;
@@ -1416,6 +1427,10 @@ export async function seedSolverContinuation(options: {
       }
       writeSolverRunState(stateFile, state);
       report.stage = 'complete'; saveReport();
+      if (state.pendingContinuationSource) {
+        delete state.pendingContinuationSource;
+        writeSolverRunState(stateFile, state);
+      }
       options.onSeeded?.(state, freshChecks);
       return report;
     } catch (error) {

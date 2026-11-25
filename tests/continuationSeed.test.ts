@@ -343,7 +343,7 @@ async function freshConditionalFixture(explicit = true, prepared = true) {
 
 async function suspendedTaskDraftFixture(kind: 'research' | 'sketch' | 'goal' | 'lemma' | 'feasibility' = 'research',
   notes: string | null = '\ufeffSUSPENDED_ROUTE_FINDING λ\r\n```math\n' +
-    '{"conclusion":"inconclusive","summary":"SUSPENDED_ROUTE_FINDING"}\n```\r\n', sourceDraft = true) {
+    '{"conclusion":"inconclusive","summary":"SUSPENDED_ROUTE_FINDING"}\n```\r\n', sourceDraft = true, scopedReview = false) {
   const f = fixture(), state = f.oldState, peer = state.workers![1]!;
   peer.role = 'engineer'; f.newState.workers![1]!.role = 'engineer';
   const tasks = state.cooperation!.tasks, goal = tasks.find(node => node.task.id === 'goal')!;
@@ -372,8 +372,10 @@ async function suspendedTaskDraftFixture(kind: 'research' | 'sketch' | 'goal' | 
           reason: 'fixture-no-lean', evidence: 'advisory-type-elaboration', proofAcceptance: 'not-assessed' }, current: () => true }));
     }
   } else {
+    if (scopedReview) tasks.push({ task: { id: 'inspected_input', kind: 'research',
+      objective: 'Check the local finite input.', status: 'paused', dependsOn: [], revision: 0 }, status: 'pending', attempts: 0 });
     task = { id: 'saved_route', kind: kind === 'feasibility' ? 'research' : kind,
-      objective: 'Investigate the first route', dependsOn: kind === 'feasibility' ? [] : ['first'], revision: 0,
+      objective: 'Investigate the first route', dependsOn: kind === 'feasibility' ? scopedReview ? ['inspected_input'] : [] : ['first'], revision: 0,
       ownerId: peer.id, ...(kind === 'feasibility' ? { reviewScope: 'feasibility' as const } : {}) };
     goal.task = { ...goal.task, dependsOn: [...goal.task.dependsOn, task.id] };
   }
@@ -791,6 +793,31 @@ describe('continuation of per-task saved drafts', () => {
     expect(taskDraftAttachments(f.stateFile)).toContainEqual(expect.objectContaining({ taskId: f.task.id,
       notes: 'OLD_REVIEW_NOTES\n', commit: f.draftCommit }));
     expect(node.researchCompletion).toBeUndefined(); expect(node.finding).toBeUndefined();
+  });
+
+  it('resumes a scoped feasibility draft after unrelated canonical additions in cold continuation', async () => {
+    const notes = 'RETAINED_REVIEW_NOTES\n';
+    const f = await suspendedTaskDraftFixture('feasibility', notes, false, true);
+    fs.writeFileSync(path.join(f.sourceWorktree, f.projectRelative, 'Submission/Helpers.lean'),
+      helpers.replace('end Submission.Helpers', 'lemma unrelated : True := by trivial\nend Submission.Helpers'));
+    f.oldState.cooperation!.canonicalCommit = commit(f.sourceWorktree, 'Add unrelated helper');
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    await f.seed();
+
+    const state = readSolverRunState(f.stateFile), node = state.cooperation!.tasks.find(node => node.task.id === f.task.id)!;
+    expect(node.assignment).toBeDefined();
+    expect(state.cooperation!.researchDrafts?.[f.task.id]).toMatchObject({ commit: f.draftCommit, suspended: true });
+    const cooperative = cooperationFor(f, state), peer = { ...state.workers![1]!, ownedFiles: state.problem.ownedFiles };
+    try {
+      await cooperative.restore();
+      const action = await cooperative.next(peer, { maxTurns: Infinity, remainingMs: Infinity });
+      if (action?.kind !== 'task') throw new Error('fixture_expected_feasibility_review');
+      expect(action.task.id).toBe(f.task.id);
+      expect(action.assignment.feasibilityInputDigest).not.toBe(f.draftAssignment.feasibilityInputDigest);
+      expect(fs.readFileSync(path.join(peer.worktree, f.projectRelative, 'Submission/Helpers.lean'), 'utf8')).toContain('lemma unrelated');
+      expect(fs.readFileSync(path.join(peer.worktree, 'RESEARCH.md'), 'utf8')).toBe(notes);
+      expect(node.finding).toBeUndefined(); expect(node.proof).toBeUndefined();
+    } finally { await cooperative.stop(); }
   });
 
   it('preserves all 17 UTF-8 drafts above 16 MB through bounded attachments and another ordinary continuation', async () => {
@@ -2945,7 +2972,7 @@ describe('continuation of a host-frozen unfinished delivery', () => {
     expect(fs.readFileSync(f.sourceStateFile)).toEqual(historical);
   });
 
-  it('migrates a scoped pending check and its parent evidence without adding it to the editable proof plan', async () => {
+  it.each(['pending', 'decided'] as const)('migrates a scoped %s check and its parent evidence without reopening it', async status => {
     const f = fixture(), cooperation = f.oldState.cooperation!, goal = cooperation.tasks.find(node => node.task.id === 'goal')!.task;
     const source: CooperativeTask = { id: 'membership_audit', kind: 'research', objective: 'Inspect the missing membership inference.',
       revision: 0, dependsOn: ['goal'] };
@@ -2962,12 +2989,25 @@ describe('continuation of a host-frozen unfinished delivery', () => {
       finding, findingDigest: mathDigest(finding), mathematicalGap: gap,
       mathematicalGapScope: bindMathematicalGap(gap, source, cooperation, identity) });
     const proposed = proposedNextChecks(cooperation, identity, 11)[0]!;
-    cooperation.nextChecks = [proposed.record]; cooperation.tasks.push(proposed.node);
+    const checkFinding = 'The attempted application still requires membership.';
+    if (status === 'decided') {
+      const { id, taskId, taskDigest, scope } = proposed.record;
+      const outcome = { checkId: id, conclusion: 'inconclusive' as const, summary: checkFinding, evidenceRefs: [] };
+      proposed.record.status = status;
+      proposed.record.outcome = { ...outcome, deliveryId: 'membership-outcome' };
+      proposed.record.decision = { checkId: id, outcomeDeliveryId: 'membership-outcome', action: 'stop', reason: checkFinding, at: 13 };
+      cooperation.deliveries!.push({ id: 'membership-outcome', taskId, taskDigest, producer: 'prover-1', kind: 'research',
+        status: 'advisory', statement: proposed.node.task.objective, premises: [], dependencies: [], remainingObligations: [],
+        summary: checkFinding, evidenceRefs: [], createdAt: 12, checkOutcome: outcome, checkOutcomeScope: scope });
+    }
+    cooperation.nextChecks = [proposed.record];
+    cooperation.tasks.push(status === 'decided' ? { ...proposed.node, status: 'completed', finding: checkFinding } : proposed.node);
     writeSolverRunState(f.sourceStateFile, f.oldState);
     await f.seed();
     const restored = readSolverRunState(f.stateFile).cooperation!;
     expect(restored.nextChecks).toEqual([proposed.record]);
-    expect(restored.tasks.find(node => node.nextCheckId === proposed.record.id)).toMatchObject({ task: proposed.node.task, status: 'pending' });
+    expect(restored.tasks.find(node => node.nextCheckId === proposed.record.id)).toMatchObject({ task: proposed.node.task,
+      ...(status === 'decided' ? { status: 'completed', finding: checkFinding } : { status: 'pending' }) });
     expect(restored.deliveries!.find(delivery => delivery.id === 'membership-gap')?.mathematicalGap?.nextCheck).toEqual(gap.nextCheck);
     expect(restored.tasks.find(node => node.nextCheckId)?.proof).toBeUndefined();
     await f.seed();

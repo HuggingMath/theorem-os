@@ -43,10 +43,30 @@ class InvalidLeadPlanDraft extends Error {
 
 /** Lead plan acceptance, plan identity and the idle original-goal frontier. */
 export abstract class CooperationPlanning extends CooperationIntegration {
+  /** Notes beyond the legacy plan parser's limit remain available as a draft. */
+  protected leadNotes(commit?: string): { text?: string; digest: string } {
+    const worktree = this.lead.worktree, file = path.join(worktree, 'RESEARCH.md');
+    if (commit) {
+      const [blob, bytes] = git(worktree, ['ls-tree', '--format=%(objectname) %(objectsize)', commit, '--', 'RESEARCH.md']).split(' ');
+      if (blob && Number(bytes) > MAX_RESEARCH_NOTES_BYTES) return { digest: 'git-blob:' + blob };
+      const text = blob ? committedSource(worktree, commit, 'RESEARCH.md') : '';
+      return { text, digest: mathDigest(text) };
+    }
+    try {
+      const text = fs.existsSync(file) ? readMathText(file, MAX_RESEARCH_NOTES_BYTES) : '';
+      return { text, digest: mathDigest(text) };
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== 'math_runtime_file_too_large') throw error;
+      return { digest: 'git-blob:' + git(worktree, ['hash-object', '--no-filters', '--', file]) };
+    }
+  }
+
   protected syncPlanNotes() {
     if (!this.archive.planEdited) return;
     const file = path.join(this.lead.worktree, 'RESEARCH.md');
-    const source = fs.existsSync(file) ? readMathText(file, MAX_RESEARCH_NOTES_BYTES) : '';
+    const { text: source } = this.leadNotes();
+    // The accepted graph is already durable. Leave a large journal intact and use the live plan channel.
+    if (source === undefined) return;
     const plan = '```math\n' + formatPlanJson({ tasks: collapseTaskFamilies(this.plannedTasks().map(node => node.task)), groups: this.archive.groups?.map(route => route.group),
       ...(this.archive.proofRoutes?.length ? { proofRoutes: this.archive.proofRoutes } : {}) }) + '\n```';
     // Replace the first plan fence and drop the rest, so an applied revision cannot be read again.
@@ -112,17 +132,13 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     const sourceDigest = commit ? ownedSourceDigest(problem, this.lead.worktree, commit) :
       mathDigest(canonicalMathJson(problem.ownedFiles.map(file => [file,
         mathDigest(fs.readFileSync(path.join(this.lead.worktree, problem.projectRelative, file)))])));
-    const notes = commit ? (git(this.lead.worktree, ['ls-tree', '--name-only', commit, '--', 'RESEARCH.md'])
-      ? committedSource(this.lead.worktree, commit, 'RESEARCH.md') : '') :
-      (fs.existsSync(path.join(this.lead.worktree, 'RESEARCH.md'))
-        ? readMathText(path.join(this.lead.worktree, 'RESEARCH.md'), MAX_RESEARCH_NOTES_BYTES) : '');
     // New peer evidence must release the pause, because a plan input drops any delivery whose task version
     // has since advanced and would otherwise hide the finding that alone can wake the Lead. The immutable
     // content of peer publications is that evidence; a peer saving its notes mid-slice is work this Lead
     // already dispatched and must not re-open the turn on every checkpoint.
     return mathDigest(canonicalMathJson({ inputDigest: this.planningInputDigest('pause'),
       evidenceDigest: this.planningEvidenceDigest(), planVersion: this.planVersion(),
-      sourceDigest, notesDigest: mathDigest(notes) }));
+      sourceDigest, notesDigest: this.leadNotes(commit).digest }));
   }
   /** A completed decision covers its own bookkeeping, but never evidence arriving during that dispatch. */
   protected rememberLeadDecision(action: CooperativeAction) {
@@ -361,9 +377,8 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     const { plan, nextCheckDecisions, researchDecisions, progressDecision, configuredGroups, shown, retirement } = this.preparePlan(
       planInput ?? this.readLeadPlan(leadAction), decidingAction, restoringPlan);
     const { tasks, proofRoutes } = plan;
-    const publicationResponseDigest = publication ? this.proposedPlanDigest(
-      git(this.lead.worktree, ['ls-tree', '--name-only', publication.action.seedCommit, '--', 'RESEARCH.md'])
-        ? committedSource(this.lead.worktree, publication.action.seedCommit, 'RESEARCH.md') : '') : undefined;
+    const seedNotes = publication ? this.leadNotes(publication.action.seedCommit) : undefined;
+    const publicationResponseDigest = seedNotes?.text !== undefined ? this.proposedPlanDigest(seedNotes.text) : seedNotes?.digest;
     const previousGroups = new Map(this.archive.groups?.map(record => [record.group.id, record]));
     const current = new Map(this.archive.tasks.map(node => [node.task.id, node]));
     const invalidated = this.planInvalidation(plan);

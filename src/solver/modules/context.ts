@@ -90,6 +90,8 @@ export type ContextBundle = Readonly<{
   continuationManifest?: ContextManifest;
   /** Recompile before dispatch so an added checkpoint instruction participates in selection and accounting. */
   compileDispatch?: (options: ResearchDispatchOptions, current?: ContextBundle) => CompiledContext;
+  /** Re-anchor exact current inputs after compaction with less optional history. */
+  compileCompactedDispatch?: (options: ResearchDispatchOptions, current?: ContextBundle) => CompiledContext | undefined;
   scope: 'original-problem-and-allowed-library' | 'fixed-statement';
   sources: Readonly<{ problemReceiptDigest: string }>;
   manifest?: ContextManifest;
@@ -121,9 +123,26 @@ function compileCustomDispatch(context: ContextBundle, options: ResearchDispatch
   return compiled;
 }
 
+export function compactedResearchDispatch(context: ContextBundle, options: ResearchDispatchOptions): ContextBundle | undefined {
+  let compiled: CompiledContext | undefined;
+  try {
+    compiled = context.compileCompactedDispatch?.(options, context);
+  } catch (error) {
+    // A valid full dispatch can fit when the compacted prompt's required recovery note cannot.
+    if (!(error instanceof TaskContextError) || error.code !== 'math_context_mandatory_overflow') throw error;
+    return undefined;
+  }
+  if (!compiled || Buffer.byteLength(compiled.message) >= Buffer.byteLength(context.message)) return;
+  return withResearchDispatch(context, compiled);
+}
+
 /** Finalize the actual M4 output, including replacements of the built-in prompt. */
 export function finalizeResearchDispatch(context: ContextBundle, options: ResearchDispatchOptions = {}): ContextBundle {
   const compiled = context.compileDispatch?.(options, context) ?? compileCustomDispatch(context, options);
+  return withResearchDispatch(context, compiled);
+}
+
+function withResearchDispatch(context: ContextBundle, compiled: CompiledContext): ContextBundle {
   return { ...context, ...compiled, ...(context.knowledgeRetrievals ? {
     knowledgeRetrievals: context.knowledgeRetrievals.map(retrieval => ({ ...retrieval,
       included: compiled.manifest.included.some(item => item.id === retrieval.sectionId),
@@ -329,11 +348,15 @@ ${access.corpusFile ? `For library lookup, run ${command} search-lean --workspac
   const result: ContextBundle = { ...compiled, ...(access.knowledgeSnapshot ? { knowledgeRetrievals: knowledgeSections.map(section => ({
     ...section.knowledge, included: compiled.manifest?.included.some(item => item.id === section.id) ?? false,
     omissionReason: compiled.manifest?.omitted.find(item => item.id === section.id)?.reason })) } : {}) };
-  const recompile = result.compileDispatch;
+  const recompile = result.compileDispatch, recompileCompacted = result.compileCompactedDispatch;
   if (!recompile) return result;
-  return { ...result, compileDispatch: (options, current = result) => {
-    if (current.instructions === result.instructions && current.message === result.message &&
-        current.continuationMessage === result.continuationMessage) return recompile(options);
+  const builtInPrompt = (current: ContextBundle) => current.instructions === result.instructions &&
+    current.message === result.message && current.continuationMessage === result.continuationMessage;
+  return { ...result, ...(recompileCompacted ? {
+    compileCompactedDispatch: (options: ResearchDispatchOptions, current = result) =>
+      builtInPrompt(current) ? recompileCompacted(options) : undefined,
+  } : {}), compileDispatch: (options, current = result) => {
+    if (builtInPrompt(current)) return recompile(options);
     // Spreading a built-in context must not let its captured compiler overwrite a custom M4 prompt.
     const changedMessage = current.message !== result.message;
     const inheritedContinuation = current.continuationMessage === result.continuationMessage;
@@ -498,7 +521,7 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     : '';
   // A revision states only changed tasks; the host expands it against the accepted graph and validates the result.
   const planRevisionRules = action.kind === 'lead' && cooperation.tasks.length
-    ? 'Revise the accepted graph instead of retyping it. RESEARCH.md keeps the host-synced accepted graph in a math fence with one task per line; grep it by task id and never rewrite or copy it wholesale. ' +
+    ? 'Revise the accepted graph instead of retyping it. Read the current task graph in COOPERATION.json or grep the host-synced accepted graph in the math fence in RESEARCH.md. If RESEARCH.md exceeds 1,000,000 bytes, use the dispatch delivery log for plan submissions and consult COOPERATION.json for the accepted graph. ' +
       `Use this revision schema in the current delivery-log event, or in a math-plan fence in RESEARCH.md if returning without publication: {"baseVersion":${JSON.stringify(action.planVersion ?? '')},"upsert":[{"id":"existing_task","status":"paused"},{"id":"new_helper","kind":"lemma","objective":"...","theoremName":"...","type":"...","dependsOn":[]}],"remove":["obsolete_task"]}. ` +
       'This graph schema must also include every required researchDecisions, progressReview and nextCheckDecisions field from current Lead decision requirements in the same JSON object. An upsert of an existing id replaces only the fields it supplies (null deletes a field; a changed kind replaces the whole task); a new id needs a complete task definition. ' +
       'Unlisted tasks, groups and proofRoutes stay unchanged; supply groups or proofRoutes only to replace that whole list. ' +
@@ -752,7 +775,8 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     ? { id: 'lead-decision-requirements', kind: 'assignment' as const,
       text: 'Current Lead decision requirements (this dispatch only):\n' + cooperation.leadDecisionInstruction }
     : undefined;
-  const compileFull = (checkpointInstruction?: string, taskSwitch?: boolean) => compileTaskContext({ ...compilation, instructions, optional, taskSwitch,
+  const compileFull = (checkpointInstruction?: string, taskSwitch?: boolean, compactedResume?: boolean) => compileTaskContext({
+      ...compilation, instructions, optional, taskSwitch, compactedResume,
       mandatory: [...dispatchPrefix(checkpointInstruction), ...(leadDecision ? [leadDecision] : []),
         ...(compilation.mandatory ?? []), ...receiptIndex,
         { id: 'work-contract', kind: 'assignment', text: 'Host work contract (one product; completion is not proof acceptance):\n' + JSON.stringify(workContract) },
@@ -797,6 +821,8 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
   const compiledContinuation = continuationText === undefined ? undefined : compileContinuation();
   return { ...context, assignment: action, workContract, instructions, ...full,
     continuationMessage: compiledContinuation?.message, continuationManifest: compiledContinuation?.manifest,
+    ...(compiledContinuation ? { compileCompactedDispatch: (options: ResearchDispatchOptions) =>
+      compileFull(options.checkpointInstruction, false, true) } : {}),
     compileDispatch: options => options.taskSwitch && taskContinuation ? compileFull(options.checkpointInstruction, true) :
       options.continuation && compiledContinuation
       ? options.checkpointInstruction ? compileContinuation(options.checkpointInstruction) : compiledContinuation

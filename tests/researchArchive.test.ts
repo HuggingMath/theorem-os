@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { canonicalMathJson } from '../src/math/mathRuntimeIo';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from '../src/solver/archive';
 import { captureResearchBasis, settleResearch } from '../src/solver/researchRecords';
 import { taskVersion, type CooperativeTask } from '../src/solver/tasks';
@@ -31,6 +32,29 @@ describe('research completion archive schema', () => {
   const read = () => {
     const file = path.join(root, 'state.json'); writeSolverRunState(file, state); return readSolverRunState(file);
   };
+
+  it('keeps canonical checkpoint bytes across no-op saves, in-place edits and file replacement', () => {
+    const file = path.join(root, 'state.json');
+    writeSolverRunState(file, state);
+    const first = fs.statSync(file, { bigint: true });
+    expect(fs.readFileSync(file, 'utf8')).toBe(canonicalMathJson(state));
+    writeSolverRunState(file, state);
+    expect(fs.statSync(file, { bigint: true }).ino).toBe(first.ino);
+
+    const delivery = state.cooperation!.deliveries![0]!;
+    delivery.evidenceRefs.push('new evidence');
+    delete delivery.finding;
+    writeSolverRunState(file, state);
+    expect(fs.readFileSync(file, 'utf8')).toBe(canonicalMathJson(state));
+    expect(readSolverRunState(file).cooperation!.deliveries![0]).toMatchObject({ evidenceRefs: ['new evidence'] });
+
+    const replacement = path.join(root, 'replacement.json');
+    fs.writeFileSync(replacement, '{}');
+    fs.renameSync(replacement, file);
+    writeSolverRunState(file, state);
+    expect(fs.readFileSync(file, 'utf8')).toBe(canonicalMathJson(state));
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+  });
 
   it.each([undefined, [], ['relevant-candidate']])('preserves the automatic candidate filter independently of the raw pool: %j', relevant => {
     state.knowledgeRetrievals = { dropped: 0, observations: [{

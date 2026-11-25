@@ -5,9 +5,11 @@ import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
 import { parseLeadPlan } from '../src/solver/cooperationShared';
 import { currentNextCheck, prepareNextCheckDecisions } from '../src/solver/nextChecks';
 import { buildResearchContext } from '../src/solver/modules/context';
+import { commitSolverSources } from '../src/solver/problem';
 import { prepareResearchDelivery } from '../src/solver/researchAdmission';
+import { researchCheckpointLocalInputDigest } from '../src/solver/researchCheckpoints';
 import { queueResearchObservation } from '../src/solver/researchObservation';
-import { leadPlanDeliveryFile, parseCooperationPlan, taskVersion } from '../src/solver/tasks';
+import { assignmentDeliveryFile, leadPlanDeliveryFile, parseCooperationPlan, taskVersion } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 
@@ -19,12 +21,12 @@ afterEach(async () => {
   expect(host.createSession).not.toHaveBeenCalled(); host.createSession.mockReset();
 });
 
-async function fixture() {
+async function fixture(constructionDependencies = ['goal_0']) {
   const example = localExample('scoped-next-check-'), lead = leadWorker(example.problem, example.workspace);
   const author = peerWorker(example, 'author'), checker = peerWorker(example, 'checker');
   const plan = parseCooperationPlan(example.problem, { tasks: [
     ...example.problem.targets.map((target, index) => ({ ...target, id: `goal_${index}`, kind: 'goal', objective: 'Prove the original target.', status: 'paused' })),
-    { id: 'construction', kind: 'research', objective: 'Find the missing construction.', ownerId: author.id, dependsOn: ['goal_0'] },
+    { id: 'construction', kind: 'research', objective: 'Find the missing construction.', ownerId: author.id, dependsOn: constructionDependencies },
   ] });
   const state = solverState(example.problem, example.workspace, { runId: 'next-check-fixture', phase: 'running',
     cooperation: { canonicalCommit: example.problem.baseCommit, tasks: plan.tasks.map(task => ({ task, status: 'pending', attempts: 0 })),
@@ -80,6 +82,66 @@ async function fixture() {
 }
 
 describe('scoped next check lifecycle', () => {
+  it.each(['live', 'legacy restart'] as const)('keeps a parked check paused through progress rephrasing and resumes it on new evidence (%s)', async mode => {
+    const f = await fixture([]), budget = { maxTurns: Infinity, remainingMs: Infinity };
+    let state = f.state.cooperation!, check = state.tasks.find(node => node.nextCheckId === f.record.id)!;
+    let cooperation = f.cooperation, assignment = f.action.assignment;
+    const progress = async (summary: string, evidenceRefs?: string[]) => {
+      const log = path.join(f.author.worktree, assignmentDeliveryFile(assignment));
+      fs.appendFileSync(log, JSON.stringify({ kind: 'progress', summary, evidenceRefs }) + '\n');
+      await cooperation.pulse(f.author.id);
+      expect(state.deliveries!.at(-1)).toMatchObject({ kind: 'progress', status: 'advisory', summary });
+    };
+    await progress('Saved the unfinished comparison. No new evidence.');
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const action = await f.cooperation.next(f.checker, budget);
+      if (action?.kind !== 'task') throw new Error('missing scoped check assignment');
+      expect(action.task.id).toBe(check.task.id);
+      expect(f.cooperation.started(f.checker, action)).toBe(true);
+      fs.writeFileSync(path.join(f.checker.worktree, 'RESEARCH.md'), 'Membership remains open.\n');
+      await f.cooperation.deliver(f.checker, action, commitSolverSources(f.problem, f.checker.worktree), true);
+    }
+    expect(check.status).toBe('blocked');
+    const checkpoint = structuredClone(state.researchCheckpoints![check.task.id]);
+    expect(checkpoint).toMatchObject({ count: 3, paused: true });
+    if (mode === 'legacy restart') {
+      const legacyDigest = researchCheckpointLocalInputDigest({ task: check.task, workerId: f.checker.id,
+        tasks: state.tasks, deliveries: state.deliveries!, environmentDigest: f.state.environmentDigest,
+        problemReceiptDigest: f.problem.receiptDigest }, true);
+      expect(legacyDigest).not.toBe(checkpoint.localInputDigest);
+      state.researchCheckpoints![check.task.id].localInputDigest = legacyDigest;
+      const file = path.join(f.directory, 'state.json');
+      writeSolverRunState(file, f.state);
+      f.controller.abort(); await f.cooperation.stop();
+
+      const restored = readSolverRunState(file), controller = new AbortController();
+      state = restored.cooperation!;
+      check = state.tasks.find(node => node.nextCheckId === f.record.id)!;
+      cooperation = cooperativeResearch({ state: restored, workers: f.workers, retrievalRoot: f.directory,
+        signal: controller.signal, emit: event => f.events.push(event) });
+      instances.push({ stop: async () => { controller.abort(); await cooperation.stop(); } });
+      await cooperation.restore();
+      expect(check.status).toBe('blocked');
+      const action = await cooperation.next(f.author, budget);
+      if (action?.kind !== 'task') throw new Error('missing author assignment on restart');
+      expect(cooperation.started(f.author, action)).toBe(true);
+      cooperation.activate(f.author, action, async () => {}, async () => {});
+      assignment = action.assignment;
+    }
+
+    await progress('Retained the same comparison and its open question in the draft.');
+    expect(check.status).toBe('blocked');
+    expect(state.researchCheckpoints![check.task.id]).toEqual(checkpoint);
+    expect(f.events).not.toContain('research_checkpoint_reopened');
+
+    await progress('Found a supporting calculation for this membership test.', ['calculation:membership-reduction']);
+    expect(check.status).toBe('pending');
+    expect(f.events).toContain('research_checkpoint_reopened');
+    const resumed = await cooperation.next(f.checker, budget);
+    expect(resumed).toMatchObject({ kind: 'task', task: { id: check.task.id } });
+    expect(f.record.outcome).toBeUndefined();
+  });
+
   it('schedules independent work, consumes an unknown outcome, applies a Lead stop and preserves it across restart', async () => {
     const f = await fixture();
     expect(f.record).toMatchObject({ status: 'pending', scope: { parent: { taskId: 'construction' },
@@ -129,6 +191,40 @@ describe('scoped next check lifecycle', () => {
     await lead.publish([{ checkId: f.record.id, outcomeDeliveryId: f.record.outcome!.deliveryId, action: 'continue', reason: 'Retain this route while seeking the missing argument.' }]);
     expect(f.state.cooperation!.planPublicationRejection).toBeUndefined();
     expect(f.record.status).toBe('decided');
+  });
+
+  it('reconciles a running task for a decided check left by an older continuation', async () => {
+    const f = await fixture();
+    await f.publishOutcome();
+    const lead = await f.leadDecision();
+    await lead.publish([{ checkId: f.record.id, outcomeDeliveryId: f.record.outcome!.deliveryId, action: 'continue',
+      reason: 'Continue the other estimate using the archived result.' }]);
+    const check = f.state.cooperation!.tasks.find(node => node.nextCheckId === f.record.id)!;
+    f.state.cooperation!.tasks = f.state.cooperation!.tasks.map(node => node === check
+      ? { ...node, status: 'running', assignment: undefined, attempts: 0 } : node);
+    const file = path.join(f.directory, 'state.json');
+    writeSolverRunState(file, f.state);
+    f.controller.abort(); await f.cooperation.stop();
+
+    const restored = readSolverRunState(file), controller = new AbortController(), assigned: unknown[] = [];
+    const resumed = cooperativeResearch({ state: restored, workers: f.workers, retrievalRoot: f.directory,
+      signal: controller.signal, emit: (event, details) => { if (event === 'task_assigned') assigned.push(details); } });
+    instances.push({ stop: async () => { controller.abort(); await resumed.stop(); } });
+    await resumed.restore();
+    expect(restored.cooperation!.nextChecks![0]).toMatchObject({ id: f.record.id, status: 'decided' });
+    expect(restored.cooperation!.tasks.find(node => node.nextCheckId === f.record.id)).toMatchObject({ status: 'completed', attempts: 0 });
+
+    // Even an inconsistent pending record reaching the scheduler cannot be reserved.
+    restored.cooperation!.tasks = restored.cooperation!.tasks.map(node => node.nextCheckId === f.record.id
+      ? { ...node, status: 'pending' } : node);
+    const offered = resumed.next(f.checker, { maxTurns: Infinity, remainingMs: Infinity });
+    try {
+      await expect(Promise.race([offered, new Promise(resolve => setTimeout(resolve, 30, 'waiting'))])).resolves.toBe('waiting');
+      expect(assigned).toEqual([]);
+    } finally {
+      controller.abort();
+      await offered.catch(() => {});
+    }
   });
 
   it('deduplicates the same question across notes-only publications and rejects an outcome from its author', async () => {

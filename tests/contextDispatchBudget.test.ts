@@ -4,7 +4,7 @@ import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 import { compileTaskContext, DEFAULT_TASK_CONTEXT_BYTES, frozenSourceContext, type TaskContextInput } from '../src/solver/contextCompiler';
 import { rejectedDeliveryReceipt, deliveryReceiptFeedback, type DeliveryReceipt } from '../src/solver/deliveryReceipts';
 import type { DeliveryRecord } from '../src/solver/deliveries';
-import { buildResearchContext, finalizeResearchDispatch } from '../src/solver/modules/context';
+import { buildResearchContext, compactedResearchDispatch, finalizeResearchDispatch } from '../src/solver/modules/context';
 import type { LeanResidualGoal } from '../src/math/leanResidualGoals';
 import type { SolverProblem } from '../src/solver/problem';
 import { prepareResearchDelivery, ResearchAdmissionError } from '../src/solver/researchAdmission';
@@ -122,6 +122,28 @@ function rejectedFindings(maxOptionalContextBytes = 0) {
 }
 
 describe('bounded continuation dispatch', () => {
+  it('keeps exact current inputs in a smaller dispatch after the native summary can omit them', () => {
+    const dependency = helper('dependency', [], '∀ x : Nat, x + 0 = x');
+    const task = helper('current', [dependency.id]), assignment = { taskId: task.id, taskDigest: taskVersion(task),
+      workerId: 'researcher', seedCommit: baseCommit };
+    const cooperation = { tasks: [node(goal), node(dependency), { ...node(task), assignment, feedback: 'Fresh coercion diagnostic' }],
+      history: [1, 2, 3, 4, 5].map(index => ({ ...node(helper('prior' + index)), finding: 'Prior route evidence. '.repeat(500) })) };
+    const context = buildResearchContext(problem, { environmentDigest: 'environment', cooperation } as SolverRunState,
+      { root: '/runtime', worktree: '/unavailable/context-budget-fixture', taskText: 'Prove the original target.',
+        retrievalRoot: '/unavailable/context-budget-fixture', environment: {}, frozenContexts,
+        assignment: { kind: 'task', task, assignment } });
+    const compacted = compactedResearchDispatch(context, { checkpointInstruction: 'Current checkpoint request.' })!;
+    expect(compacted.message).toContain('Resume the current assignment after thread compaction.');
+    expect(compacted.message).toContain(formal);
+    expect(compacted.message).toContain('n is a natural number');
+    expect(compacted.message).toContain(dependency.type);
+    expect(compacted.message).toContain('Fresh coercion diagnostic');
+    expect(compacted.message).toContain('Current checkpoint request.');
+    expect(compacted.manifest!.requiredTaskIds).toEqual(context.manifest!.requiredTaskIds);
+    expect(Buffer.byteLength(compacted.message)).toBeLessThan(Buffer.byteLength(context.message) / 2);
+    expect(compactedResearchDispatch({ ...context, message: 'Custom context' }, {})).toBeUndefined();
+  });
+
   it('keeps every host-generated correction obligation available without inlining the backlog', () => {
     const { context, receipts } = rejectedFindings();
     expect(new Set(receipts.map(receipt => receipt.id)).size).toBe(1200);

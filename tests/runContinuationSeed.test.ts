@@ -131,14 +131,35 @@ describe('same-process CLI continuation initialization', () => {
     expect(modules.M1.open).not.toHaveBeenCalled();
   });
 
-  it('can retain a seeded zero-turn checkpoint without starting research', async () => {
+  it('freezes a zero-turn startup checkpoint and checks its saved helpers once when resumed', async () => {
     const f = fixture();
     expect(await runSolver([...f.args, '--startup-only'], f.directory, modules)).toBe(0);
     const state = readSolverRunState(f.stateFile);
     expect(state.phase).toBe('prepared'); expect(state.turns).toBe(0); expect(state.solveStartedAt).toBeUndefined();
-    expect(state.cooperation!.tasks.find(node => node.task.id === 'saved_helper')!.status).toBe('integrated');
+    expect(state.cooperation!.tasks.find(node => node.task.id === 'saved_helper')).toMatchObject({ status: 'pending' });
     expect(state.workers!.every(worker => fs.existsSync(path.join(worker.worktree, f.problem.projectRelative, '.lake/continuation.json')))).toBe(true);
     expect(host.run).not.toHaveBeenCalled(); expect(host.prepare).toHaveBeenCalledOnce(); expect(host.dispose).toHaveBeenCalledOnce();
+    expect(host.verify).not.toHaveBeenCalled();
+
+    fs.writeFileSync(path.join(f.sourceWorkers[1].worktree, 'RESEARCH.md'), 'Historical notes added after preflight.\n');
+    host.run.mockImplementation(async (input: ResearchInput) => {
+      const helper = input.state.cooperation!.tasks.find(node => node.task.id === 'saved_helper')!;
+      expect(input.freshContinuationChecks?.[0]).toBe(helper.integratedCheck);
+      expect(helper.status).toBe('integrated');
+      const solver = new CooperativeResearch({ ...input, exclusiveCheck: check => check() });
+      try { await solver.restore(); }
+      finally { await solver.stop(); }
+    });
+    const sourceFlag = f.args.indexOf('--continuation-source-run');
+    const resume = f.args.filter((_arg, index) => index !== sourceFlag && index !== sourceFlag + 1);
+    expect(await runSolver([...resume, '--resume'], f.directory, modules), fs.readFileSync(f.output, 'utf8')).toBe(4);
+    expect(host.run).toHaveBeenCalledOnce(); expect(host.verify).toHaveBeenCalledOnce();
+    expect(readSolverRunState(f.stateFile)).toMatchObject({ continuationDigest: state.continuationDigest });
+    expect(readSolverRunState(f.stateFile).pendingContinuationSource).toBeUndefined();
+    const draft = JSON.parse(readContinuationPage(path.join(path.dirname(f.stateFile), 'continuation.json'),
+      state.continuationDigest!, 'draft-engineer').text);
+    expect(draft.notes).toBe('Frozen worker notes.\n');
+    expect(modules.M1.open).not.toHaveBeenCalled();
   });
 
   it('startup-only preserves started initial-planning activity and leaves the new run ready for its first plan', async () => {
@@ -258,44 +279,46 @@ describe('same-process CLI continuation initialization', () => {
     'retries %s failure after a complete seed while retaining the prepared checkpoint', async failure => {
       const f = fixture(), directory = path.dirname(f.stateFile), historical = fs.readFileSync(f.sourceStateFile);
       const reportFile = path.join(directory, 'continuation-seed.json'), snapshotFile = path.join(directory, 'continuation.json');
-      const args = failure === 'startup-output' ? [...f.args, '--startup-only'] : f.args;
-      const seedComplete = () => fs.existsSync(reportFile) && JSON.parse(fs.readFileSync(reportFile, 'utf8')).stage === 'complete';
+      const startupOnly = failure === 'startup-output';
+      const args = startupOnly ? [...f.args, '--startup-only'] : f.args;
+      const seedReady = () => fs.existsSync(reportFile) &&
+        JSON.parse(fs.readFileSync(reportFile, 'utf8')).stage === (startupOnly ? 'awaiting-checks' : 'complete');
       const fault = `fixture_${failure}_interrupted`;
       let failures = 0;
       if (failure === 'root-snapshot-read') {
         const readSnapshot = continuationInput.readContinuationSnapshot;
         vi.spyOn(continuationInput, 'readContinuationSnapshot').mockImplementation((...input) => {
-          if (!failures && input[0] === snapshotFile && seedComplete()) { failures++; throw new Error(fault); }
+          if (!failures && input[0] === snapshotFile && seedReady()) { failures++; throw new Error(fault); }
           return readSnapshot(...input);
         });
       } else if (failure === 'ready-observer') {
         vi.mocked(console.log).mockImplementation(message => {
-          if (!failures && JSON.parse(String(message)).event === 'ready' && seedComplete()) {
+          if (!failures && JSON.parse(String(message)).event === 'ready' && seedReady()) {
             failures++; throw new Error(fault);
           }
         });
       } else {
         const rename = fs.renameSync;
         vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
-          if (!failures && String(to) === f.output && seedComplete()) { failures++; throw new Error(fault); }
+          if (!failures && String(to) === f.output && seedReady()) { failures++; throw new Error(fault); }
           return rename(from, to);
         });
       }
 
       expect(await runSolver(args, f.directory, modules)).toBe(1);
       expect(failures).toBe(1);
-      expect(seedComplete()).toBe(true);
+      expect(seedReady()).toBe(true);
       expect(JSON.parse(fs.readFileSync(f.output, 'utf8')).reason).toBe(fault);
       const interrupted = readSolverRunState(f.stateFile), digest = interrupted.continuationDigest!;
       const frozenFile = path.join(directory, 'continuation-seed-source.json'), frozenSource = fs.readFileSync(frozenFile);
       expect(interrupted.phase).toBe('prepared'); expect(interrupted.turns).toBe(0);
       expect(interrupted.solveStartedAt).toBeUndefined();
-      expect(interrupted.cooperation!.tasks.find(node => node.task.id === 'saved_helper')!.status).toBe('integrated');
-      expect(host.verify).toHaveBeenCalledOnce(); expect(host.run).not.toHaveBeenCalled();
+      expect(interrupted.cooperation!.tasks.find(node => node.task.id === 'saved_helper')!.status).toBe(startupOnly ? 'pending' : 'integrated');
+      expect(host.verify).toHaveBeenCalledTimes(startupOnly ? 0 : 1); expect(host.run).not.toHaveBeenCalled();
 
       fs.writeFileSync(path.join(f.sourceWorkers[1].worktree, 'RESEARCH.md'), 'Late notes after the prepared checkpoint failed.\n');
       expect(await runSolver([...args, '--resume'], f.directory, modules), fs.readFileSync(f.output, 'utf8'))
-        .toBe(failure === 'startup-output' ? 0 : 4);
+        .toBe(startupOnly ? 0 : 4);
       const resumed = readSolverRunState(f.stateFile);
       expect(failures).toBe(1); expect(resumed.continuationDigest).toBe(digest);
       expect(fs.readFileSync(frozenFile)).toEqual(frozenSource);
@@ -306,8 +329,8 @@ describe('same-process CLI continuation initialization', () => {
       }
       const draft = JSON.parse(readContinuationPage(snapshotFile, digest, 'draft-engineer').text);
       expect(draft.notes).toBe('Frozen worker notes.\n');
-      expect(host.run).toHaveBeenCalledTimes(failure === 'startup-output' ? 0 : 1);
-      expect(host.verify).toHaveBeenCalledTimes(2); expect(host.dispose).toHaveBeenCalledTimes(2);
+      expect(host.run).toHaveBeenCalledTimes(startupOnly ? 0 : 1);
+      expect(host.verify).toHaveBeenCalledTimes(startupOnly ? 0 : 2); expect(host.dispose).toHaveBeenCalledTimes(2);
       expect(modules.M1.open).not.toHaveBeenCalled();
     });
 

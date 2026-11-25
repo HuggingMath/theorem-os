@@ -678,6 +678,37 @@ describe('isolated advisory research drafts', () => {
     expect(node('first_route').finding).toBeUndefined(); expect(node('first_route').researchCompletion).toBeUndefined();
   });
 
+  it.each(['plain lemma', 'following command', 'inspected name'] as const)('handles a canonical addition with a %s when resuming a review', async change => {
+    node('first_route').task = { ...node('first_route').task, reviewScope: 'feasibility', dependsOn: ['goal_1'] };
+    node('goal_1').task = { ...node('goal_1').task, sharing: 'problem', status: 'paused', dependsOn: [],
+      ...(change === 'inspected name' ? { objective: 'Inspect fixtureAdded as a potential witness.' } : {}) };
+    const notesText = 'Retained halfway through the finite check.\n';
+    const first = await task();
+    fs.writeFileSync(notes(), notesText);
+    const draftCommit = commitSolverSources(problem, peer.worktree);
+    await cooperative.deliver(peer, first, draftCommit, true, 'request-failure');
+    const original = fs.readFileSync(source(lead), 'utf8');
+    const addition = 'lemma fixtureAdded : True := by trivial\n' +
+      (change === 'following command' ? '  attribute [simp] fixtureAdded\n' : '') + '\n';
+    const current = original.replace('theorem add_zero', addition + 'theorem add_zero');
+    fs.writeFileSync(source(lead), current);
+    state.cooperation!.canonicalCommit = commitSolverSources(problem, lead.worktree);
+
+    const resumed = await task();
+    expect(resumed.task.id).toBe('first_route');
+    expect(resumed.assignment.canonicalCommit).toBe(state.cooperation!.canonicalCommit);
+    expect(resumed.assignment.feasibilityInputDigest).not.toBe(first.assignment.feasibilityInputDigest);
+    expect(fs.readFileSync(source(), 'utf8')).toBe(current);
+    expect(fs.readFileSync(notes(), 'utf8')).toBe(change === 'plain lemma' ? notesText : '');
+    expect(committedSource(peer.worktree, draftCommit, 'RESEARCH.md')).toBe(notesText);
+    if (change === 'plain lemma') {
+      const commit = commitSolverSources(problem, peer.worktree);
+      await cooperative.deliver(peer, resumed, commit, true, 'request-failure');
+      expect((await task()).assignment.assignmentId).toBe(resumed.assignment.assignmentId);
+      expect(fs.readFileSync(notes(), 'utf8')).toBe(notesText);
+    }
+  });
+
   it('starts a new reviewer with fresh notes while retaining the prior reviewer\'s pinned draft', async () => {
     node('first_route').task = { ...node('first_route').task, reviewScope: 'feasibility' };
     const action = await task(); fs.writeFileSync(notes(), 'PRIOR_REVIEWER_NOTES\n');

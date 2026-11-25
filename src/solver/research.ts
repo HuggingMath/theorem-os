@@ -20,7 +20,7 @@ import { isStatementAction } from './statementReview';
 import { rememberSolverFailure, solverSourceFeedback } from './feedback';
 import type { SolverModules } from './modules';
 import { solverProofIsCurrent, type ProofCheck } from './modules/evidence';
-import { finalizeResearchDispatch, type ContextBundle } from './modules/context';
+import { compactedResearchDispatch, finalizeResearchDispatch, type ContextBundle } from './modules/context';
 import type { KnowledgeContextSnapshot } from './knowledgeContext';
 import { researchTaskRole, type ResearchWorker } from './modules/organization';
 import type { ResearchOperation } from './modules/value';
@@ -292,6 +292,7 @@ export async function runResearchWorkers(input: {
           if (delayMs > 0) await delay(delayMs, undefined, { signal });
           signal.throwIfAborted();
           recovery.phase = 'retrying';
+          cooperation?.workerAvailabilityChanged();
         } finally {
           recovery.waitedMs += Math.max(0, Date.now() - started); save();
         }
@@ -370,9 +371,16 @@ export async function runResearchWorkers(input: {
       let turnActivity: ((activity: MathAgentActivity) => void) | undefined;
       let advisoryTurn: { scope: string; contentDigest?: string; inputDigest?: string } | undefined;
       let turnContext: { digest: string; fresh: boolean } | undefined;
-      // A thread can revisit a responsibility after other tasks. Keep only contracts actually
-      // dispatched in this process; a cold resume or provider compaction must send the full context.
-      const dispatchedContexts = new Map<string, { threadId: string; researchInputDigest?: string }>();
+      // A thread can revisit a responsibility after other tasks. After compaction only its
+      // most recent responsibility can use a smaller dispatch, with exact inputs re-anchored.
+      const dispatchedContexts = new Map<string, { threadId: string; researchInputDigest?: string;
+        compaction?: 'pending' | 'completed' }>();
+      const markCompaction = (threadId: string, compaction: 'pending' | 'completed') => {
+        const latest = [...dispatchedContexts].at(-1);
+        dispatchedContexts.clear();
+        if (latest?.[1].threadId === threadId)
+          dispatchedContexts.set(latest[0], { ...latest[1], compaction });
+      };
       let rebuildContext = false;
       const usage = new ResearchUsage({ state, research, maxTotalTokens: input.maxTotalTokens,
         signal, remainingMs: () => budget().remainingMs, changed: () => { updateUsage(); save(); }, emit });
@@ -638,7 +646,8 @@ export async function runResearchWorkers(input: {
           }
           // Native context maintenance applies to Skill sessions without cooperative assignments too.
           if (live() && activity.itemType === 'contextCompaction' &&
-              (activity.event === 'item_started' || activity.event === 'item_completed')) dispatchedContexts.clear();
+              (activity.event === 'item_started' || activity.event === 'item_completed'))
+            markCompaction(activeSession.threadId, activity.event === 'item_started' ? 'pending' : 'completed');
           if (activity.itemType === 'contextCompaction' && activity.event === 'item_completed') milestone?.compacted();
           if (current() && activity.itemType === 'contextCompaction') {
             if (activity.event === 'item_started' && compactionStartedAt === undefined) {
@@ -1006,7 +1015,8 @@ export async function runResearchWorkers(input: {
           cooperativeCheckpoint = proofHandoffCheckpoint || checkpointRequested && (resultStatus === 'interrupted' || resultStatus === 'checkpoint' ||
             checkpointClosing && resultStatus === 'failed' && researchFailureReason(detail) === 'math_codex_transport_closed');
           completed = resultStatus === 'completed';
-          if (completed) recovered();
+          // An acknowledged scheduler interruption also proves the worker can run again.
+          if (completed || armed && cooperativeCheckpoint && (resultStatus === 'interrupted' || resultStatus === 'checkpoint')) recovered();
           return result;
         }
         catch (error) {
@@ -1220,8 +1230,7 @@ export async function runResearchWorkers(input: {
           }
         }
         if (await maintainContext(assignment) !== 'unchanged') {
-          // Recompile the complete current task after compaction or rotation; a short continuation
-          // may refer to context the native summary no longer retains.
+          // Select the dispatch again if maintenance changed what this thread retains.
           rebuildContext = true;
           if (unreserveTurn()) save();
           return false;
@@ -1258,6 +1267,7 @@ export async function runResearchWorkers(input: {
           emit('worker_cooling_down', { reason: cooldown.reason, cycle: cooldown.cycle,
             delayMs: cooldown.delayMs, nextRetryAt: research.recovery.nextRetryAt });
           save();
+          cooperation?.workerAvailabilityChanged();
           await waitForRecovery();
           retries = 0;
           return;
@@ -1301,7 +1311,7 @@ export async function runResearchWorkers(input: {
           usage.beginMaintenance(assignment); explicitCompaction = true;
           try {
             await session.compact(); signal.throwIfAborted();
-            dispatchedContexts.clear(); compactedUsageVersion = contextUsageVersion;
+            markCompaction(threadId, 'completed'); compactedUsageVersion = contextUsageVersion;
             research.contextCheckpoint = undefined;
             research.contextCheckpointBaseline = { threadId, notesDigest: checkpointNotesDigest() };
             research.lastInputTokens = session.lastInputTokens;
@@ -1581,17 +1591,21 @@ export async function runResearchWorkers(input: {
           const fullContextBasis = selectBasis?.(currentContext.manifest);
           const dispatchedContext = responsibility === undefined ? undefined : dispatchedContexts.get(responsibility);
           const researchInputsChanged = fullContextBasis && dispatchedContext?.researchInputDigest !== fullContextBasis.dispatchDigest;
-          const continuation = access.nativeContinuity !== false && !researchInputsChanged && responsibility !== undefined && Boolean(research.threadId) &&
+          const sameResponsibility = access.nativeContinuity !== false && !researchInputsChanged && responsibility !== undefined && Boolean(research.threadId) &&
             currentContext.continuationMessage !== undefined &&
             dispatchedContext?.threadId === research.threadId;
+          const continuation = sameResponsibility && !dispatchedContext?.compaction;
           const taskSwitch = access.nativeContinuity !== false && sameRouteSwitch && !dispatchedContext &&
-            Boolean(research.threadId && dispatchedContexts.size) && currentContext.continuationMessage !== undefined;
-          Object.assign(currentContext, finalizeResearchDispatch(currentContext, {
-            continuation,
-            taskSwitch,
-            checkpointInstruction: research.threadId && research.contextCheckpoint?.threadId === research.threadId && !currentCheckpointNotesDigest()
-              ? contextCheckpointInstruction(assignment) : undefined,
-          }));
+            Boolean(research.threadId && dispatchedContexts.size) && currentContext.continuationMessage !== undefined &&
+            ![...dispatchedContexts.values()].some(context => context.compaction);
+          const checkpointInstruction = research.threadId && research.contextCheckpoint?.threadId === research.threadId && !currentCheckpointNotesDigest()
+            ? contextCheckpointInstruction(assignment) : undefined;
+          const smallerContext = sameResponsibility && dispatchedContext?.compaction === 'completed'
+            ? compactedResearchDispatch(currentContext, { checkpointInstruction }) : undefined;
+          // Preserve the entire admitted research dependency inventory even if its evidence was optional.
+          const compacted = smallerContext && selectBasis?.(smallerContext.manifest).dispatchDigest === fullContextBasis?.dispatchDigest
+            ? smallerContext : undefined;
+          Object.assign(currentContext, compacted ?? finalizeResearchDispatch(currentContext, { continuation, taskSwitch, checkpointInstruction }));
           const contextBasis = taskSwitch ? selectBasis?.(currentContext.manifest) : fullContextBasis;
           // A refreshed Lead nonce updates session instructions while preserving its planning history.
           if (session && sessionInstructions !== currentContext.instructions) await close();
@@ -1601,6 +1615,10 @@ export async function runResearchWorkers(input: {
               releaseUnstartedTurn(assignment); await rotateSession('context'); continue;
             }
             break;
+          }
+          if (compacted && assignment && session!.threadId !== dispatchedContext?.threadId) {
+            dispatchedContexts.clear();
+            releaseUnstartedTurn(assignment); continue;
           }
           let candidate: ResearchCandidate | undefined;
           let executedTurnId: string | undefined;
@@ -1623,7 +1641,7 @@ export async function runResearchWorkers(input: {
                     researchInputDigest: contextBasis?.dispatchDigest });
                   if (dispatchedContexts.size > 32) dispatchedContexts.delete(dispatchedContexts.keys().next().value!);
                 } else dispatchedContexts.clear();
-                emit('context_dispatched', { mode: taskSwitch ? 'task-switch' : continuation ? 'continuation' : 'full', threadId: turnSession.threadId,
+                emit('context_dispatched', { mode: compacted ? 'compacted' : taskSwitch ? 'task-switch' : continuation ? 'continuation' : 'full', threadId: turnSession.threadId,
                   messageBytes: Buffer.byteLength(currentContext.message), messageDigest: mathDigest(currentContext.message),
                   compiledContentDigest: currentContext.manifest?.contentDigest });
                 started(turnId);
@@ -1733,8 +1751,11 @@ export async function runResearchWorkers(input: {
             research.check = undefined;
             if (assignment) cooperation!.rejected(assignment, sourceError, undefined, turn !== 'completed');
             save(); emit('source_rejected', { reason: sourceError });
-            if (turn === 'failed' && turnError && !recoverableResearchFailure(turnError) && !locallyStopped(turnError))
-              throw new Error(researchFailureReason(turnError), { cause: turnError });
+            if (turn === 'failed' && turnError && !locallyStopped(turnError)) {
+              if (!recoverableResearchFailure(turnError)) throw new Error(researchFailureReason(turnError), { cause: turnError });
+              // Independent work has no task rejection to bound a corrective cycle after a request failure.
+              if (!cooperation) throw new Error(sourceError, { cause: turnError });
+            }
             // A deterministic saved-source rejection needs a corrective turn even when the native
             // request failed or yielded. The next dispatch carries sourceFeedback; no invalid source
             // is committed or checked, and no host repair modifies the writer's saved work.
