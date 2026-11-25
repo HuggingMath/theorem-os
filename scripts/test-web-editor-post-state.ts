@@ -75,14 +75,27 @@ try {
     checks.push({ id: 'E1-lean-draft-resumes-on-refresh', language, width, after, editorVisibleWithoutSwitching: true });
 
     phase = `account-lean-refresh-${language}`;
-    const panel = page.locator('[data-problem-account-drafts]:visible'); await panel.locator(':scope > summary').click();
-    await panel.locator('[data-problem-draft-title]').fill(`Lean continuation ${language}`);
-    const saved = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/research/personal/drafts');
-    await panel.locator('[data-save-problem-draft]').click(); const response = await saved; assert.equal(response.status(), 201); const draft = (await response.json()).item;
+    assert.equal(await page.locator('[data-problem-account-drafts]:visible').count(), 0);
+    const draft = await page.evaluate(async ({ source, task, title }) => {
+      const session = await (await fetch('/api/session')).json();
+      const response = await fetch('/api/research/personal/drafts', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-csrf-token': session.csrfToken },
+        body: JSON.stringify({
+          requestId: crypto.randomUUID(), expectedRevision: 0,
+          scope: { kind: 'problem', draftKey: crypto.randomUUID() },
+          value: { mode: 'lean', draft: { providerId: '', model: '', source, task, maxTurns: '20', maxRunSeconds: '0', workers: '1', effort: 'high', environment: 'mathlib', coordination: 'cooperative', templateId: '' } },
+          summary: title, deviceId: 'test-device', deviceName: 'Desktop browser', clientUpdatedAt: new Date().toISOString(),
+        }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      return (await response.json()).item;
+    }, { source: lean, task: 'Keep this exact Lean draft and continue here.', title: `Lean continuation ${language}` });
     const other = await actor(language, width);
     await other.page.goto(`${origin}/?accountDraft=${draft.draft.id}&draftVersion=${draft.version.id}`);
     await other.page.locator(`[data-problem-draft-version="${draft.version.id}"] [data-restore-problem-draft]`).click();
     await other.page.locator('#source').waitFor({ state: 'visible' }); assert.equal(await other.page.locator('#source').inputValue(), lean);
+    assert.equal(await other.page.locator('[data-problem-account-drafts]:visible').count(), 0);
     await other.page.reload(); await other.page.locator('#source').waitFor({ state: 'visible' });
     assert.equal(await other.page.locator('#source').isVisible(), true); assert.equal(await other.page.locator('#source').inputValue(), lean);
     await other.page.screenshot({ path: path.join(output, `account-lean-refresh-visible-${language}.png`), fullPage: true });
