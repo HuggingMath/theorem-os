@@ -114,7 +114,7 @@ describe('knowledge and module configuration through the real HTTP service witho
     const optedOut = await request(alice, '/api/runs', { ...input(), knowledgeDigest: null });
     expect(optedOut.status).toBe(201);
     const noHistoryRun = (await optedOut.json()).run;
-    expect(noHistoryRun.knowledgeDigest).toBeUndefined();
+    expect(noHistoryRun.knowledgeDigest).toBeNull();
     const isolated = await request(bob, '/api/runs', input());
     expect(isolated.status).toBe(201);
     const bobRun = (await isolated.json()).run;

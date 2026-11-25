@@ -13,6 +13,8 @@ function copyDraft(draft: TaskDraft): TaskDraft {
     maxTurns: draft.maxTurns, maxRunSeconds: draft.maxRunSeconds, workers: draft.workers,
     ...(draft.maxTotalTokens !== undefined ? { maxTotalTokens: draft.maxTotalTokens } : {}),
     effort: draft.effort, environment: draft.environment, coordination: draft.coordination, templateId: draft.templateId,
+    ...(draft.autoExplain !== undefined ? { autoExplain: draft.autoExplain } : {}),
+    ...(draft.explanationLanguage !== undefined ? { explanationLanguage: draft.explanationLanguage } : {}),
     ...(draft.researchMode ? { researchMode: draft.researchMode } : {}),
     ...(draft.skillLoading ? { skillLoading: draft.skillLoading } : {}),
     ...(draft.nativeTeamCapacity ? { nativeTeamCapacity: draft.nativeTeamCapacity } : {}),

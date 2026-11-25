@@ -644,7 +644,7 @@ describe('persistent typed delivery failure guards', () => {
     expect(checker).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps a failed OR branch blocked after assignment reset and permits a different checked branch', async () => {
+  it.each(['retained', 'reset'] as const)('switches to a different checked OR branch after failure with a %s assignment', async assignment => {
     candidate.task = task('candidate', 'goal'); candidate.assignment!.taskDigest = taskVersion(candidate.task);
     action = { kind: 'task', task: candidate.task, assignment: candidate.assignment! };
     const branches = ['left', 'right'].map(id =>
@@ -654,12 +654,15 @@ describe('persistent typed delivery failure guards', () => {
       prerequisiteTaskIds: [], closingTaskId: record.task.id }));
     (cooperative as any).syncProofRoutes(); candidate.assignment!.routeId = 'via_left';
     await exhaustRepair();
-    candidate.assignment = undefined; candidate.proof = undefined; candidate.status = 'pending';
+    if (assignment === 'reset') {
+      candidate.assignment = undefined; candidate.proof = undefined; candidate.status = 'pending';
+    }
     const research: TaskRecord = { task: task('investigate', 'research'), status: 'pending', attempts: 0 };
     state.cooperation!.tasks.push(research);
     const independent = await cooperative.next(researcher, budget);
     expect(independent).toMatchObject({ kind: 'task', task: { id: 'investigate' } });
     expect(candidate.status).toBe('blocked'); expect(checker).toHaveBeenCalledTimes(1);
+    if (assignment === 'retained') expect(candidate.assignment?.routeId).toBe('via_left');
     research.status = 'completed'; branches[0].status = 'blocked';
     const alternate = await cooperative.next(researcher, budget);
     expect(alternate).toMatchObject({ kind: 'task', task: { id: 'candidate' }, assignment: { routeId: 'via_right' } });

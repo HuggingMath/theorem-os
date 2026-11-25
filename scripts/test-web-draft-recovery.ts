@@ -94,9 +94,10 @@ async function assertDraft(page: Page, expected: TaskDraft) { assert.deepEqual(a
 async function recovery(page: Page): Promise<Recovery | null> {
   return page.evaluate(key => { const raw = sessionStorage.getItem(key); return raw ? JSON.parse(raw) : null; }, recoveryKey);
 }
+const withExplanationDefaults = (draft: TaskDraft): TaskDraft => ({ autoExplain: true, explanationLanguage: 'zh', ...draft });
 async function assertBackup(page: Page, expected: TaskDraft, reason: string) {
   await page.locator('#draft-recovery').waitFor({ state: 'visible' });
-  assert.deepEqual(await recovery(page), { schema: recoveryKey, reason, task: { schema: draftKey, draft: expected }, libraries: [] });
+  assert.deepEqual(await recovery(page), { schema: recoveryKey, reason, task: { schema: draftKey, draft: withExplanationDefaults(expected) }, libraries: [] });
   assert.equal(await page.locator('#draft-recovery-local').isVisible(), false);
 }
 async function privateStorage(page: Page) {
@@ -106,9 +107,10 @@ async function privateStorage(page: Page) {
     return { session, local: JSON.stringify(localStorage) };
   });
   assert.equal(stored.session?.includes(credential) ?? false, false, 'neither saved draft may retain the entered API Key');
-  // Only the open run ID and the notification preference persist; neither holds draft text.
+  // The open run and interface preferences persist independently of drafts.
   const local = JSON.parse(stored.local) as Record<string, string>;
   delete local['theorem-os.web-resume.v1']; delete local['theorem-os.web-notify.v1'];
+  delete local['theoremos-history-collapsed-v1'];
   assert.deepEqual(local, {}, 'draft recovery must not write to localStorage');
   assert.equal(stored.local.includes(credential), false);
   if (stored.session) {
@@ -279,7 +281,7 @@ try {
     await page.locator('#run-settings[open]').waitFor();
     await assertDraft(page, fixture.draft);
     assert.equal(await page.locator('#api-key').evaluate(field => field === document.activeElement), true);
-    assert.deepEqual((await recovery(page))?.task.draft, original);
+    assert.deepEqual((await recovery(page))?.task.draft, withExplanationDefaults(original));
     assert.equal((await recovery(page))?.reason, 'reuse');
     await restore(page, original, true); await closeSettings(page);
     assert.equal(await page.locator('#run-count').textContent(), '1', 'restoring must not add or delete history');
@@ -303,7 +305,7 @@ try {
     await importJson(page, incoming); await page.locator('#import-task-dialog[open]').waitFor();
     await closeDialog(page, '#import-task-dialog', () => page.locator('#confirm-import').click());
     await page.locator('#run-settings[open]').waitFor(); await assertDraft(page, incoming);
-    assert.equal((await recovery(page))?.reason, 'import'); assert.deepEqual((await recovery(page))?.task.draft, current);
+    assert.equal((await recovery(page))?.reason, 'import'); assert.deepEqual((await recovery(page))?.task.draft, withExplanationDefaults(current));
     assert.equal(await page.locator('#api-key').evaluate(field => field === document.activeElement), true);
     await restore(page, current, true); await closeSettings(page);
   });
@@ -322,7 +324,7 @@ try {
     await fileStarted(page); await releaseFile(page); await assertBackup(page, initial, 'source');
     await page.locator('#source-file').setInputFiles({ name: 'wrong.txt', mimeType: 'text/plain', buffer: Buffer.from('wrong') });
     await page.locator('#source-error').waitFor({ state: 'visible' });
-    assert.deepEqual((await recovery(page))?.task.draft, initial);
+    assert.deepEqual((await recovery(page))?.task.draft, withExplanationDefaults(initial));
     await closeSettings(page); await restore(page, initial);
     await page.locator('#source-file').setInputFiles({ name: 'again.lean', mimeType: 'text/plain', buffer: Buffer.from(source) });
     await page.waitForFunction(source => (document.querySelector('#source') as HTMLTextAreaElement).value === source, source);
@@ -337,12 +339,12 @@ try {
       if (action === 'unchanged') await closeDialog(page, '#source-editor', () => page.locator('#apply-editor').click());
       else await discardSourceEditor(page, () => action === 'escape' ? page.keyboard.press('Escape')
         : page.locator('#cancel-editor').click());
-      await assertDraft(page, imported); assert.deepEqual((await recovery(page))?.task.draft, initial);
+      await assertDraft(page, imported); assert.deepEqual((await recovery(page))?.task.draft, withExplanationDefaults(initial));
       assert.equal(await page.locator('#expand-source').evaluate(button => button === document.activeElement), true);
     }
     await page.locator('#expand-source').click(); await page.locator('#expanded-source').fill(`${source}\n-- applied recovery edit`);
     await closeDialog(page, '#source-editor', () => page.locator('#apply-editor').click());
-    assert.equal((await recovery(page))?.reason, 'edit'); assert.deepEqual((await recovery(page))?.task.draft, imported);
+    assert.equal((await recovery(page))?.reason, 'edit'); assert.deepEqual((await recovery(page))?.task.draft, withExplanationDefaults(imported));
     await openSettings(page); await restore(page, imported, true); await closeSettings(page);
   });
 
@@ -464,7 +466,7 @@ try {
     await page.locator('#source').fill('theorem submitted_after_reset : True := by trivial\n');
     await page.locator('#submit-run').click(); await page.locator('#run-settings[open]').waitFor();
     await page.locator('#api-key-validation').waitFor({ state: 'visible' });
-    assert.deepEqual((await recovery(page))?.task.draft, original);
+    assert.deepEqual((await recovery(page))?.task.draft, withExplanationDefaults(original));
     assert.equal(h.requests.filter(runtimeWrite).length, 0);
     await page.locator('#api-key').fill(credential);
     let release!: () => void, sawRequest!: () => void;

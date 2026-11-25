@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebJobs } from '../apps/web/jobs';
+import { decodeTaskDraft } from '../apps/web/client/draft';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebObservation } from '../apps/web/collaboration';
 import { webLimits, type WebProvider, type WebResult, type WebRunInput, type WorkerInput, type WorkerMessage } from '../apps/web/shared';
@@ -216,6 +217,28 @@ describe('web job ownership, scheduling and secret lifetime without provider cal
       { ...reference, file: '/tmp/fixture-source', source: 'theorem example : True := by trivial' });
     expect(original.knowledgeDigest).toBeUndefined();
     expect(continued.knowledgeDigest).toBeUndefined();
+  });
+
+  it('keeps an explicit no-history choice when recreating an archived run', async () => {
+    const { jobs, runner } = setup();
+    const catalog = jobs.knowledge.importCatalog('owner', buildTheoremKnowledge([known('existing')]));
+    const original = jobs.create('owner', { ...input(), knowledgeDigest: null }, provider);
+    await tick();
+    runner.calls[0]!.finish();
+    await tick();
+    const archive = jobs.storage.exportRun('owner', original);
+    const draft = decodeTaskDraft(JSON.parse(JSON.stringify(archive)));
+    expect(draft.knowledgeDigest).toBeNull();
+    const recreated = jobs.create('owner', { ...input(), knowledgeDigest: draft.knowledgeDigest }, provider);
+    const automatic = jobs.create('owner', input(), provider);
+    expect(recreated.knowledgeDigest).toBeNull();
+    expect(automatic.knowledgeDigest).toBe(catalog.digest);
+    await tick();
+    expect(runner.calls[1]!.input.knowledgeCatalog).toBeUndefined();
+    runner.calls[1]!.finish();
+    await tick();
+    expect(runner.calls[2]!.input.knowledgeCatalog?.entries).toHaveLength(1);
+    runner.calls[2]!.finish();
   });
 
   it('prevents another owner from reading or cancelling a job', async () => {

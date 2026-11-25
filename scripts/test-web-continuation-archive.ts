@@ -100,7 +100,8 @@ try {
     assert.equal(goals.goals[0]!.subgoals[0]!.state, 'proved');
     assert.ok(nextSteps(run, goals).some(step => step.id === 'continue-checked' && step.tasks.includes('goal_1')));
     const helper = run.observation!.inspection.tasks.find(task => task.id === 'goal_1')!;
-    const checkedSource = run.observation!.sources.find(item => item.taskId === helper.id && item.commit === helper.proof.commit)!;
+    const checkedSource = run.observation!.sources.find(item =>
+      item.taskId === helper.id && item.commit === helper.proof.commit && item.taskVersion === helper.version)!;
     assert.equal(helper.proof.status, 'checked'); assert.ok(checkedSource);
     const owner = (await context.cookies(origin)).find(cookie => cookie.name === 'theoremos_session')!.value;
     service.storage.saveCommand(owner, run.id, 'fixture-guidance', { id: 'fixture-guidance', status: 'delivered' });
@@ -116,6 +117,8 @@ try {
     assert.ok(archive.events.length > 200); assert.equal(archive.events[0]!.sequence, 1);
     assert.equal(archive.observations.length, 4); assert.equal(archive.actions!.length, 1);
     assert.ok(archive.sources.length > 0); assert.ok(archive.checks.length > 0);
+    assert.ok(archive.sources.some(item => item.taskId === helper.id && item.commit === helper.proof.commit && item.taskVersion !== helper.version),
+      'the same commit also has a source saved under an earlier task version');
     assert.deepEqual(archive.commands, [{ id: 'fixture-guidance', status: 'delivered' }]);
     assert.deepEqual(archive.summary.coverage, { events: 'complete', observations: 'complete', actions: 'complete',
       commands: 'recorded', sources: 'partial', checks: 'partial' });
@@ -155,7 +158,7 @@ try {
     assert.equal(starts.length, 2);
     assert.equal(starts[1]!.input.source, source);
     assert.deepEqual(starts[1]!.continuation, { runId: run.id, taskId: helper.id, commit: helper.proof.commit,
-      label: starts[1]!.continuation!.label, taskVersion: archive.sources.find(item => item.taskId === helper.id && item.commit === helper.proof.commit)!.taskVersion, sourceDigest: checkedSource.sourceDigest,
+      label: starts[1]!.continuation!.label, taskVersion: helper.version, sourceDigest: checkedSource.sourceDigest,
       environmentDigest: checkedSource.environmentDigest, file: checkedSource.file, source: checkedSource.source });
     assert.match(starts[1]!.continuation!.label, /add_zero/u);
     const continued = await waitForRun(h, starts[1]!.id, item => item.status === 'completed');

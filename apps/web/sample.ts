@@ -60,9 +60,11 @@ export function webSampleResponse(sample: WebSampleFile, operation: string | und
     return trajectory ? { status: 200, body: { trajectory: trajectoryPage(sampleTrajectory(sample), trajectory) } } : { status: 400, body: { error: '轨迹游标无效。' } };
   }
   if (operation === 'trajectory/version') {
-    const wanted = trajectoryVersionQuery(query), version = wanted && trajectoryVersion(sampleTrajectory(sample), wanted.taskId, wanted.commit);
-    if (!version) return { status: wanted ? 404 : 400, body: { error: wanted ? '这个版本没有记录或已超出保留范围。' : '版本参数无效。' } };
-    return { status: 200, body: { version: trajectoryVersionDetail(version, sequence => sample.observations.find(item => item.sequence === sequence)) } };
+    const index = sampleTrajectory(sample);
+    const wanted = trajectoryVersionQuery(query), version = wanted && trajectoryVersion(index, wanted.taskId, wanted.commit);
+    if (!version || (wanted.taskVersion !== undefined && !version.checks.some(check => check.taskVersion === wanted.taskVersion)))
+      return { status: wanted ? 404 : 400, body: { error: wanted ? '这个版本没有记录或已超出保留范围。' : '版本参数无效。' } };
+    return { status: 200, body: { version: trajectoryVersionDetail(index, version, sequence => sample.observations.find(item => item.sequence === sequence), wanted.taskVersion) } };
   }
   const newestFirst = [...sample.observations].reverse();
   const source = /^tasks\/([^/]+)\/source$/u.exec(operation);

@@ -32,7 +32,7 @@ const readLimits = { events: 5_000, observations: 40 } as const;
 
 /** One Lean check of a task version. An original-problem check separately records the outcome of the whole batch. */
 export type TrajectoryCheck = { at: number; passed: boolean; status: string; receiptIds: string[]; theorems: string[]; headline?: string; observation: number;
-  originalProblemPassed?: boolean };
+  originalProblemPassed?: boolean; taskVersion?: string; file?: string };
 /** A task's code at one commit, with every recorded check of it. */
 export type TrajectoryVersion = {
   key: string; taskId: string; commit: string; file?: string; source?: number; firstAt: number; checks: TrajectoryCheck[]; revision: number;
@@ -57,6 +57,7 @@ export type TrajectoryContext = { workers: { id: string; role: string }[]; targe
 export type TrajectoryIndex = {
   instance: string; revision: number; eventCursor: number; observationCursor: number; lastObservedAt?: number;
   events: WebEvent[]; versions: Map<string, TrajectoryVersion>; sources: Map<string, { file: string; observation: number }>;
+  sourceRevisions: Map<string, number>;
   plans: TrajectoryPlan[]; plan?: Map<string, TrajectoryPlanItem>; planVersion?: string;
   deliveries: Map<string, TrajectoryDelivery>; guidance: Map<string, TrajectoryGuidance>; edits: Map<string, TrajectoryEdit>;
   workers: Map<string, string>; targets: string[]; contextRevision: number;
@@ -68,7 +69,7 @@ export type TrajectoryIndex = {
 let instances = 0;
 const started = Date.now().toString(36);
 export function createTrajectoryIndex(): TrajectoryIndex {
-  return { instance: `${started}-${++instances}`, revision: 0, eventCursor: 0, observationCursor: 0, events: [], versions: new Map(), sources: new Map(),
+  return { instance: `${started}-${++instances}`, revision: 0, eventCursor: 0, observationCursor: 0, events: [], versions: new Map(), sources: new Map(), sourceRevisions: new Map(),
     plans: [], deliveries: new Map(), guidance: new Map(), edits: new Map(), workers: new Map(), targets: [], contextRevision: 0, retired: new Set(),
     dropped: { events: 0, versions: 0, plans: 0, deliveries: 0, guidance: 0, edits: 0 } };
 }
@@ -76,6 +77,7 @@ export function createTrajectoryIndex(): TrajectoryIndex {
 const clip = (value: string | undefined, limit: number) => value === undefined ? undefined : value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
 const millis = (value: string | number | undefined) => typeof value === 'number' ? value : value === undefined ? NaN : Date.parse(value);
 const versionKey = (taskId: string, commit: string) => `${taskId}\u0000${commit}`;
+const sourceRevisionKey = (key: string, taskVersion: string) => `${key}\u0000${taskVersion}`;
 /** Drops the oldest entries over the limit, remembering them so a repeated record is not added again. */
 function trim<T>(index: TrajectoryIndex, section: keyof TrajectoryIndex['dropped'], items: Map<string, T>, limit: number) {
   for (const key of items.keys()) {
@@ -110,12 +112,22 @@ function foldEvents(index: TrajectoryIndex, events: readonly WebEvent[]) {
 
 function foldSource(index: TrajectoryIndex, source: WebTaskSource, observation: number) {
   const key = versionKey(source.taskId, source.commit);
+  if (retired(index, 'versions', key)) return;
   const version = index.versions.get(key);
+  const revision = sourceRevisionKey(key, source.taskVersion);
+  if (!index.sourceRevisions.has(revision)) {
+    index.sourceRevisions.set(revision, observation);
+    for (const old of index.sourceRevisions.keys()) {
+      if (index.sourceRevisions.size <= trajectoryLimits.versions) break;
+      index.sourceRevisions.delete(old);
+    }
+    if (version) version.revision = index.revision;
+  }
   if (version) {
     if (version.source === undefined) { version.source = observation; version.file = source.file; version.revision = index.revision; }
     return;
   }
-  if (index.sources.has(key) || retired(index, 'versions', key)) return;
+  if (index.sources.has(key)) return;
   index.sources.set(key, { file: source.file, observation });
   // Sources wait here until a check names them; the map is bounded like the versions it feeds.
   for (const old of index.sources.keys()) { if (index.sources.size <= trajectoryLimits.versions) break; index.sources.delete(old); }
@@ -138,11 +150,12 @@ function foldCheck(index: TrajectoryIndex, receipt: WebCheckReceipt, observation
     if (!index.versions.has(key)) return;
   }
   const originalProblemPassed = typeof record.originalProblemPassed === 'boolean' ? record.originalProblemPassed : undefined;
-  let check = version.checks.find(item => item.at === at && item.originalProblemPassed === originalProblemPassed);
+  let check = version.checks.find(item => item.at === at && item.originalProblemPassed === originalProblemPassed && item.taskVersion === receipt.taskVersion);
   if (check?.receiptIds.includes(receipt.id)) return;
   if (!check) {
     if (version.checks.length >= trajectoryLimits.checks) version.checks.splice(1, 1); // The first check stays: it is the attempt itself.
-    check = { at, passed: true, status: 'kernel_verified', receiptIds: [], theorems: [], observation,
+    check = { at, passed: true, status: 'kernel_verified', receiptIds: [], theorems: [], observation, taskVersion: receipt.taskVersion,
+      ...(typeof record.proofPath === 'string' ? { file: record.proofPath } : {}),
       ...(originalProblemPassed === undefined ? {} : { originalProblemPassed }) };
     version.checks.push(check);
     version.checks.sort((a, b) => a.at - b.at);
@@ -292,16 +305,22 @@ export function trajectoryPage(index: TrajectoryIndex, query: TrajectoryQuery, b
 
 /** One version's saved file and receipts, read only from the observations the index recorded for it. */
 export type TrajectoryVersionDetail = { taskId: string; commit: string; source?: WebTaskSource; checks: WebCheckReceipt[] };
-export function trajectoryVersionDetail(version: TrajectoryVersion, observation: (sequence: number) => WebObservation | undefined): TrajectoryVersionDetail {
-  const sequences = [...new Set([...(version.source !== undefined ? [version.source] : []), ...version.checks.map(check => check.observation)])];
-  const receipts = new Set(version.checks.flatMap(check => check.receiptIds));
+export function trajectoryVersionDetail(index: TrajectoryIndex, version: TrajectoryVersion,
+  observation: (sequence: number) => WebObservation | undefined, taskVersion?: string): TrajectoryVersionDetail {
+  const selected = taskVersion === undefined ? version.checks : version.checks.filter(check => check.taskVersion === taskVersion);
+  const sourceFrame = taskVersion === undefined ? version.source
+    : index.sourceRevisions.get(sourceRevisionKey(version.key, taskVersion));
+  const sequences = [...new Set([...(sourceFrame !== undefined ? [sourceFrame] : []), ...selected.map(check => check.observation)])];
+  const receipts = new Set(selected.flatMap(check => check.receiptIds));
+  const matches = (item: WebTaskSource | WebCheckReceipt) => item.taskId === version.taskId && item.commit === version.commit &&
+    (taskVersion === undefined || item.taskVersion === taskVersion);
   let source: WebTaskSource | undefined;
   const checks = new Map<string, WebCheckReceipt>();
   for (const sequence of sequences) {
     const item = observation(sequence);
     if (!item) continue;
-    source ??= item.sources.find(entry => entry.taskId === version.taskId && entry.commit === version.commit);
-    for (const check of item.checks) if (check.taskId === version.taskId && check.commit === version.commit && receipts.has(check.id) && !checks.has(check.id)) checks.set(check.id, check);
+    source ??= item.sources.find(matches);
+    for (const check of item.checks) if (matches(check) && receipts.has(check.id) && !checks.has(check.id)) checks.set(check.id, check);
   }
   return { taskId: version.taskId, commit: version.commit, ...(source ? { source } : {}), checks: [...checks.values()].slice(-64) };
 }
@@ -313,9 +332,11 @@ export function trajectoryQuery(params: URLSearchParams): TrajectoryQuery | unde
   if (instance !== undefined && !/^[a-z0-9-]{1,64}$/u.test(instance)) return;
   return { after, since, ...(instance ? { instance } : {}) };
 }
-export function trajectoryVersionQuery(params: URLSearchParams): { taskId: string; commit: string } | undefined {
-  const taskId = params.get('task') ?? '', commit = params.get('commit') ?? '';
-  return taskId && taskId.length <= 200 && /^[A-Za-z0-9]{1,128}$/u.test(commit) ? { taskId, commit } : undefined;
+export function trajectoryVersionQuery(params: URLSearchParams): { taskId: string; commit: string; taskVersion?: string } | undefined {
+  const taskId = params.get('task') ?? '', commit = params.get('commit') ?? '', taskVersion = params.get('taskVersion');
+  if (!taskId || taskId.length > 200 || !/^[A-Za-z0-9]{1,128}$/u.test(commit) ||
+    (taskVersion !== null && (!taskVersion || taskVersion.length > 200))) return;
+  return { taskId, commit, ...(taskVersion !== null ? { taskVersion } : {}) };
 }
 export const trajectoryVersion = (index: TrajectoryIndex, taskId: string, commit: string) => index.versions.get(versionKey(taskId, commit));
 
@@ -344,12 +365,16 @@ export class WebTrajectories {
     const { index, behind } = this.read(owner, runId);
     return trajectoryPage(index, query, behind);
   }
-  version(owner: string, runId: string, taskId: string, commit: string): TrajectoryVersionDetail | undefined {
+  version(owner: string, runId: string, taskId: string, commit: string, taskVersion?: string): TrajectoryVersionDetail | undefined {
+    const find = (index: TrajectoryIndex) => {
+      const version = trajectoryVersion(index, taskId, commit);
+      if (taskVersion === undefined || version?.checks.some(check => check.taskVersion === taskVersion)) return version;
+    };
     let read = this.read(owner, runId);
     // A rebuilt index catches up before answering, a bounded number of chunks at a time.
-    for (let chunk = 0; read.behind && !trajectoryVersion(read.index, taskId, commit) && chunk < 50; chunk++) read = this.read(owner, runId);
-    const version = trajectoryVersion(read.index, taskId, commit);
-    return version && trajectoryVersionDetail(version, sequence => this.reader.getObservation(owner, runId, sequence));
+    for (let chunk = 0; read.behind && !find(read.index) && chunk < 50; chunk++) read = this.read(owner, runId);
+    const version = find(read.index);
+    return version && trajectoryVersionDetail(read.index, version, sequence => this.reader.getObservation(owner, runId, sequence), taskVersion);
   }
   forget(owner: string, runId: string) { this.indexes.delete(`${owner}\u0000${runId}`); }
   forgetOwner(owner: string) { for (const key of [...this.indexes.keys()]) if (key.startsWith(`${owner}\u0000`)) this.indexes.delete(key); }
