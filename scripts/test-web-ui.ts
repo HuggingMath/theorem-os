@@ -302,7 +302,7 @@ try {
   await stage('排队');
   assert.equal(controls.has(queued.id), false);
   await page.locator('.detail-actions [data-action="cancel"]').click();
-  assert.match(await page.locator('#cancel-run-description').innerText(), /还在排队.*不会调用模型/);
+  assert.match(await page.locator('#cancel-run-description').innerText(), /还在排队，取消后不会开始/);
   await page.locator('#confirm-cancel-run').click();
   await page.locator('#detail-panel .result-verdict').filter({ hasText: '运行已取消' }).waitFor();
   assert.equal(await page.locator('.artifact-stages li[data-stage="skipped"]').count(), 3);

@@ -298,7 +298,7 @@ function TaskMessage(props: ChatThreadProps) {
 
 function MessageTaskLinks({ message, ...props }: ChatThreadProps & { message: WebConversationMessage }) {
   const tasks = props.run?.observation?.inspection.tasks.filter(task => task.theorem && message.text.includes(task.theorem) || message.guidance?.input.taskRef?.id === task.id) ?? [];
-  return tasks.length > 0 ? <div class="chat-task-links" aria-label={t('相关引理与任务')}>{tasks.map(task => <button type="button" class="text-button" data-chat-task-link={task.id}
+  return tasks.length > 0 ? <div class="chat-task-links" aria-label={t('相关引理与任务')}>{tasks.map(task => <button key={task.id} type="button" class="text-button" data-chat-task-link={task.id}
     onClick={() => props.onArtifact('roadmap', { taskId: task.id, messageId: message.id })}><Icon name="network" />{task.theorem || task.objective || task.id}</button>)}</div> : null;
 }
 
