@@ -6,7 +6,7 @@ import { archiveRoadmapTaskLabel } from './roadmapLabels';
 import { renderGlobalTrajectory } from './globalTrajectory';
 import { readableProcessText } from './processText';
 import { selectedProofWalkthrough } from './proofWalkthrough';
-import type { Localized, ProofWalkthrough, ProofWalkthroughStage, ProofWalkthroughStep } from './proofWalkthroughTypes';
+import type { Localized, ProofWalkthrough } from './proofWalkthroughTypes';
 
 type Run = ArchiveProcess['runs'][number];
 type Task = Run['tasks'][number];
@@ -154,13 +154,14 @@ function stepDetail(step: Step, run: Run, record: ArchiveIndexRecord, process: A
       return task ? `<button data-process-task="${escape(task.id)}">${escape(processTaskName(task, locale))}</button>` : `<span>${escape(id.trim())}</span>`;
     }).join('')}</div>` : summary ? `<div class="process-message">${escape(summary)}</div>` : ''}
     ${check ? `<p class="process-check-scope">${check.scope === 'original' ? choose(locale, '完整原题检查', 'Original problem check') : choose(locale, '局部任务检查', 'Task proof check')}</p>
-      ${check.diagnostics ? checkFeedback(check, locale) : ''}
+      ${checkFeedback(check, locale)}
       ${checkSource(check, run, process, selection, locale)}` : ''}
     ${rawDetails([['Kind', step.delivery?.kind ?? step.kind], ['Status', step.status], ['Task ID', step.taskId], ['Commit', check?.commit ?? step.delivery?.commit],
       ['Lean receipts', check?.receiptIds.join('\n')], ['Worker', step.delivery?.workerId], ['Role', step.delivery?.role]], locale)}`;
 }
 /** A verdict a reader can start from; the raw Lean bytes stay one disclosure away. */
 function checkFeedback(check: Check, locale: Locale): string {
+  if (!check.diagnostics) return '';
   const failed = ['failed', 'error'].includes(check.status ?? '');
   const verdict = failed
     ? choose(locale, 'Lean 拒绝了这份证明。下面的输出是它给出的原因，逐条对应需要修改的声明。', 'Lean rejected this proof. The output below gives the reasons, clause by clause.')
@@ -198,7 +199,7 @@ function walkthroughStep(walkthrough: ProofWalkthrough | undefined, task: Task) 
   if (!step) return undefined;
   const index = walkthrough.steps.indexOf(step);
   const stageIndex = Math.max(0, walkthrough.stages.findIndex(stage => stage.stepIds.includes(step.id)));
-  return { step, index, stage: walkthrough.stages[stageIndex]!, stageIndex };
+  return { step, index, stage: walkthrough.stages[stageIndex]!, stageIndex, proofSha256: walkthrough.proofSha256 };
 }
 /** Nodes carry what a reader needs: what was established, from what, and where the reasoning is written out. */
 function taskContext(task: Task, run: Run, walkthrough: ProofWalkthrough | undefined, locale: Locale): string {
@@ -212,7 +213,7 @@ function taskContext(task: Task, run: Run, walkthrough: ProofWalkthrough | undef
     <div class="process-map-claim"><span>${choose(locale, '这一步推出', 'This step establishes')}</span><p>${escape(prose(found.step.claim, locale))}</p></div>
     <p class="process-map-given"><span>${choose(locale, '已知', 'Given')}</span>${escape(prose(found.step.given, locale))}</p>
     ${found.step.because.zh || found.step.because.en ? `<details class="process-map-why"><summary>${choose(locale, '为什么这一步成立', 'Why this step holds')}</summary><p>${escape(prose(found.step.because, locale))}</p></details>` : ''}
-    <button class="process-map-read" data-open-reading-step="proof-derivation-${escape(found.step.id)}" data-open-reading-sha="${escape(walkthrough.proofSha256)}">${icon('book-open')}${choose(locale, `在阅读页读第 ${ordinal(found.index)} 步的逐行推导`, `Read the line-by-line derivation of step ${ordinal(found.index)}`)}${icon('arrow-right')}</button>
+    <button class="process-map-read" data-open-reading-step="proof-derivation-${escape(found.step.id)}" data-open-reading-sha="${escape(found.proofSha256)}">${icon('book-open')}${choose(locale, `在阅读页读第 ${ordinal(found.index)} 步的逐行推导`, `Read the line-by-line derivation of step ${ordinal(found.index)}`)}${icon('arrow-right')}</button>
     ${dependencies}${brief}`;
   const research = /^initial_research_/u.test(task.id);
   const capacity = /^capacity_/u.test(task.id);

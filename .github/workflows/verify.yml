@@ -26,7 +26,7 @@ jobs:
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile
-      - run: bun run typecheck && bun run typecheck:web
+      - run: bun run typecheck && bun run typecheck:web && bun run typecheck:site
       - name: Verify account, job, persistence and operations boundaries without models
         run: bunx vitest run --maxWorkers=4 tests/webAuth.test.ts tests/webSignup.test.ts tests/webAuthPolicy.test.ts tests/webQuota.test.ts tests/webAdmission.test.ts tests/webAdmissionRace.test.ts tests/webProviderCheck.test.ts tests/webI18n.test.ts tests/webFonts.test.ts tests/webKeyVault.test.ts tests/webJobs.test.ts tests/webLifecyclePersistence.test.ts tests/webCollaboration.test.ts tests/webConversations.test.ts tests/webExplain.test.ts tests/webPersistence.test.ts tests/webFormalizations.test.ts tests/webExplanation.test.ts tests/webExplanationServer.test.ts tests/webServer.test.ts tests/webRunStream.test.ts tests/webRunner.test.ts tests/webPrecheck.test.ts tests/webOperations.test.ts tests/webOperationsApi.test.ts tests/webOperationsScheduled.test.ts tests/webOperationsMonitor.test.ts
       - name: Verify isolated provider routing and usage accounting without models
