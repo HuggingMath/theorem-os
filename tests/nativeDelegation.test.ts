@@ -14,7 +14,7 @@ vi.mock('../src/runtime/formalizationRelay', () => ({ startFormalizationRelay: a
 }); } }));
 
 const peer = String.raw`
-const fs=require('node:fs'),readline=require('node:readline');
+const fs=require('node:fs'),path=require('node:path'),readline=require('node:readline');
 const send=value=>process.stdout.write(JSON.stringify(value)+'\n');
 let child=0,parentTurn,callback=100;
 const finish=(status='completed')=>{
@@ -33,7 +33,11 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   }
   if(c.id===101)return finish();
  }
- if(c.method==='thread/start'||c.method==='thread/resume')return reply({thread:{id:p.permissions==='math-investigator'?'child-'+(++child):'parent'},model:'fixture-model',reasoningEffort:'high',modelProvider:'sub2api',approvalPolicy:'never',activePermissionProfile:{id:p.permissions==='math-investigator'?(process.env.MODE==='wrong-permission'?'math-worker':'math-investigator'):'math-worker'}});
+ if(c.method==='thread/start'||c.method==='thread/resume'){
+  const turns=c.method==='thread/resume'&&process.env.MODE==='long-resume'&&!p.excludeTurns
+   ? [{id:'saved-turn',items:[{type:'agentMessage',text:'x'.repeat(8*1024*1024)}]}] : [];
+  return reply({thread:{id:p.permissions==='math-investigator'?'child-'+(++child):'parent',turns},model:'fixture-model',reasoningEffort:'high',modelProvider:'sub2api',approvalPolicy:'never',activePermissionProfile:{id:p.permissions==='math-investigator'?(process.env.MODE==='wrong-permission'?'math-worker':'math-investigator'):'math-worker'}});
+ }
  if(c.method==='thread/archive')return process.env.MODE==='archive-error'?send({id:c.id,error:{code:-32603}}):reply({});
  if(c.method==='turn/interrupt'){reply({});return finish('interrupted');}
  if(c.method==='turn/start'){
@@ -55,7 +59,21 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  }
  if(c.method==='thread/compact/start'){
   reply({});
-  return setTimeout(()=>send({method:'item/completed',params:{threadId:'parent',turnId:'compact-turn',item:{type:'contextCompaction',id:'compacted'}}}),40);
+  const turnId = 'compact-turn';
+  const notify = (method, params) => send({ method, params: { threadId: 'parent', ...params } });
+  const release = path.join(path.dirname(process.env.TRACE), 'compact-release');
+  const timer = setInterval(() => {
+   if (!fs.existsSync(release)) return;
+   clearInterval(timer);
+   notify('turn/completed', { turn: { id: turnId, status: fs.readFileSync(release, 'utf8') } });
+  }, 5);
+  notify('turn/started', { turn: { id: turnId, status: 'inProgress' } });
+  notify('turn/completed', { turn: { id: 'older-turn', status: 'failed' } });
+  notify('thread/compacted', {});
+  notify('item/completed', {
+   turnId: process.env.MODE === 'wrong-summary' ? 'older-turn' : turnId,
+   item: { type: 'contextCompaction', id: 'compacted' },
+  });
  }
 });`;
 
@@ -140,6 +158,13 @@ describe('native delegation availability and compaction', () => {
     expect(trace().filter(c=>c.method==='thread/start'&&c.params.permissions==='math-investigator')).toHaveLength(2);
   });
 
+  it('resumes a regular metered thread whose history exceeds the stdio frame limit', async () => {
+    session = await createCodexMathSession({ ...options(), threadId: 'parent',
+      environment: { ...options().environment, MODE: 'long-resume' } });
+    expect(session.usageSource).toBe('upstream-requests');
+    expect(await session.run('Continue the saved research.', 'next', root, () => {})).toBe('completed');
+  });
+
   it('preserves a configured checkpoint result while stopping active child threads',async()=>{
     session=await createCodexMathSession({...delegated('waiting'),turnTimeoutMs:75});
     expect(await session.run('delegate','one',root,()=>{})).toBe('checkpoint');
@@ -152,13 +177,29 @@ describe('native delegation availability and compaction', () => {
     expect(fs.existsSync(path.join(root,'trace'))).toBe(false);
   });
 
-  it('waits for native compaction completion, excludes overlapping turns and continues the same thread',async()=>{
-    session=await createCodexMathSession({...options(),environment:{...options().environment,MODE:'compact'}});
-    expect(await session.run('Initial research.','one',root,()=>{})).toBe('completed');
-    let completed=false;const compact=session.compact!().then(()=>{completed=true;});
-    await expect(session.run('Overlapping.','overlap',root,()=>{})).rejects.toThrow('math_codex_turn_already_running');
-    expect(completed).toBe(false);await compact;expect(completed).toBe(true);
-    expect(await session.run('Continue from preserved sources.','two',root,()=>{})).toBe('completed');
+  it.each([
+    ['matching-summary','completed',undefined],
+    ['matching-summary','failed','math_codex_compaction_failed'],
+    ['wrong-summary','completed','math_codex_compaction_missing_summary'],
+  ])('settles ordinary compaction using the matching terminal turn (%s, %s)', async (mode, status, error) => {
+    const onItem = vi.fn();
+    session = await createCodexMathSession({ ...options(), onItem, environment: { ...options().environment, MODE: mode } });
+    expect(await session.run('Initial research.', 'one', root, () => {})).toBe('completed');
+    const compact = session.compact!();
+    void compact.catch(() => {});
+    try {
+      await vi.waitFor(() => expect(onItem).toHaveBeenCalledWith('completed',
+        expect.objectContaining({ type: 'contextCompaction' }), expect.anything()));
+      await expect(session.run('Overlapping.', 'overlap', root, () => {})).rejects.toThrow('math_codex_turn_already_running');
+    } finally {
+      fs.writeFileSync(path.join(root, 'compact-release'), status);
+    }
+    if (error) await expect(compact).rejects.toThrow(error);
+    else {
+      await compact;
+      expect(session.threadId).toBe('parent');
+      expect(await session.run('Continue from preserved sources.', 'two', root, () => {})).toBe('completed');
+    }
   });
 
 });

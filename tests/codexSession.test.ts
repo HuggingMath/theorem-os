@@ -58,6 +58,11 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       modelProvider: fixtureInstruction === 'wrong-provider' ? 'wrong-provider' : settings.config.model_provider,
       ...(fixtureInstruction === 'ignore-permissions' ? {} : { activePermissionProfile: { id: settings.config.default_permissions } }),
       approvalPolicy: settings.approvalPolicy, reasoningEffort: settings.config.model_reasoning_effort });
+    if (call.method === 'thread/resume' && fixtureInstruction === 'restore-usage' && !settings.excludeTurns) {
+      send({ method: 'thread/tokenUsage/updated', params: { threadId: settings.threadId, turnId: 'saved-turn', tokenUsage: {
+        total: { totalTokens: 123 }, last: { inputTokens: 31 },
+      } } });
+    }
   }
   if (call.method === 'mcpServerStatus/list') result({ data: Object.keys(settings.config.mcp_servers)
     .filter(name => settings.config.mcp_servers[name].enabled).map(name => ({ name,
@@ -759,6 +764,13 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     await expect(session.run('second', 'message-3', root, () => {})).rejects.toThrow('math_codex_turn_already_running');
     await session.interrupt();
     expect(await done).toBe('interrupted');
+  });
+
+  it('receives historical usage when resuming with native thread accounting', async () => {
+    session = await createCodexMathSession({ ...options, threadId: 'retained-thread', instructions: 'restore-usage',
+      requestGate: () => ({ allowed: true, settle: () => {} }) });
+    expect(session.usageSource).toBe('native-thread-totals');
+    await vi.waitFor(() => expect(options.onUsage).toHaveBeenCalledWith({ totalTokens: 123 }, { turnId: 'saved-turn' }));
   });
 
   it('requires turn settlement before confirming writer shutdown and retains the resumable thread', async () => {

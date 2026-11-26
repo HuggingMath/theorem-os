@@ -51,9 +51,16 @@ All Cargo targets, logs and binaries stay under `--output`. On success,
 not restarted. Source edits beyond the checked-in patches are preserved and
 rejected, so freeze the adapter patch before running a final build.
 
-New team runs pin this executable and freeze the native transport in their run
-record. Saved runs without that transport keep their historical host-tool team.
-An incompatible binary fails the capability handshake before a model turn.
+New native team runs pin the executable's real path and digest and record
+`agentTeam.transport: native-agent-control`. On certain compatibility or transport
+errors during initial app-server startup, the solver can retry with
+`theoremos_team` host tools. The failed writer must have stopped, and the Lead
+must have no open session, saved thread, started turn or model request, or team
+member. The solver emits `team_transport_fallback` and saves `host-tools` for
+resume. Authentication failures and cancellation follow the normal error path.
+A missing binary can fail earlier during configuration. New teams using the
+direct Westlake Chat profile start with host tools. Checkpoints that predate the
+transport field also use host tools.
 
 After the ordinary headless runtime build, exercise the real binary with fixed
 loopback Responses and independent process/workspace isolation:
