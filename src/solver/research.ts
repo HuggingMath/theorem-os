@@ -361,6 +361,7 @@ export async function runResearchWorkers(input: {
       let planningCheckpoint = false;
       let cooperativeCheckpoint = false;
       let proofHandoffCheckpoint = false;
+      let finalReviewHandoffCheckpoint = false;
       let checkpointAtModelBoundary: (() => boolean) | undefined;
       let softSliceAtModelBoundary: (() => boolean) | undefined;
       let softSliceCheckpoint = false;
@@ -461,12 +462,13 @@ export async function runResearchWorkers(input: {
         if (!advisoryTurn || previous?.scope !== advisoryTurn.scope) return;
         const contentDigest = advisoryContentDigest();
         const progress = contentDigest !== undefined && contentDigest !== advisoryTurn.contentDigest;
-        const noProgressStreak = completed || progress ? 0 : checkpoint && !proofHandoffCheckpoint
+        const noProgressStreak = completed || progress ? 0 : checkpoint && !proofHandoffCheckpoint && !finalReviewHandoffCheckpoint
           ? Math.min(Number.MAX_SAFE_INTEGER, previous.noProgressStreak + 1) : previous.noProgressStreak;
         rememberAdvisoryCheckpoint({ scope: previous.scope, noProgressStreak,
           contentDigest: contentDigest ?? previous.contentDigest, inputDigest: advisoryTurn.inputDigest });
         if (checkpoint) emit('cooperative_checkpoint_saved', { noProgressStreak, progress,
-          protected: false, ...(proofHandoffCheckpoint ? { reason: 'proof-handoff' } : {}) });
+          protected: false, ...(proofHandoffCheckpoint ? { reason: 'proof-handoff' } :
+            finalReviewHandoffCheckpoint ? { reason: 'final-review-handoff' } : {}) });
         save();
       };
       const modelTurn = async <T>(run: (started: (turnId: string) => void) => Promise<T>,
@@ -486,6 +488,7 @@ export async function runResearchWorkers(input: {
         planningCheckpoint = false;
         cooperativeCheckpoint = false;
         proofHandoffCheckpoint = false;
+        finalReviewHandoffCheckpoint = false;
         contextSchedulingCheckpoint = false;
         softSliceCheckpoint = false;
         advisoryTurn = undefined;
@@ -533,6 +536,7 @@ export async function runResearchWorkers(input: {
         let noticeDelivery: 'unavailable' | 'pending' | 'delivered' | 'failed' = 'unavailable';
         let planningCommands = 0;
         let requestedProof: (NonNullable<ReturnType<CooperativeResearch['proofHandoffTarget']>> & { turnId: string }) | undefined;
+        let requestedFinalReview: string | undefined;
         let proofNoticeDelivered = false, handoffAtBoundary = false;
         let afterNotice: ((delivered: boolean) => void) | undefined;
         const live = () => !finished && !signal.aborted && session === activeSession;
@@ -704,7 +708,12 @@ export async function runResearchWorkers(input: {
             interruptTimer ??= setTimeout(closeStalledTurn, advisoryInterruptGraceMs);
             interruptTimer.unref();
             try { await activeSession.interrupt(); } catch { closeStalledTurn(); }
-          });
+          },
+          researchAssignment && (commit => {
+            if (requestedFinalReview || !current() || checkpointRequested || readyRequested || stopRequested) return;
+            requestedFinalReview = commit;
+            scheduleSlice?.();
+          }));
         const started = (turnId: string) => {
           usage.turnStarted(turnId);
           onStarted(turnId);
@@ -821,8 +830,10 @@ export async function runResearchWorkers(input: {
             if (researchAssignment && !researchHandoffNotes() && current() && !checkpointRequested && !readyRequested)
               emit('research_checkpoint_missing_notes', { taskId: researchAssignment.task.id,
                 assignmentId: researchAssignment.assignment.assignmentId });
-            interruptForCheckpoint('cooperative_checkpoint_interrupted',
-              { turnId, checkpointAfterMs, noProgressStreak, protected: false });
+            if (interruptForCheckpoint('cooperative_checkpoint_interrupted',
+              { turnId, checkpointAfterMs, noProgressStreak, protected: false })) {
+              finalReviewHandoffCheckpoint = requestedFinalReview !== undefined;
+            }
           };
           // Interrupting a streaming request discards its unfinished reasoning and tool call, and research whose every
           // cut lands mid-request saves nothing and is parked as unchanged. A slice cut (initial plan, revision or
@@ -931,6 +942,12 @@ export async function runResearchWorkers(input: {
           };
           scheduleSlice = () => {
             if (!current() || compactionStartedAt !== undefined || checkpointRequested || readyRequested) return;
+            if (requestedFinalReview) {
+              clearTimeout(noticeTimer); clearTimeout(checkpointTimer); clearTimeout(firstActivityTimer);
+              sendNotice();
+              endSlice();
+              return;
+            }
             // The advisory clock measures mathematical work, not provider latency. Until the model
             // produces its first item the turn is held open, bounded only by the silent-turn cap.
             if (!clockArmed) {
@@ -1107,6 +1124,7 @@ export async function runResearchWorkers(input: {
       const beginTurn = async (currentContext: ContextBundle, assignment?: CooperativeAction, operation: ResearchOperation = 'direct') => {
         access.assertHarnessCurrent?.();
         usage.resetTurn(); planningCheckpoint = false; cooperativeCheckpoint = false; proofHandoffCheckpoint = false;
+        finalReviewHandoffCheckpoint = false;
         rebuildContext = false;
         while ((pendingTurn = waitForTurn())) await pendingTurn;
         if (assignment && !cooperation!.current(assignment)) return false;
@@ -1472,8 +1490,10 @@ export async function runResearchWorkers(input: {
             const versionChanged = assignment.kind === 'task' && record.sessionTaskId === assignment.task.id &&
               record.sessionTaskVersion && record.sessionTaskVersion !== assignment.assignment.taskDigest;
             const sessionAssignmentId = assignment.kind === 'task'
-              ? assignment.assignment.assignmentId ?? `legacy-task:${assignment.assignment.seedCommit}` : undefined;
-            const reviewAssignmentChanged = taskReview && record.sessionAssignmentId !== sessionAssignmentId;
+              ? assignment.assignment.assignmentId ?? `legacy-task:${assignment.assignment.seedCommit}`
+              : assignment.kind === 'review' ? assignment.assignmentId ?? `legacy-review:${assignment.seedCommit}` : undefined;
+            const reviewAssignmentChanged = (taskReview || assignment.kind === 'review' && record.sessionRole === 'reviewer') &&
+              record.sessionAssignmentId !== sessionAssignmentId;
             const reviewTargetChanged = (taskReview || record.sessionRole === 'reviewer') &&
               (record.sessionTaskId !== (assignment.kind === 'task' ? assignment.task.id : undefined) || versionChanged);
             const taskChanged = assignment.kind === 'task' && record.sessionTaskId &&
@@ -1748,6 +1768,7 @@ export async function runResearchWorkers(input: {
               softSliceCheckpoint ? { reason: 'math_soft_slice_checkpoint' } :
               contextSchedulingCheckpoint ? { reason: 'math_context_scheduling_checkpoint' } :
                 proofHandoffCheckpoint ? { reason: 'math_proof_handoff_checkpoint' } :
+                  finalReviewHandoffCheckpoint ? { reason: 'math_final_review_handoff_checkpoint' } :
                   cooperativeCheckpoint ? { reason: 'math_cooperative_scheduling_checkpoint' } : {}) });
           if (turn === 'failed') emit('turn_failed', { reason: researchFailureReason(turnError), ...(diagnostic ? { diagnostic } : {}) });
           const sourceError = sourceFeedback();
@@ -1823,6 +1844,7 @@ export async function runResearchWorkers(input: {
               recordAdvisoryOutput(turn === 'checkpoint');
               const deliver = () => cooperation.deliver(worker, assignment, commit, turn !== 'completed',
                 turn === 'failed' ? 'request-failure' : proofHandoffCheckpoint ? 'proof-handoff' :
+                  finalReviewHandoffCheckpoint ? 'final-review-handoff' :
                   cooperativeCheckpoint ? 'scheduling-checkpoint' : 'checkpoint');
               const delivery = assignment.kind === 'task' || assignment.kind === 'lead' ? await deliver() : await exclusiveCheck(deliver);
               if (assignment.kind === 'lead' && turn === 'checkpoint') await cooperation.startInitialTasks();

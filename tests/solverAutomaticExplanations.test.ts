@@ -3,7 +3,8 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import { INFORMALIZATION_ALIGNMENT, INFORMALIZATION_EXPLANATION_POLICY, INFORMALIZATION_OUTLINE_POLICY,
-  readInformalizationRequest } from '../src/math/informalization';
+  prepareInformalization, readInformalizationRequest } from '../src/math/informalization';
+import { mathDigest } from '../src/math/mathRuntimeIo';
 import { generateSolverExplanations, type SolverExplanations } from '../src/solver/automaticExplanations';
 import type { SolverProblem } from '../src/solver/problem';
 import { informalizationFixture, PROOF_SOURCE, presetAuthor } from './helpers/informalizationFixture';
@@ -42,7 +43,7 @@ describe('automatic solver explanations', () => {
     expect(f.run).toHaveBeenCalledTimes(2);
     for (const item of result.targets) {
       const { request, sources } = readInformalizationRequest(item.directory);
-      expect(request).toMatchObject({ target: item.target, language: 'zh', environment: 'standard', writer: presetAuthor,
+      expect(request).toMatchObject({ target: item.target, language: 'zh', environment: 'standard', writer: presetAuthor, outputDelivery: 'file',
         alignment: INFORMALIZATION_ALIGNMENT, explanationPolicy: INFORMALIZATION_EXPLANATION_POLICY,
         outlinePolicy: INFORMALIZATION_OUTLINE_POLICY, auditors: [{ id: 'auditor-1' }, { id: 'auditor-2' }] });
       expect(sources.map(source => source.module)).toEqual(['Lib', 'Proof']);
@@ -63,10 +64,17 @@ describe('automatic solver explanations', () => {
     expect(JSON.stringify(result)).not.toContain('secret');
   });
 
-  it('reuses each frozen request on resume and keeps the same explanation directories', async () => {
+  it('reuses frozen requests on resume, including requests with the previous native delivery', async () => {
     const f = fixture();
-    f.run.mockResolvedValueOnce({ status: 'stopped' } as never);
+    const directory = path.join(f.input.directory, 'explanations', 'zh');
+    const previousTarget = f.input.problem.targets[0]!;
+    const previous = path.join(directory, mathDigest(`${previousTarget.proofPath}\n${previousTarget.theoremName}`));
+    fs.mkdirSync(directory, { recursive: true });
+    prepareInformalization(previous, { ...f.preparation, target: previousTarget.theoremName,
+      statement: f.input.problem.contract.informalStatement, outputDelivery: 'native-schema' });
     const first = await generateSolverExplanations(f.input, { run: f.run });
+    expect(first.status).toBe('approved');
+    expect(first.targets.map(item => readInformalizationRequest(item.directory).request.outputDelivery)).toEqual(['native-schema', 'file']);
     const requests = first.targets.map(item => fs.statSync(path.join(item.directory, 'request.json')).mtimeMs);
     const second = await generateSolverExplanations(f.input, { run: f.run });
     expect(second.status).toBe('approved');

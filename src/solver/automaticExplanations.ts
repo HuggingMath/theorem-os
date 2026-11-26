@@ -66,6 +66,7 @@ export async function generateSolverExplanations(input: Input, options: Options 
         proofId: `proof_${mathDigest(target.target).slice(0, 32)}`, target: target.target,
         proofFile: path.join(project, target.proofPath), projectRoot: project, environment,
         statement: input.problem.contract.informalStatement || null, language: input.language,
+        outputDelivery: 'file',
         writer: input.writer, auditors: [1, 2].map(index => ({ ...input.writer, id: `auditor-${index}` })),
         alignment: INFORMALIZATION_ALIGNMENT, explanationPolicy: INFORMALIZATION_EXPLANATION_POLICY,
         outlinePolicy: INFORMALIZATION_OUTLINE_POLICY, batching: { maxUnits: 12, maxSourceBytes: 60_000 },

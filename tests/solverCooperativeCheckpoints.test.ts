@@ -8,6 +8,7 @@ import { compileContextSections, leadResearchInputs } from '../src/solver/contex
 import { observeGoalProgress } from '../src/solver/goalProgress';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { directSolverModules, type SolverModules } from '../src/solver/modules';
+import { solverSourceDigest, type ProofCheck } from '../src/solver/modules/evidence';
 import { captureObligationSnapshot } from '../src/solver/obligationProgress';
 import { committedSource, commitSolverSources, git } from '../src/solver/problem';
 import { runResearchWorkers } from '../src/solver/research';
@@ -121,7 +122,8 @@ describe('cooperative advisory scheduling checkpoints', () => {
     };
     return { state, workers, problem, check, events, controller, run, contextSettings,
       pulse: (workerId: string) => cooperation!.pulse(workerId),
-      wake: () => cooperation!.modelBudgetChanged() };
+      wake: () => cooperation!.modelBudgetChanged(),
+      requireReview: (candidate: ProofCheck) => cooperation!.requireReview(candidate) };
   }
 
   function heldAdvisoryTurns(count: number, taskIds = ['investigate'], lastInputTokens?: number) {
@@ -158,6 +160,65 @@ describe('cooperative advisory scheduling checkpoints', () => {
       await held.wait(turn + 1, completion);
     }
   }
+
+  it('settles and preserves a running advisory draft for the fixed candidate review', async () => {
+    const { state, workers, problem, events, run, requireReview } = fixture();
+    const held = heldAdvisoryTurns(1), handoff = deferred();
+    const reviewStarted = deferred(), reviewDone = deferred<string>();
+    let activity: MathAgentOptions['onActivity'];
+    const open = vi.fn(async (options: MathAgentOptions): Promise<MathAgentSession> => {
+      const advisory = await held.open(options);
+      let reviewing = false;
+      return {
+        ...advisory,
+        run: async (message, messageId, workspace, onStarted) => {
+          const assignment = JSON.parse(message) as CooperativeAction;
+          if (assignment.kind === 'task') {
+            activity = options.onActivity;
+            return advisory.run(message, messageId, workspace, onStarted);
+          }
+          if (assignment.kind !== 'review') throw new Error('fixture_unexpected_assignment:' + assignment.kind);
+          reviewing = true;
+          onStarted?.('review-turn'); reviewStarted.resolve();
+          return reviewDone.promise;
+        },
+        close: async () => { await advisory.close(); if (reviewing) reviewDone.resolve('interrupted'); },
+      };
+    });
+    const completion = run(open, 2, (event, details) => {
+      if (event === 'turn_checkpoint' && details?.workerId === 'researcher') handoff.resolve();
+    });
+    void completion.catch(() => {});
+    await held.wait(0, completion);
+    const canonical = state.cooperation!.canonicalCommit!;
+    requireReview({ passed: true, commit: canonical, sourceDigest: solverSourceDigest(problem, workers[0].worktree),
+      verification: { schema: 'deepscientist.mathematics.verification-batch/v1', sessionId: 'fixture-review',
+        targetCommit: canonical, status: 'kernel_verified', results: [], events: [], startedAt: 0, checkedAt: 0, durationMs: 0 } });
+    await vi.advanceTimersByTimeAsync(5);
+    expect(held.notify).toHaveBeenCalledOnce();
+    expect(held.interrupt).not.toHaveBeenCalled();
+    const notes = 'A saved alternative construction and its remaining gap.';
+    fs.writeFileSync(path.join(workers[1].worktree, 'RESEARCH.md'), notes);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(held.interrupt).not.toHaveBeenCalled();
+    activity?.({ event: 'item_completed', itemType: 'commandExecution' });
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.race([handoff.promise, completion.then(() => { throw new Error('fixture_finished_before_advisory_handoff'); })]);
+    await Promise.race([reviewStarted.promise, completion.then(() => { throw new Error('fixture_finished_before_review'); })]);
+    expect(held.interrupt).toHaveBeenCalledOnce();
+    expect(state.cooperation!.tasks.find(node => node.task.id === 'investigate')?.status).toBe('pending');
+    const draft = state.cooperation!.researchDrafts?.investigate;
+    expect(draft).toBeDefined();
+    expect(committedSource(workers[1].worktree, draft!.commit, 'RESEARCH.md')).toBe(notes);
+    expect(events).toContainEqual({ event: 'turn_checkpoint', details: {
+      workerId: 'researcher', turn: 1, reason: 'math_final_review_handoff_checkpoint',
+    } });
+    expect(state.workers![1].advisoryCheckpoint?.noProgressStreak ?? 0).toBe(0);
+    fs.writeFileSync(path.join(workers[1].worktree, 'RESEARCH.md'), JSON.stringify({ commit: canonical, verdict: 'changes_requested' }));
+    reviewDone.resolve('completed');
+    await completion;
+    expect(state.cooperation!.review?.status).toBe('changes_requested');
+  });
 
   it.each([true, false])('routes ordinary peer updates through native advisory only when the session supports it (%s)', async nativeAdvisory => {
     const { workers, controller, run } = fixture();

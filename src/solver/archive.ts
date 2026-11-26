@@ -34,7 +34,7 @@ export type DispatchWaitObservation = {
   endedAt?: number;
   planVersion?: string;
   stage: 'm3-no-ready' | 'host-filtered' | 'm5-no-selection' | 'budget-gated' | 'lead-unavailable' |
-    'dependency-blocked' | 'dependency-running' | 'route-paused' | 'integration-queue' | 'synchronizing' | 'plan-approval';
+    'dependency-blocked' | 'dependency-running' | 'route-paused' | 'integration-queue' | 'synchronizing' | 'plan-approval' | 'final-review';
   gate?: 'time-limit' | 'turn-limit' | 'model-disabled';
   candidateCount: number;
   omittedCandidates: number;
@@ -166,7 +166,7 @@ const record = z.record(z.unknown());
 const safeCount = count.max(Number.MAX_SAFE_INTEGER);
 const dispatchWaitObservation = z.object({ observedAt: safeCount, endedAt: safeCount.optional(), planVersion: z.string().optional(),
   stage: z.enum(['m3-no-ready', 'host-filtered', 'm5-no-selection', 'budget-gated', 'lead-unavailable',
-    'dependency-blocked', 'dependency-running', 'route-paused', 'integration-queue', 'synchronizing', 'plan-approval']),
+    'dependency-blocked', 'dependency-running', 'route-paused', 'integration-queue', 'synchronizing', 'plan-approval', 'final-review']),
   gate: z.enum(['time-limit', 'turn-limit', 'model-disabled']).optional(),
   candidateCount: safeCount, omittedCandidates: safeCount,
   candidates: z.array(z.object({ taskId: z.string(), taskDigest: z.string(),
@@ -412,7 +412,8 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
     retiredRoutes: z.array(retiredRouteSchema).optional(), retiredRouteTasks: z.record(z.string()).optional(),
     proofReadyRecords: z.array(proofReadyRecordSchema).optional(),
     proofImports: z.array(proofImportRecordSchema).optional(),
-    landedHelpers: z.array(z.object({ qualifiedName: z.string(), file: z.string(), commit: z.string(), type: z.string() })).optional(),
+    landedHelpers: z.array(z.object({ qualifiedName: z.string(), file: z.string(), commit: z.string(), type: z.string(),
+      kind: z.literal('definition').optional(), producer: z.string().optional() })).optional(),
     proofSearchRecords: z.record(proofSearchRecordSchema).optional(),
     initialPlanPublication: planPublication.optional(), planPublication: planPublication.optional(),
     lastLeadPauseInputDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),

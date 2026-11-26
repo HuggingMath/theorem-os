@@ -376,7 +376,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
         try {
           await disposeProofEnvironment();
           await generateSolverExplanations({ problem: state.problem, worktree, directory, root, buildManifest: buildFile,
-            language, writer: { model: state.model, effort: state.effort, profile, executable,
+            language, writer: { model: state.model, effort: state.effort,
+              profile: agentHarness?.profile ?? profile, executable: agentHarness?.executable ?? executable,
               ...(agentHarness ? { agentHarness } : {}) },
             env: explanationEnv, signal, onEvent: emit,
             onUpdate: summary => { lease.assertOwned(); result.explanations = summary; writeMathJsonDurable(output, result); } });
