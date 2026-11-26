@@ -3086,12 +3086,17 @@ describe('isolated solver and host acceptance', () => {
     const workers = (...inputs: Parameters<typeof directSolverModules.M5.workers>) =>
       directSolverModules.M5.workers(...inputs).map((worker, index) => index !== 1 ? worker : invalid === 'worktree' ?
         { ...worker, worktree: workspace } : invalid === 'files' ? { ...worker, ownedFiles: ['Challenge.lean'] } : worker);
-    const reviewer = (...inputs: Parameters<typeof directSolverModules.M5.reviewer>) => invalid === 'reviewer' ?
-      { id: 'outsider', role: 'reviewer' as const, worktree: workspace, ownedFiles: problem.ownedFiles } : directSolverModules.M5.reviewer(...inputs);
-    expect(await runSolver([...args, '--workers', '4', '--max-turns', '3'], directory,
-      { ...directSolverModules, M5: { ...directSolverModules.M5, workers, reviewer } })).toBe(1);
+    const reviewer = vi.fn((...inputs: Parameters<typeof directSolverModules.M5.reviewer>) => invalid === 'reviewer' ?
+      { id: 'outsider', role: 'reviewer' as const, worktree: workspace, ownedFiles: problem.ownedFiles } : directSolverModules.M5.reviewer(...inputs));
+    // Reviewer selection happens when a candidate is ready for review.
+    const result = await runSolver([...args, '--workers', '4', '--max-turns', invalid === 'reviewer' ? '10' : '3'], directory,
+      { ...directSolverModules, M5: { ...directSolverModules.M5, workers, reviewer } });
+    expect(result).toBe(1);
     expect(host.officialGate).not.toHaveBeenCalled();
-    if (invalid !== 'reviewer') expect(host.createSession).not.toHaveBeenCalled();
+    if (invalid === 'reviewer') {
+      expect(reviewer).toHaveBeenCalled();
+      expect(cooperationState().review).toMatchObject({ status: 'pending' });
+    } else expect(host.createSession).not.toHaveBeenCalled();
   });
 
   it('applies revised M4 instructions while resuming the same model thread', async () => {
