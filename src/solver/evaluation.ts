@@ -2,7 +2,7 @@ import { MATH_PROOF_ENVIRONMENT_ENV } from '../math/mathProofEnvironment';
 import { runMathematicsSandboxedCommand, type MathematicsSandboxCommandResult } from '../math/verifier';
 import { runPersistedLeanEvalOfficialGate } from '../math/leanEvalBootstrap';
 import { checkSolverProof, type ProofCheck } from './modules/evidence';
-import { git, type SolverProblem } from './problem';
+import { git, withSolverWorktree, type SolverProblem } from './problem';
 
 /** Execution failures cannot decide whether a mathematical submission is correct. */
 export function evaluatorExecutionFailure(result: Pick<MathematicsSandboxCommandResult,
@@ -24,7 +24,7 @@ export function evaluatorExecutionFailure(result: Pick<MathematicsSandboxCommand
 }
 
 /** S3: final acceptance stays independent of replaceable research modules. */
-export async function evaluateSolverProof(problem: SolverProblem, worktree: string, receipt: ProofCheck,
+export async function evaluateSolverProof(problem: SolverProblem, receipt: ProofCheck,
   env: NodeJS.ProcessEnv, signal: AbortSignal, options: { command?: string; timeoutMs: number; teamContributions?: boolean }): Promise<Record<string, unknown>> {
   const deadline = Date.now() + options.timeoutMs;
   const controller = new AbortController();
@@ -54,9 +54,13 @@ export async function evaluateSolverProof(problem: SolverProblem, worktree: stri
     assertActive();
     if (!finalCheck.passed || finalCheck.commit !== receipt.commit || finalCheck.sourceDigest !== receipt.sourceDigest)
       throw new Error('math_integrated_proof_mismatch');
-    if (options.command) {
-      const result = await runMathematicsSandboxedCommand({ checkoutRoot: worktree, projectRelative: problem.projectRelative,
-        command: '/bin/sh', args: ['-c', options.command], timeoutMs: options.timeoutMs, env, signal: evaluationSignal });
+    const command = options.command;
+    if (command) {
+      const result = await withSolverWorktree(problem.workspace, finalCheck.commit, checkoutRoot => {
+        assertActive();
+        return runMathematicsSandboxedCommand({ checkoutRoot, projectRelative: problem.projectRelative,
+          command: '/bin/sh', args: ['-c', command], timeoutMs: options.timeoutMs, env, signal: evaluationSignal });
+      });
       assertActive();
       const reason = evaluatorExecutionFailure(result);
       return { status: reason ? 'error' : result.exitCode === 0 ? 'passed' : 'failed',

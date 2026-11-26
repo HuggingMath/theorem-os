@@ -62,16 +62,19 @@ describe('evaluator failure attribution in persisted run results', () => {
     expect(host.evaluate).not.toHaveBeenCalled();
   });
 
-  it('still interrupts preparation when an explicit finite deadline expires', async () => {
+  it.each([1, 2_147_484])('interrupts preparation at its explicit %s-second deadline', async seconds => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    let observed: { timeoutMs: number; abortedBeforeDeadline: boolean; abortedAtDeadline: boolean } | undefined;
     host.prepare.mockImplementation(async ({ timeoutMs, signal }) => {
-      expect(timeoutMs).toBeGreaterThan(0);
-      expect(timeoutMs).toBeLessThanOrEqual(1000);
-      await vi.advanceTimersByTimeAsync(1001);
+      await vi.advanceTimersByTimeAsync(seconds * 1000 - 1);
+      const abortedBeforeDeadline = signal.aborted;
+      await vi.advanceTimersByTimeAsync(1);
+      observed = { timeoutMs, abortedBeforeDeadline, abortedAtDeadline: signal.aborted };
       signal.throwIfAborted();
       throw new Error('fixture_finite_preparation_should_abort');
     });
-    expect(await runSolver([...args, '--prepare-timeout-seconds', '1', '--startup-only'], directory)).toBe(4);
+    expect(await runSolver([...args, '--prepare-timeout-seconds', String(seconds), '--startup-only'], directory)).toBe(4);
+    expect(observed).toEqual({ timeoutMs: seconds * 1000, abortedBeforeDeadline: false, abortedAtDeadline: true });
     expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ status: 'limit_reached', reason: 'math_preparation_stopped' });
     expect(vi.getTimerCount()).toBe(0);
     expect(host.research).not.toHaveBeenCalled();

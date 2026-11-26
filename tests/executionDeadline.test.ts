@@ -53,4 +53,22 @@ describe('execution time with human approval waits', () => {
     expect(vi.getTimerCount()).toBe(0);
     clock.stop();
   });
+
+  it('uses the full long execution allowance across a pause without expiring at the timer limit', async () => {
+    const limitMs = 3_000_000_000;
+    const expire = vi.fn(), clock = new ExecutionDeadline(limitMs, expire);
+    await vi.advanceTimersByTimeAsync(125);
+    expect(expire).not.toHaveBeenCalled();
+    clock.setWaiting(true);
+    await vi.advanceTimersByTimeAsync(limitMs);
+    expect(expire).not.toHaveBeenCalled();
+    expect(clock.remainingMs()).toBe(limitMs - 125);
+    clock.setWaiting(false);
+    await vi.advanceTimersByTimeAsync(limitMs - 126);
+    expect(expire).not.toHaveBeenCalled();
+    expect(clock.remainingMs()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(expire).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

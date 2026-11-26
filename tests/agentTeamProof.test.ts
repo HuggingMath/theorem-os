@@ -156,6 +156,25 @@ describe('agent-owned declaration deliveries with real Lean', () => {
     expect(f.state.check).toBeUndefined();
   }, 90_000);
 
+  it('evaluates the checked commit even if the worker keeps editing afterward', async () => {
+    const f = fixture();
+    const verifiedSource = original.replaceAll('by sorry', 'by trivial');
+    fs.writeFileSync(f.source(f.worktree), verifiedSource);
+    const checked = await checkSolverProof(f.problem, f.worktree, f.common.env, f.common.signal);
+    expect(checked.passed).toBe(true);
+    const laterSource = verifiedSource.replaceAll('by trivial', 'by exact True.intro');
+    fs.writeFileSync(f.source(f.worktree), laterSource);
+
+    const evaluation = await evaluateSolverProof(f.problem, checked, f.common.env, f.common.signal, {
+      command: "grep -qFx 'theorem original : True := by trivial' Submission.lean",
+      timeoutMs: 30_000,
+    });
+
+    expect(evaluation).toMatchObject({ status: 'passed', method: 'external-command', result: { exitCode: 0 } });
+    expect(git(f.problem.workspace, ['rev-parse', 'HEAD'])).toBe(checked.commit);
+    expect(fs.readFileSync(f.source(f.worktree), 'utf8')).toBe(laterSource);
+  }, 30_000);
+
   it('matches versions and separates final direct, transitive, absent and unknown references', async () => {
     const f = fixture(), problem = f.problem, lead = path.join(f.directory, 'runtime/worktree');
     git(problem.workspace, ['worktree', 'add', '--quiet', '--detach', lead, problem.baseCommit]);
@@ -177,7 +196,7 @@ describe('agent-owned declaration deliveries with real Lean', () => {
     fs.writeFileSync(f.source(lead), edited);
     state.check = await checkSolverProof(problem, lead, f.common.env, f.common.signal);
     expect(state.check.passed).toBe(true);
-    const evaluation = await evaluateSolverProof(problem, lead, state.check, f.common.env, f.common.signal, { timeoutMs: 30_000, teamContributions: true });
+    const evaluation = await evaluateSolverProof(problem, state.check, f.common.env, f.common.signal, { timeoutMs: 30_000, teamContributions: true });
     expect(evaluation.status).toBe('passed');
     const report = buildAgentTeamContributions(state, evaluation), relations = (r: typeof report) =>
       Object.fromEntries(r.declarations.map(d => [d.name, d.targets.map(t => t.relation)]));

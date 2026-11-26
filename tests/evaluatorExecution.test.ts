@@ -7,7 +7,8 @@ import type { SolverProblem } from '../src/solver/problem';
 const host = vi.hoisted(() => ({ run: vi.fn(), check: vi.fn(), git: vi.fn(), official: vi.fn() }));
 vi.mock('../src/math/verifier', () => ({ runMathematicsSandboxedCommand: host.run }));
 vi.mock('../src/solver/modules/evidence', () => ({ checkSolverProof: host.check }));
-vi.mock('../src/solver/problem', () => ({ git: host.git }));
+vi.mock('../src/solver/problem', () => ({ git: host.git,
+  withSolverWorktree: (_workspace: string, _commit: string, run: (checkout: string) => Promise<unknown>) => run('/fixture/snapshot') }));
 vi.mock('../src/math/leanEvalBootstrap', () => ({ runPersistedLeanEvalOfficialGate: host.official }));
 
 const commandResult = (changes: Partial<MathematicsSandboxCommandResult> = {}): MathematicsSandboxCommandResult => ({
@@ -16,7 +17,7 @@ const commandResult = (changes: Partial<MathematicsSandboxCommandResult> = {}): 
 });
 const receipt = { passed: true, commit: 'candidate', sourceDigest: 'source', verification: {} } as ProofCheck;
 const problem = { kind: 'lean-task', workspace: '/fixture/main', projectRelative: 'generated/problem', baseCommit: 'base' } as SolverProblem;
-const evaluate = (input = problem) => evaluateSolverProof(input, '/fixture/worker', receipt, {},
+const evaluate = (input = problem) => evaluateSolverProof(input, receipt, {},
   new AbortController().signal, { command: 'original-comparator comparator.json', timeoutMs: Infinity });
 
 beforeEach(() => {
@@ -82,7 +83,7 @@ describe('external evaluator execution failures', () => {
       stderrPreview: "could not execute external process 'lean'\n" };
     host.official.mockResolvedValue({ comparison });
     const value = await evaluateSolverProof({ ...problem, kind: 'lean-eval', sourceRepository: '/fixture/source' },
-      '/fixture/worker', receipt, {}, new AbortController().signal, { timeoutMs: Infinity });
+      receipt, {}, new AbortController().signal, { timeoutMs: Infinity });
     expect(value).toEqual({ status: 'error', reason: 'math_evaluator_environment_unavailable',
       method: 'official-comparator', official: true, comparison });
     expect(host.run).not.toHaveBeenCalled();
