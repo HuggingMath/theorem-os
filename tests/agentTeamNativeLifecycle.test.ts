@@ -126,9 +126,11 @@ function fixture({ earlyCompletion = false, beforeOpen }: { earlyCompletion?: bo
   const spawn = async (name: string, message = 'Profiles: D006, prover\nInvestigate a complementary helper.', signal?: AbortSignal,
     messageKind: 'plaintext' | 'encrypted' = 'plaintext', initialHistory?: unknown) => {
     await native('attach', { threadId: ROOT, sessionId: ROOT });
+    await rootOptions.bound?.(rootConnection);
     const source = { subagent: { thread_spawn: { parent_thread_id: ROOT, agent_path: '/root/' + name, depth: 1 } } };
     return native('spawn', { caller: ROOT, source,
-      bootstrap: { version: 1, sessionId: ROOT, threadId: null, source, config: { cwd: state.worktree },
+      bootstrap: { version: 1, sessionId: ROOT, threadId: null, source,
+        config: { cwd: state.worktree, model: state.model, reasoningEffort: state.effort },
         ...(initialHistory === undefined ? {} : { initialHistory }) },
       input: { kind: 'message', mode: 'triggerTurn', message: { kind: messageKind, text: message } }, startOptions: { parentTurnId: 'root-turn' } }, crypto.randomUUID(), signal);
   };
@@ -141,7 +143,10 @@ afterEach(async () => {
   for (const f of fixtures.splice(0)) {
     f.controller.abort();
     for (const session of f.sessions) { session.outcome.resolve('interrupted'); session.stopGate.resolve(); }
-    await f.team.close(); fs.rmSync(f.directory, { recursive: true, force: true });
+    await f.team.close().catch(error => {
+      if (!f.state.agentTeam!.workers.some(worker => worker.writerStopUnconfirmed)) throw error;
+    });
+    fs.rmSync(f.directory, { recursive: true, force: true });
   }
 });
 
@@ -285,6 +290,59 @@ describe('native AgentControl preserves the mathematical team lifecycle', () => 
     expect(worker.tasks[0].status).toBe('cancelled'); expect(worker.writerStopUnconfirmed).toBeUndefined();
   });
 
+  it('rejects a late spawn when the run has stopped before a worker is scheduled', async () => {
+    const f = fixture();
+    f.controller.abort(new Error('run-stopped'));
+    const spawn = f.spawn('analyst').then(() => 'accepted', error => (error as Error).message);
+    const nextTick = new Promise(resolve => setImmediate(() => resolve('still pending')));
+    expect(await Promise.race([spawn, nextTick])).toBe('math_team_dispatch_stopped');
+    expect(f.state.agentTeam!.workers).toEqual([]);
+    expect(f.sessions).toEqual([]);
+  });
+
+  it('releases the failed startup seat for other native assignments', async () => {
+    let opens = 0;
+    const f = fixture({ beforeOpen: async () => { if (++opens === 1) throw new Error('worker-start-failed'); } });
+    await expect(f.spawn('broken')).rejects.toThrow();
+    await f.spawn('analyst');
+    await expect(f.spawn('prover')).resolves.toMatchObject({ result: { agent: { metadata: { agentPath: '/root/prover' } } } });
+    expect(f.state.agentTeam!.workers[0]).toMatchObject({ status: 'stopped', tasks: [{ status: 'failed', error: 'worker-start-failed' }] });
+  });
+
+  it('holds the seat and the workspace when a failed startup could not confirm writer shutdown', async () => {
+    let opens = 0;
+    const f = fixture({ beforeOpen: async () => {
+      if (++opens === 1) throw new Error('math_codex_startup_shutdown_unconfirmed');
+    } });
+    await expect(f.spawn('broken')).rejects.toThrow();
+    const worker = f.state.agentTeam!.workers[0];
+    expect(worker.writerStopUnconfirmed).toMatchObject({ reason: 'math_codex_startup_shutdown_unconfirmed' });
+    expect(worker.tasks[0].researchArtifactId).toBeUndefined();
+    expect(readSolverRunState(path.join(f.directory, 'state.json')).agentTeam!.workers[0].writerStopUnconfirmed)
+      .toEqual(worker.writerStopUnconfirmed);
+    await f.spawn('analyst');
+    await expect(f.spawn('prover')).rejects.toThrow('math_team_capacity_exceeded');
+    await expect(f.team.restore()).rejects.toThrow('math_writer_stop_unconfirmed:broken');
+  });
+
+  it('rejects a followup when the run stops while the previous writer is being closed', async () => {
+    const f = fixture();
+    await f.spawn('analyst');
+    const worker = f.state.agentTeam!.workers[0]!, session = f.sessions[0]!;
+    await session.complete(false);
+    await expect.poll(() => worker.activity).toBe('stopping');
+    const followup = f.native('send', { caller: ROOT, target: { kind: 'id', threadId: worker.native!.threadId },
+      input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: 'Continue the work.' } } })
+      .then(() => 'accepted', error => (error as Error).message);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    f.controller.abort(new Error('run-stopped'));
+    await expect.poll(() => f.team.hasActiveWorkers).toBe(false);
+    const nextTick = new Promise(resolve => setImmediate(() => resolve('still pending')));
+    expect(await Promise.race([followup, nextTick])).toBe('math_team_dispatch_stopped');
+    expect(worker.tasks).toHaveLength(1);
+    expect(f.sessions).toHaveLength(1);
+  });
+
   it('keeps a child accepted by the host when its initiating request is subsequently cancelled', async () => {
     const f = fixture(), caller = new AbortController();
     await f.spawn('analyst', undefined, caller.signal);
@@ -385,6 +443,47 @@ describe('native AgentControl preserves the mathematical team lifecycle', () => 
     expect(f.sessions[1].options.nativeAgentControl!.initialInput).toMatchObject({ author: '/root',
       input: { message: { text: 'The dependency is now available; continue.' } } });
     expect(fs.readFileSync(path.join(worker.worktree, 'RESEARCH.md'), 'utf8')).toContain('saved dependency');
+  });
+
+  it('can reuse a yielded worker for a different route and return to its original task', async () => {
+    const f = fixture(); await f.spawn('analyst', 'Route: initial\nInvestigate the first approach.');
+    const worker = f.state.agentTeam!.workers[0], original = worker.tasks[0];
+    expect(await f.tool({ operation: 'yield', reason: 'Awaiting a dependency.' }, worker.id)).toMatchObject({ status: 'pending-writer-stop' });
+    await f.sessions[0].complete();
+    await expect.poll(() => f.team.hasActiveWorkers).toBe(false);
+    const followup = (text: string) => f.native('send', { caller: ROOT, target: { kind: 'id', threadId: worker.native!.threadId },
+      input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text } } });
+    await followup('Route: other\nCheck an independent approach while the first waits.');
+    expect(worker.tasks).toHaveLength(2);
+    expect(original.status).toBe('paused');
+    expect(worker.tasks[1]).toMatchObject({ routeId: 'other', status: 'running' });
+    expect(f.sessions[1].message).toContain('Check an independent approach');
+    await f.sessions[1].complete();
+    await expect.poll(() => f.team.hasActiveWorkers).toBe(false);
+    await followup('Route: initial\nThe dependency is ready. Continue the original approach.');
+    expect(worker.tasks).toHaveLength(2);
+    expect(original).toMatchObject({ status: 'running', objectiveRevision: 2 });
+    expect(f.sessions[2].message).toContain('Continue the original approach');
+  });
+
+  it('holds legacy queued routes for reassignment when the checkpoint has only one native input', async () => {
+    const f = fixture(); await f.spawn('analyst', 'Route: initial\nInvestigate the first approach.');
+    const worker = f.state.agentTeam!.workers[0];
+    await f.sessions[0].complete();
+    await expect.poll(() => f.team.hasActiveWorkers).toBe(false);
+    const earlier = { id: 'queued-earlier', message: 'First queued approach.', status: 'queued' as const, routeId: 'earlier' };
+    const latest = { id: 'queued-latest', message: 'Last queued approach.', status: 'queued' as const, routeId: 'latest' };
+    worker.tasks.push(earlier, latest);
+    worker.native!.initialInput = { author: '/root', input: { kind: 'message', mode: 'triggerTurn',
+      message: { kind: 'plaintext', text: 'Route: latest\nLast queued approach.' } } };
+    await f.team.restore();
+    expect(worker.tasks.slice(-2).map(task => task.status)).toEqual(['interrupted', 'interrupted']);
+    expect(f.team.hasActiveWorkers).toBe(false);
+    expect(f.sessions).toHaveLength(1);
+    await f.native('send', { caller: ROOT, target: { kind: 'id', threadId: worker.native!.threadId },
+      input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: 'Route: earlier\nContinue the saved earlier approach.' } } });
+    expect(worker.tasks.find(task => task.id === earlier.id)?.status).toBe('running');
+    expect(f.sessions[1].message).toContain('Continue the saved earlier approach');
   });
 
   it('returns the pre-interruption observation and retains the member, task and draft for continuation', async () => {

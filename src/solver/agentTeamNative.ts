@@ -53,7 +53,7 @@ export function nativeTeamAssignmentMessage(input: Json): string {
 
 /** One host-owned native tree; Rust retains the actual local mailbox/watch implementation. */
 export class AgentTeamNativeControl {
-  private readonly connections = new Map<string, NativeAgentControlConnection>();
+  private readonly connections = new Map<string, { connection: NativeAgentControlConnection; bound: boolean }>();
   private readonly pending = new Map<string, { promise: Promise<Json>; digest: string }>();
   private readonly flushing = new Map<string, Promise<void>>();
   private readonly ordered = new Map<string, Promise<unknown>>();
@@ -71,20 +71,29 @@ export class AgentTeamNativeControl {
       ...(worker?.native ? { bootstrap: worker.native.bootstrap, initialInput: worker.native.initialInput } : {}),
       request: (request, connection, context) => this.request(actor, request, connection, context.signal),
       disconnected: connection => {
-        for (const [threadId, active] of this.connections) if (active === connection) {
-          this.connections.delete(threadId);
-          for (const mail of this.archive.nativeControl?.mailbox ?? [])
-            if (mail.threadId === threadId && mail.status === 'accepted') mail.status = 'uncertain';
+        for (const [threadId, active] of this.connections) if (active.connection === connection) {
+          this.detach(threadId);
+          this.save();
         }
-        this.save();
       },
       bound: async connection => {
         const threadId = actor === 'lead' ? this.archive.nativeControl?.rootThreadId : this.worker(actor).native!.threadId;
-        if (!threadId || this.connections.get(threadId) !== connection) throw new Error('math_team_native_caller_changed');
-        this.refresh(threadId, connection); this.save();
+        const active = threadId && this.connections.get(threadId);
+        if (!threadId || !active || active.connection !== connection) throw new Error('math_team_native_caller_changed');
+        if (!connection.info) throw new Error('math_team_native_start_identity_changed');
+        this.refresh(threadId, connection);
+        active.bound = true;
+        this.save();
         await this.flush(threadId);
+        if (this.connection(threadId) !== connection) throw new Error('math_team_native_caller_changed');
       },
     };
+  }
+
+  private detach(threadId: string) {
+    this.connections.delete(threadId);
+    for (const mail of this.archive.nativeControl?.mailbox ?? [])
+      if (mail.threadId === threadId && mail.status === 'accepted') mail.status = 'uncertain';
   }
 
   private worker(id: string) {
@@ -149,6 +158,7 @@ export class AgentTeamNativeControl {
   accepted(worker: AgentTeamWorker, session: { nativeAgentControl?: NativeAgentControlConnection }, turnId: string): NativeTeamAcceptedChild {
     const native = worker.native!, connection = session.nativeAgentControl;
     if (!connection) throw new Error('math_team_native_backend_required');
+    if (this.connection(native.threadId) !== connection) throw new Error('math_team_native_child_not_bound');
     this.refresh(native.threadId, connection);
     if (!native.agent || !native.configSnapshot) throw new Error('math_team_native_child_not_bound');
     native.turnId = turnId; native.submissionId = turnId;
@@ -158,7 +168,10 @@ export class AgentTeamNativeControl {
     return { agent: native.agent, configSnapshot: native.configSnapshot, submissionId: turnId };
   }
 
-  connection(threadId: string) { return this.connections.get(threadId); }
+  connection(threadId: string) {
+    const active = this.connections.get(threadId);
+    return active?.bound ? active.connection : undefined;
+  }
 
   /** A confirmed stopped process is distinct from a native turn completion or a proof delivery. */
   writerStopped(actor: string, source: 'writer-stop' | 'recovery-process-check' = 'writer-stop') {
@@ -204,30 +217,27 @@ export class AgentTeamNativeControl {
   private async flush(threadId: string): Promise<void> {
     const prior = this.flushing.get(threadId);
     if (prior) { await prior; return this.flush(threadId); }
-    const connection = this.connections.get(threadId), state = this.archive.nativeControl;
-    if (!connection || !state) return;
+    const state = this.archive.nativeControl;
+    if (!this.connection(threadId) || !state) return;
     const queued = state.mailbox.filter(item => item.threadId === threadId && item.status === 'queued');
     if (!queued.length) return;
     const apply = (async () => {
       try {
-        const sequence = await this.update(threadId, { mailbox: queued.map(({ id, author, recipient, message, communication }) => ({ id, author, recipient,
+        await this.update(threadId, { mailbox: queued.map(({ id, author, recipient, message, communication }) => ({ id, author, recipient,
           ...(communication ? { communication } : { message }) })) }, queued);
-        for (const item of queued) item.sequence = sequence;
-        for (const item of queued) item.status = 'accepted';
       } catch {
-        // The runtime may have accepted before its response was lost; never replay automatically.
-        for (const item of queued) item.status = 'uncertain';
-      } finally { this.save(); }
+        // update() marks mail uncertain at handoff. A disconnect before handoff leaves it queued for the next bind.
+      }
     })();
     this.flushing.set(threadId, apply);
     try { await apply; } finally { this.flushing.delete(threadId); }
   }
 
   private async update(threadId: string, fields: Json,
-    mail: NonNullable<AgentTeamState['nativeControl']>['mailbox'] = []): Promise<number> {
+    mail: NonNullable<AgentTeamState['nativeControl']>['mailbox'] = []): Promise<void> {
     const previous = this.updates.get(threadId) ?? Promise.resolve();
     const apply = previous.catch(() => {}).then(async () => {
-      const state = this.archive.nativeControl!, connection = this.connections.get(threadId);
+      const state = this.archive.nativeControl!, connection = this.connection(threadId);
       if (!connection) throw new Error('math_team_native_runtime_unloaded');
       const sequence = ++state.sequence;
       // Persist uncertain ownership before handing off bytes: a crash cannot replay an accepted update.
@@ -235,16 +245,17 @@ export class AgentTeamNativeControl {
       this.save();
       const response = await connection.update({ sessionId: state.sessionId, threadId, sequence, ...fields });
       if (response.acceptedSequence !== sequence) throw new Error('math_team_native_mailbox_ack_changed');
-      if (this.connections.get(threadId) !== connection) throw new Error('math_team_native_runtime_unloaded');
-      return sequence;
+      if (this.connection(threadId) !== connection) throw new Error('math_team_native_runtime_unloaded');
+      for (const item of mail) item.status = 'accepted';
+      if (mail.length) this.save();
     });
     this.updates.set(threadId, apply);
-    try { return await apply; }
+    try { await apply; }
     finally { if (this.updates.get(threadId) === apply) this.updates.delete(threadId); }
   }
 
   private snapshot(threadId: string): Json {
-    const state = this.archive.nativeControl!, connection = this.connections.get(threadId);
+    const state = this.archive.nativeControl!, connection = this.connection(threadId);
     if (connection) this.refresh(threadId, connection);
     const native = threadId === state.rootThreadId ? undefined : this.workerByThread(threadId).native!;
     const agent = native ? native.agent : state.rootAgent;
@@ -273,12 +284,17 @@ export class AgentTeamNativeControl {
           return Promise.reject(new Error('math_team_native_attach_identity_changed'));
         sessionId = native.sessionId;
       }
-      this.connections.set(threadId, connection); this.save();
+      const active = this.connections.get(threadId);
+      if (active?.connection !== connection) {
+        if (active) this.detach(threadId);
+        this.connections.set(threadId, { connection, bound: false });
+      }
+      this.save();
       return Promise.resolve({ result: { sessionId } });
     }
     const expected = actor === 'lead' ? this.archive.nativeControl?.rootThreadId : this.worker(actor).native!.threadId;
     if (!expected || request.threadId !== expected || request.sessionId !== this.archive.nativeControl?.sessionId ||
-        this.connections.get(expected) !== connection)
+        this.connections.get(expected)?.connection !== connection)
       return Promise.reject(new Error('math_team_native_caller_changed'));
     if (payload.caller !== undefined && payload.caller !== expected)
       return Promise.reject(new Error('math_team_native_caller_changed'));
@@ -405,7 +421,8 @@ export class AgentTeamNativeControl {
       case 'recordUsage': return {}; // Provider request receipts own accounting; no second charge or quota.
       case 'configUpdate': {
         leadOnly();
-        for (const threadId of this.connections.keys()) await this.update(threadId, { serviceTier: payload.serviceTier ?? null });
+        for (const threadId of this.connections.keys())
+          if (this.connection(threadId)) await this.update(threadId, { serviceTier: payload.serviceTier ?? null });
         this.save(); return {};
       }
       default: throw new Error('math_team_native_operation_unknown:' + request.operation);

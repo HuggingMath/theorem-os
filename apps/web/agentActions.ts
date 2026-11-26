@@ -63,7 +63,15 @@ export function createAgentPathMask(context: AgentActionContext) {
 
 const statuses: Record<string, WebAgentActionBody['status']> = { inProgress: 'running', completed: 'done', failed: 'failed', declined: 'declined' };
 // Streaming items start empty; only those that run for a while are worth a "running" row.
-const startedKinds = new Set(['commandExecution', 'webSearch', 'mcpToolCall', 'dynamicToolCall', 'reasoning', 'agentMessage']);
+const startedKinds = new Set(['commandExecution', 'webSearch', 'mcpToolCall', 'dynamicToolCall', 'reasoning', 'agentMessage', 'collabAgentToolCall']);
+const collaborationTools = new Map([
+  ['spawnAgent', 'spawn_agent'], ['sendInput', 'send_input'], ['resumeAgent', 'resume_agent'], ['wait', 'wait_agent'],
+  ['closeAgent', 'close_agent'], ['sendMessage', 'send_message'], ['followupTask', 'followup_task'],
+  ['interruptAgent', 'interrupt_agent'], ['listAgents', 'list_agents'],
+]);
+const subAgentActivities = new Map([
+  ['started', 'agent_started'], ['interacted', 'agent_contacted'], ['interrupted', 'agent_interrupted'], ['completed', 'agent_turn_completed'],
+]);
 
 /** The last JSON object a command printed; the Agent's tools end with their result on one line. */
 function lastJson(output: string): Item | undefined {
@@ -294,6 +302,20 @@ export function sanitizeAgentItem(phase: 'started' | 'completed', item: Item, co
       const failed = item.success === false || item.error;
       return { ...base, kind: 'tool', status: status(failed ? 'failed' : 'done'), tool: clip(server ? `${server}.${name}` : name, 200).text,
         ...(args && args !== '{}' && args !== 'null' ? { arguments: args } : {}), ...(count(item.durationMs) !== undefined ? { durationMs: count(item.durationMs) } : {}) };
+    }
+    case 'collabAgentToolCall': {
+      const tool = collaborationTools.get(string(item.tool) ?? '');
+      if (!tool) return;
+      // Native thread ids and raw tool prompts are unnecessary for displaying the action.
+      return { ...base, kind: 'tool', tool: 'collaboration.' + tool,
+        status: item.status === 'interrupted' ? 'failed' : status('done') };
+    }
+    case 'subAgentActivity': {
+      const activity = subAgentActivities.get(string(item.kind) ?? ''), agent = string(item.agentPath);
+      if (!activity) return;
+      // This is a lifecycle observation, with proof acceptance reported separately by Lean.
+      return { ...base, kind: 'tool', tool: 'collaboration.' + activity, status: 'done',
+        ...(agent ? { arguments: clip(shown(agent), limits.arguments).text } : {}) };
     }
     case 'imageView': return { ...base, kind: 'tool', status: 'done', tool: 'view_image', arguments: clip(mask(string(item.path) ?? '').text, limits.arguments).text };
     case 'contextCompaction': return { ...base, kind: 'compaction', status: 'done' };

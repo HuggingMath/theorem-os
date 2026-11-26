@@ -212,6 +212,21 @@ describe('host credential relay for isolated formalization roles', () => {
     expect(gate.mock.calls[2][0]).not.toHaveProperty('threadId');
   });
 
+  it('attributes a Codex 0.172 worker to its thread within the shared root session', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse()));
+    const gate = vi.fn((_identity?: Parameters<ModelRequestGate>[0]) => ({ allowed: true as const, settle: () => {} }));
+    const relay = await start({ transport: 'loopback-http', requestGate: gate });
+    const turnMetadata = JSON.stringify({ session_id: 'root-session', thread_id: 'worker-thread', parent_thread_id: 'root-session' });
+    const request = { ...nativeTeamRequest, client_metadata: { session_id: 'root-session', thread_id: 'worker-thread',
+      'x-codex-turn-metadata': turnMetadata } };
+    expect((await send(relay, { body: JSON.stringify(request), headers: { 'session-id': 'root-session',
+      'thread-id': 'worker-thread', 'x-codex-turn-metadata': turnMetadata } })).status).toBe(200);
+    expect(gate.mock.calls[0][0]?.threadId).toBe('worker-thread');
+    expect((await send(relay, { body: JSON.stringify({ ...request, client_metadata: { ...request.client_metadata,
+      'x-codex-turn-metadata': JSON.stringify({ thread_id: 'another-worker' }) } }) })).status).toBe(200);
+    expect(gate.mock.calls[1][0]).not.toHaveProperty('threadId');
+  });
+
   it.each(['session-id', 'thread-id', 'session_id', 'x-codex-thread-id'])('attributes the native %s header', async header => {
     vi.stubGlobal('fetch', vi.fn(async () => fakeResponse()));
     const gate = vi.fn((_identity?: Parameters<ModelRequestGate>[0]) => ({ allowed: true as const, settle: () => {} }));
@@ -222,7 +237,8 @@ describe('host credential relay for isolated formalization roles', () => {
   });
 
   it.each([
-    { 'thread-id': 'child-one', 'session-id': 'child-two' },
+    { 'thread-id': 'child-one', 'x-codex-thread-id': 'child-two' },
+    { 'session-id': 'root-one', 'session_id': 'root-two' },
     { 'thread-id': 'child-one', 'x-codex-turn-metadata': JSON.stringify({ thread_id: 'child-two' }) },
     { 'x-codex-turn-metadata': 'invalid-json' },
   ])('keeps inconsistent native identities unattributed while accounting for the request: %j', async headers => {

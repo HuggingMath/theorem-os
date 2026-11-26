@@ -18,7 +18,7 @@ import { DeclarationArtifactCheckError, DeclarationSubmissionError } from './dec
 import { hasDeterministicLeanFailure } from './proofReuse';
 import { solverSourceDigest } from './modules/evidence';
 import { writeOwnedDeclarationIndex } from './declarationIndex';
-import { stopProofWriter } from './proofWriter';
+import { recordUnconfirmedWriterStartup, stopProofWriter } from './proofWriter';
 import { prepareTacticBatteryFailureCacheRoot } from './tacticBatteryFailureCache';
 import { ResearchUsage } from './researchUsage';
 import { aggregateUsage, buildTokenBudget, initializeUsageAccounting, modelDispatchAllowed } from './usageBudget';
@@ -373,6 +373,11 @@ export class AgentResearchTeam {
     return pending;
   }
 
+  private assertNativeDispatchOpen(signal: AbortSignal) {
+    if (this.stopping || this.input.signal.aborted) throw new Error('math_team_dispatch_stopped');
+    signal.throwIfAborted();
+  }
+
   private async waitNativeStart(worker: AgentTeamWorker, signal: AbortSignal, provisional = false): Promise<NativeTeamAcceptedChild> {
     const pending = this.nativeStarts.get(worker.id)!;
     const abort = () => {
@@ -389,11 +394,18 @@ export class AgentResearchTeam {
     };
     signal.addEventListener('abort', abort, { once: true });
     if (signal.aborted) abort();
+    // A skipped launch has no worker finalizer to settle this promise.
+    if (!this.live.has(worker.id)) pending.reject(new Error('math_team_dispatch_stopped'));
     try { return await pending.promise; }
     finally { signal.removeEventListener('abort', abort); this.nativeStarts.delete(worker.id); }
   }
 
   private async spawnNative(request: NativeTeamSpawn, signal: AbortSignal): Promise<NativeTeamAcceptedChild> {
+    this.assertNativeDispatchOpen(signal);
+    const { model, effort } = this.input.state;
+    const config = request.bootstrap.config as Record<string, unknown>;
+    if (config.model !== model || config.reasoningEffort !== effort)
+      throw new NativeAgentControlInputError('math_team_native_run_config_frozen: Retry spawn_agent with the same task_name and omit model and reasoning_effort to inherit the run configuration (' + model + ', ' + effort + ').');
     const { message, routeId } = nativeTaskRoute(request.message);
     this.assertRouteAvailable(routeId);
     if (this.occupiedAgentSlots() >= this.input.maxAgents - 1)
@@ -416,12 +428,13 @@ export class AgentResearchTeam {
     worker.exposures = parentExposures.filter(item => item.kind === 'adopted' ||
       spawnHistory === 'parent-history' && item.kind === 'inspected' && !adopted.has(item.deliveryId))
       .map(item => ({ ...item, kind: item.kind === 'adopted' ? 'adopted' : 'possible-via-parent' }));
-    this.archive.workers.push(worker); this.nativeStart(worker); this.changed();
+    this.archive.workers.push(worker); this.nativeStart(worker);
     this.enqueue(worker, task);
     return this.waitNativeStart(worker, signal, true);
   }
 
   private async followupNative(worker: AgentTeamWorker, initialInput: Record<string, unknown>, signal: AbortSignal): Promise<NativeTeamAcceptedChild> {
+    this.assertNativeDispatchOpen(signal);
     const { message, routeId } = nativeTaskRoute(nativeTeamAssignmentMessage(initialInput.input as Record<string, unknown>));
     this.assertRouteAvailable(routeId);
     if (worker.writerStopUnconfirmed) throw new Error('math_writer_stop_unconfirmed:' + worker.id);
@@ -447,38 +460,44 @@ export class AgentResearchTeam {
           content: [{ type: 'input_text', text: profiles.section.text }] }] } : {}) });
       if (result.accepted !== true || typeof result.submissionId !== 'string') throw new Error('math_team_native_input_not_accepted');
       if (task.cancelRequested) throw new Error('math_team_task_not_running');
-      this.saveNativeFollowup(task, message, profiles?.evidence ?? task.profileEvidence);
+      this.updateNativeFollowup(task, message, profiles?.evidence ?? task.profileEvidence);
       const accepted = this.nativeControl!.accepted(worker, active.session, worker.native!.turnId!);
       return { ...accepted, submissionId: result.submissionId };
     }
     if (active) await active.task;
     await this.closeNativeIdle(worker);
+    this.assertNativeDispatchOpen(signal);
+    if (worker.writerStopUnconfirmed) throw new Error('math_writer_stop_unconfirmed:' + worker.id);
     if ((worker.status as string) === 'stopped') throw new Error('math_team_agent_stopped');
     this.assertRouteAvailable(routeId);
-    worker.native!.initialInput = initialInput;
-    this.nativeStart(worker);
     const saved = worker.tasks.toReversed().find(task => ['paused', 'interrupted', 'queued'].includes(task.status) &&
       !task.cancelRequested && !task.deliveryId && (routeId === undefined || routeId === task.routeId));
+    // There is one captured input per native writer. Do not replace it while
+    // a different queued task still needs it.
+    if (worker.tasks.some(task => task.status === 'queued' && task !== saved))
+      throw new NativeAgentControlInputError('math_team_native_assignment_queued: Continue the queued route before assigning different work to this member.');
     if (saved) {
       this.assertRouteAvailable(saved.routeId);
-      this.saveNativeFollowup(saved, message, profiles?.evidence);
+      this.updateNativeFollowup(saved, message, profiles?.evidence);
       saved.pauseRequested = undefined; saved.status = 'queued'; saved.error = undefined;
-      this.launch(worker);
-    } else {
-      this.enqueue(worker, this.newTask(message, profiles?.evidence, { routeId }));
-    }
+    } else worker.tasks.push(this.newTask(message, profiles?.evidence, { routeId }));
+    worker.native!.initialInput = initialInput;
+    this.changed();
+    this.nativeStart(worker);
+    this.launch(worker);
     return this.waitNativeStart(worker, signal);
   }
 
   /** Native input is the instruction source; retain it for isolated-workspace resume. */
-  private saveNativeFollowup(task: AgentTeamTask, message: string, evidence?: AgentTeamTask['profileEvidence']) {
+  private updateNativeFollowup(task: AgentTeamTask, message: string, evidence?: AgentTeamTask['profileEvidence']) {
+    const selected = agentTeamProfileSelection(message), inherited = agentTeamProfileSelection(task.message);
+    const nextMessage = selected.length || !inherited.length ? message : 'Profiles: ' + inherited.join(', ') + '\n' + message;
+    const nextEvidence = evidence ?? resolveAgentTeamProfiles(this.input.leadAccess.researchSkill!, nextMessage, this.expertCards).evidence;
     (task.objectiveHistory ??= []).push({ revision: task.objectiveRevision ?? 1, message: task.message,
       workKind: task.workKind, at: Date.now(), reason: 'Native followup.', profileEvidence: task.profileEvidence });
-    const selected = agentTeamProfileSelection(message), inherited = agentTeamProfileSelection(task.message);
-    task.message = selected.length || !inherited.length ? message : 'Profiles: ' + inherited.join(', ') + '\n' + message;
+    task.message = nextMessage;
     task.objectiveRevision = (task.objectiveRevision ?? 1) + 1;
-    task.profileEvidence = evidence ?? resolveAgentTeamProfiles(this.input.leadAccess.researchSkill!, task.message, this.expertCards).evidence;
-    this.changed();
+    task.profileEvidence = nextEvidence;
   }
 
   private async interruptNative(worker: AgentTeamWorker) {
@@ -522,7 +541,10 @@ export class AgentResearchTeam {
         git(state.worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir'])],
       isolatedWorkspaceParent: path.dirname(worker.worktree), isolateProcess: true,
       instructions: context.instructions, signal: this.input.signal,
-      onUsage: () => { throw new Error('math_team_native_idle_usage'); } });
+      onUsage: () => { throw new Error('math_team_native_idle_usage'); } }).catch(error => {
+        recordUnconfirmedWriterStartup(worker, error, () => this.changed());
+        throw error;
+      });
     this.nativeIdle.set(worker.id, session);
     if (worker.native && session.nativeConfiguration) worker.native.runtimeConfiguration = session.nativeConfiguration;
     worker.writerProcess = session.processIdentity; this.changed();
@@ -963,7 +985,9 @@ export class AgentResearchTeam {
       if (worker.pendingDelivery) await this.finishDelivery(worker);
       await this.flushAdoptions(worker.id);
       while (!this.stopping && !abort.signal.aborted && worker.status !== 'stopped') {
-        if (worker.tasks.some(task => task.status === 'paused')) break;
+        // A native followup chooses and supplies input for one particular task.
+        // A parked draft on another route does not block that dispatch.
+        if (!worker.native && worker.tasks.some(task => task.status === 'paused')) break;
         const task = worker.tasks.find(item => item.status === 'queued');
         if (!task) break;
         const admission = agentTeamChildAdmission(this.budgetInput(task), 'turn');
@@ -982,7 +1006,15 @@ export class AgentResearchTeam {
         this.event(worker.id, 'lead', 'failed', worker.error);
       }
     }).finally(() => {
-      this.nativeStarts.get(worker.id)?.reject(new Error(worker.error ?? 'math_team_native_start_failed'));
+      const pending = this.nativeStarts.get(worker.id);
+      const firstTask = worker.tasks[0];
+      if (pending && !pending.accepted && worker.native && !worker.native.submissionId && !worker.writerStopUnconfirmed &&
+          (worker.status === 'failed' || firstTask.status === 'failed')) {
+        worker.status = 'stopped'; worker.activity = 'idle';
+        firstTask.status = 'failed'; firstTask.error ??= worker.error ?? 'math_team_native_start_failed';
+        firstTask.finishedAt ??= Date.now();
+      }
+      pending?.reject(new Error(worker.error ?? 'math_team_native_start_failed'));
       this.live.delete(worker.id); this.changed();
       // Per-task interruption consumes this controller. Reuse the member only after runTask has
       // confirmed shutdown and saved its draft; a global stop or quarantine must never relaunch it.
@@ -1145,6 +1177,7 @@ export class AgentResearchTeam {
     } catch (error) {
       outcome = signal.aborted || error instanceof Error && error.message === 'math_team_dispatch_stopped' ? 'interrupted' : 'failed';
       task.error = error instanceof Error ? error.message : 'math_team_worker_failed';
+      if (recordUnconfirmedWriterStartup(worker, error, () => this.changed())) throw error;
       if (error instanceof LeanEnvironmentHealthCheckError)
         this.input.emit('lean_environment_unavailable', { workerId: worker.id, health: error.health });
     } finally {
@@ -1162,7 +1195,7 @@ export class AgentResearchTeam {
           this.nativeControl?.writerStopped(worker.id);
           worker.writerProcess = undefined;
         }
-        writerStopped = true;
+        writerStopped = !worker.writerStopUnconfirmed;
       } finally {
         if (started) usage.finish(completed);
         else if (reserved) { state.turns--; worker.turns--; }
@@ -1447,6 +1480,15 @@ export class AgentResearchTeam {
       worker.writerProcess = undefined;
       if (worker.native) this.nativeControl?.writerStopped(worker.id, 'recovery-process-check');
       await this.prepare(worker);
+      const queued = worker.tasks.filter(task => task.status === 'queued');
+      if (worker.native && queued.length > 1) {
+        // Older checkpoints could accept another queue entry after a blocked
+        // followup. Only its last input was saved, so require explicit reassignment.
+        for (const task of queued) {
+          task.status = 'interrupted'; task.finishedAt = Date.now();
+          this.event(worker.id, 'lead', 'interrupted', 'Assign this saved task explicitly to continue; its queued native input could not be recovered.', { taskId: task.id });
+        }
+      }
       for (const task of worker.tasks.filter(item => item.status === 'running')) {
         task.status = task.cancelRequested ? 'cancelled' : task.pauseRequested ? 'paused' : 'interrupted';
         if (task.status === 'paused') task.pausedAt = Date.now(); else task.finishedAt = Date.now();

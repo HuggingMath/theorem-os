@@ -589,10 +589,10 @@ index 7c9cded4..1dada718 100644
                  if let Some(token_usage_turn_id) = token_usage_turn_id {
 diff --git a/codex-rs/app-server/src/theoremos_agent_control.rs b/codex-rs/app-server/src/theoremos_agent_control.rs
 new file mode 100644
-index 00000000..dcad9fc4
+index 00000000..7917d178
 --- /dev/null
 +++ b/codex-rs/app-server/src/theoremos_agent_control.rs
-@@ -0,0 +1,860 @@
+@@ -0,0 +1,876 @@
 +//! Opt-in stdio transport for the native AgentControl execution contract.
 +//! The model still invokes upstream collaboration handlers. The trusted host owns
 +//! isolated runtimes and durable membership; it is never a dynamic-tool facade.
@@ -934,6 +934,22 @@ index 00000000..dcad9fc4
 +        let params = TheoremosAgentControlRequestParams {
 +            value: json!({"version":1,"sessionId":self.session_id,"threadId":self.thread_id,"operationId":uuid::Uuid::now_v7().to_string(),"operation":operation,"payload":payload}),
 +        };
++        if operation == "spawn" {
++            // Match the host's stdio frame limit, reserving space for the
++            // request envelope and the maximum-width integer request ID.
++            const HOST_FRAME_BYTES: usize = 8 * 1024 * 1024;
++            const WIRE_OVERHEAD: usize =
++                br#"{"id":-9223372036854775808,"method":"theoremos/agentControl/request","params":}"#
++                    .len();
++            if serde_json::to_vec(&params).map_err(decode_error)?.len() + WIRE_OVERHEAD
++                > HOST_FRAME_BYTES
++            {
++                return Err(CodexErr::InvalidRequest(
++                    "Native spawn exceeds the 8 MiB transport limit. Retry with fork_turns=none and a short assignment."
++                        .into(),
++                ));
++            }
++        }
 +        let (request_id, receiver) = bridge
 +            .outgoing
 +            .send_request(ServerRequestPayload::TheoremosAgentControlRequest(params))

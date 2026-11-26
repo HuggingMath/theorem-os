@@ -11,6 +11,7 @@ import { runSolver } from '../src/solver/run';
 import { assertSolverSources, git } from '../src/solver/problem';
 import { localExample } from './helpers/solver';
 import { researchHarness } from '../src/runtime/researchHarness';
+import { prepareWestlakeProfile } from '../src/runtime/westlake';
 
 vi.mock('../src/math/mathBuildManifest', async original => ({
   ...await original<typeof import('../src/math/mathBuildManifest')>(), readMathBuildManifest: vi.fn(),
@@ -44,6 +45,7 @@ describe('opt-in skill research CLI and pinned identity', () => {
     vi.stubEnv('DEEPSCIENTIST_MATH_ENV_FILE', path.join(example.directory, 'empty.env'));
     vi.stubEnv('DEEPSCIENTIST_MATH_PANTOGRAPH_MANIFEST', undefined);
     vi.stubEnv('DEEPSCIENTIST_MATH_PANTOGRAPH_SHA256', undefined);
+    vi.stubEnv('THEOREMOS_CODEX_BACKEND_EXECUTABLE', process.execPath);
     vi.spyOn(console, 'log').mockImplementation(() => {});
     open.mockClear();
   });
@@ -199,6 +201,35 @@ describe('opt-in skill research CLI and pinned identity', () => {
     expect(state()).toMatchObject({ runId: before.runId, researchDelegation: before.researchDelegation,
       researchSkill: before.researchSkill, agentSessionPlan: before.agentSessionPlan, methodDigest: before.methodDigest,
       workerCount: 1, coordination: 'independent', turns: 0 });
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('freezes the direct Westlake Chat team with host tools and preserves that on resume', async () => {
+    const profile = path.join(example.directory, 'westlake-profile');
+    prepareWestlakeProfile(profile, 'deepseek-flash', 'high');
+    vi.stubEnv('DEEPSCIENTIST_MATH_CODEX_EXECUTABLE', process.execPath);
+    vi.stubEnv('THEOREMOS_CODEX_BACKEND_EXECUTABLE', path.join(example.directory, 'missing-native-backend'));
+    expect(await runSolver([...args, '--agent-team', '3', '--harness-profile', profile], root, modules)).toBe(0);
+    const saved = state();
+    expect(saved).toMatchObject({ agentTeam: { transport: 'host-tools' }, agentHarness: { executable: fs.realpathSync(process.execPath) },
+      researchDelegation: { mode: 'team', maxAgents: 3 }, turns: 0 });
+    expect(await runSolver([...args, '--resume'], root, modules)).toBe(0);
+    expect(state()).toMatchObject({ runId: saved.runId, agentTeam: { transport: 'host-tools' }, turns: 0 });
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unfinished Westlake run with a frozen native team without changing its checkpoint', async () => {
+    const profile = path.join(example.directory, 'westlake-profile');
+    prepareWestlakeProfile(profile, 'deepseek-flash', 'high');
+    expect(await runSolver([...args, '--agent-team', '3', '--harness-profile', profile, '--codex', process.execPath], root, modules)).toBe(0);
+    const saved = state();
+    saved.agentTeam!.transport = 'native-agent-control';
+    const stateFile = output + '.runtime/state.json';
+    writeSolverRunState(stateFile, saved);
+    const original = fs.readFileSync(stateFile);
+    expect(await runSolver([...args, '--resume'], root, modules)).toBe(1);
+    rejected('math_westlake_native_team_unsupported: create a new team run with your saved artifacts. Direct Westlake uses host tools for new runs.');
+    expect(fs.readFileSync(stateFile)).toEqual(original);
     expect(open).not.toHaveBeenCalled();
   });
 

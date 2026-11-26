@@ -227,7 +227,7 @@ async function checkScenario(executable: string, scenario: Scenario): Promise<vo
       onUsageIncomplete: () => { incompleteSignals++; },
       requestGate,
       onActivity: value => activities.push(`${value.event}:${value.itemType ?? ''}`) });
-    assert.equal(session.usageSource, limited ? 'upstream-requests' : undefined, 'native_usage_source_mismatch');
+    assert.equal(session.usageSource, limited ? 'upstream-requests' : 'native-thread-totals', 'native_usage_source_mismatch');
     deadline = setTimeout(() => { void session?.close(); }, 45_000);
     const status = await session.run('Run the local protocol check and report its completion marker.',
       'westlake-offline-protocol-check', workspace, () => {});
@@ -246,12 +246,16 @@ async function checkScenario(executable: string, scenario: Scenario): Promise<vo
         'native_budget_patch_did_not_execute');
       assert.equal(activities.includes('item_completed:agentMessage'), false, 'native_budget_generated_final_message');
       assert.equal(requestReceipts.length, 1, 'native_local_denial_created_request_receipt');
-      assert.deepEqual(requestReceipts[0], { complete: scenario.usage[0], usage: scenario.usage[0] ? {
+      assert.deepEqual(requestReceipts[0], { complete: scenario.usage[0], outcome: scenario.usage[0] ? 'completed' : 'failed',
+        ...(!scenario.usage[0] ? { missingReason: 'provider-usage-missing' } : {}), usage: scenario.usage[0] ? {
         inputTokens: 25, cachedInputTokens: 3, outputTokens: 8, reasoningOutputTokens: 4, totalTokens: 33,
       } : undefined }, 'native_request_receipt_mismatch');
-      assert.deepEqual(requestRecord.requestUsageAccounting, { startedRequests: 1,
-        reportedRequests: Number(scenario.usage[0]), pendingRequests: 0, incomplete: !scenario.usage[0] },
+      const accounting = requestRecord.requestUsageAccounting!;
+      assert.deepEqual({ startedRequests: accounting.startedRequests, reportedRequests: accounting.reportedRequests,
+        pendingRequests: accounting.pendingRequests, incomplete: accounting.incomplete },
+      { startedRequests: 1, reportedRequests: Number(scenario.usage[0]), pendingRequests: 0, incomplete: !scenario.usage[0] },
       'native_local_denial_changed_usage_accounting');
+      assert.equal(accounting.receipts?.length, 1, 'native_local_denial_created_a_persisted_request_receipt');
       assert.equal(requestBudget().status, scenario.usage[0] ? 'exhausted' : 'usage-unavailable', 'native_request_budget_status_mismatch');
       assert.equal(requestBudget().reportedTotalTokens, scenario.usage[0] ? 33 : null, 'native_thread_counter_double_counted');
       assert.equal(requestBudget().usageComplete, scenario.usage[0], 'native_request_budget_completeness_mismatch');

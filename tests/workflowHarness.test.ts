@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { temporaryDirectory } from './helpers/files';
-import { bindResearchHarness } from '../src/runtime/researchHarness';
+import { assertResearchHarnessCurrent, bindResearchHarness } from '../src/runtime/researchHarness';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/agentSession';
 import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 import { formalizationModelConfigurationDigest, formalizationModelConfigurationSchema } from '../src/math/formalizationWorkflow';
@@ -85,6 +85,25 @@ describe('complete workflow harness selection', () => {
     expect(model.open).not.toHaveBeenCalled();
     expect(() => assertWorkflowSessionSupported({ ...f.bound, profile: f.root }, { environment: 'standard' }))
       .toThrow('math_workflow_harness_binding_mismatch');
+  });
+
+  it.each(['rewrite', 'replacement'])('rejects an executable %s with the same size and modification time', mode => {
+    const { config } = fixture();
+    const { executable, profile } = config;
+    const first = Buffer.alloc(2 * 1024 * 1024 + 27, 0x61);
+    const changed = Buffer.from(first); changed[changed.length - 1] = 0x62;
+    const mtime = new Date('2024-01-01T00:00:00Z');
+    fs.writeFileSync(executable, first);
+    fs.utimesSync(executable, mtime, mtime);
+    const identity = bindResearchHarness('codex', executable, profile);
+    expect(identity.executableDigest).toBe(mathDigest(first));
+    expect(() => assertResearchHarnessCurrent(identity, process.env)).not.toThrow();
+
+    const target = mode === 'rewrite' ? executable : executable + '.next';
+    fs.writeFileSync(target, changed, { mode: 0o700 });
+    fs.utimesSync(target, mtime, mtime);
+    if (target !== executable) fs.renameSync(target, executable);
+    expect(() => assertResearchHarnessCurrent(identity, process.env)).toThrow('math_harness_identity_changed');
   });
 
   it('retains legacy Codex profile observations alongside explicit harness identity', () => {

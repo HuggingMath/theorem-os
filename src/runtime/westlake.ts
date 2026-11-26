@@ -7,6 +7,8 @@ export const WESTLAKE_PROVIDER = {
   defaultModel: 'deepseek-flash', defaultEffort: 'max',
 } as const;
 
+export const WESTLAKE_NATIVE_TEAM_UNSUPPORTED = 'math_westlake_native_team_unsupported';
+
 export function validateWestlakeModel(model: string, effort: string): void {
   if (model !== WESTLAKE_PROVIDER.defaultModel) throw new Error('Westlake requires --model deepseek-flash');
   if (!['low', 'high', 'max'].includes(effort)) throw new Error('Westlake requires --effort low, high or max');

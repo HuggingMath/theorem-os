@@ -67,6 +67,7 @@ function nativeAgentTeamInstructions(role: AgentTeamRole, maxAgents: number): st
     `At most ${maxAgents} agents including you may be available. ` +
     'As soon as you identify a proof step you can advance, work on it in your Lean files. Keep writing the consuming argument or another unassigned gap while members work. ' +
     'If portfolio scouting produced no report, use native spawn_agent for concrete independent gaps found in the frozen statement. ' +
+    'Omit model and reasoning_effort when calling spawn_agent so members inherit the frozen run configuration. ' +
     'If several goals share a mathematical foundation, assign and check its small Lean interfaces before dispatching the consuming goals. ' +
     'Tag route-specific native spawn and followup objectives with Route: ROUTE_ID as the first line. Use theoremos_team retire_route with the obstruction and evidence refs to stop a refuted route. ' +
     'Idle members still occupy their places. Use native followup_task to reuse a member for another gap or specialty; interrupt_agent stops its turn and preserves its place and work. ' +

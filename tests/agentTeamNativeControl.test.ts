@@ -43,6 +43,7 @@ async function fixture() {
       { signal: new AbortController().signal });
   };
   await call('attach', { threadId: ROOT, sessionId: ROOT });
+  await control.options('lead').bound!(root);
   return { archive, lifecycle, save, control, root, call, accepted };
 }
 
@@ -90,6 +91,7 @@ describe('native AgentControl mathematical-team host routing', () => {
     expect((await f.call('list', payload, 'lead', f.root, 'same-read')).result).toMatchObject({ agents: [{ threadId: ROOT }] });
     const child = connection(CHILD, '/root/analyst');
     await f.call('attach', { threadId: CHILD, sessionId: ROOT }, 'analyst', child);
+    await f.control.options('analyst').bound!(child);
     f.save.mockClear();
     expect((await f.call('list', payload, 'lead', f.root, 'same-read')).result).toMatchObject({
       agents: [{ threadId: ROOT }, { threadId: CHILD }],
@@ -114,6 +116,52 @@ describe('native AgentControl mathematical-team host routing', () => {
     expect(f.archive.nativeControl!.mailbox[0].status).toBe('uncertain');
     await f.call('attach', { threadId: CHILD, sessionId: ROOT }, 'analyst', child);
     expect(child.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a reconnecting child unloaded and retains mail if its startup fails before binding', async () => {
+    const f = await fixture(), provisional = { ...connection(CHILD, '/root/analyst'), info: undefined };
+    await f.call('attach', { threadId: CHILD, sessionId: ROOT }, 'analyst', provisional);
+    expect(await f.call('list', { caller: ROOT, pathPrefix: '/root/analyst' })).toEqual({ result: { agents: [] } });
+    const target = { kind: 'reference', reference: '/root/analyst' };
+    expect(await f.call('resolve', { caller: ROOT, target })).toEqual({ result: { threadId: CHILD } });
+    const sent = await f.call('send', { caller: ROOT, target,
+      input: { kind: 'message', mode: 'queueOnly', message: { kind: 'plaintext', text: 'Use the checked dependency.' } } });
+    expect(sent.result).toMatchObject({ threadId: CHILD, submissionId: expect.any(String) });
+    expect(provisional.update).not.toHaveBeenCalled();
+    expect(f.archive.nativeControl!.mailbox[0].status).toBe('queued');
+    await f.control.options('analyst').disconnected!(provisional);
+    const child = connection(CHILD, '/root/analyst');
+    await f.call('attach', { threadId: CHILD, sessionId: ROOT }, 'analyst', child);
+    expect(child.update).not.toHaveBeenCalled();
+    await f.control.options('analyst').bound!(child);
+    expect(child.update).toHaveBeenCalledTimes(1);
+    expect(f.archive.nativeControl!.mailbox[0].status).toBe('accepted');
+    expect((await f.call('list', { caller: ROOT, pathPrefix: '/root/analyst' })).result).toMatchObject({ agents: [{ threadId: CHILD }] });
+  });
+
+  it('leaves delivery uncertain when an in-flight update is acknowledged by the replaced connection', async () => {
+    const f = await fixture(), child = connection(CHILD, '/root/analyst');
+    await f.call('attach', { threadId: CHILD, sessionId: ROOT }, 'analyst', child);
+    await f.control.options('analyst').bound!(child);
+    await f.control.advisory(null, 'analyst', 'Already forwarded to the old connection.');
+    expect(f.archive.nativeControl!.mailbox[0].status).toBe('accepted');
+    const updating = deferred(), release = deferred();
+    vi.mocked(child.update).mockImplementationOnce(async request => {
+      updating.resolve(); await release.promise;
+      return { acceptedSequence: request.sequence };
+    });
+    const sent = f.call('send', { caller: ROOT, target: { kind: 'id', threadId: CHILD },
+      input: { kind: 'message', mode: 'queueOnly', message: { kind: 'plaintext', text: 'Do not replay an unconfirmed delivery.' } } });
+    await updating.promise;
+    const replacement = connection(CHILD, '/root/analyst');
+    await f.call('attach', { threadId: CHILD, sessionId: ROOT }, 'analyst', replacement);
+    await f.control.options('analyst').disconnected!(child);
+    release.resolve();
+    await f.control.options('analyst').bound!(replacement);
+    await sent;
+    expect(child.update).toHaveBeenCalledTimes(2);
+    expect(replacement.update).not.toHaveBeenCalled();
+    expect(f.archive.nativeControl!.mailbox.map(mail => mail.status)).toEqual(['uncertain', 'uncertain']);
   });
 
   it('preserves native sender identity and enforces the flat Lead dispatch authority', async () => {
@@ -142,6 +190,7 @@ describe('native AgentControl mathematical-team host routing', () => {
   it('delivers host adoption and failure observations without looking up a nonexistent host worker', async () => {
     const f = await fixture(), child = connection(CHILD, '/root/analyst');
     await f.call('attach', { threadId: CHILD, sessionId: ROOT }, 'analyst', child);
+    await f.control.options('analyst').bound!(child);
     await f.control.advisory(null, 'lead', 'Checked declarations were integrated.');
     await f.control.advisory(null, 'analyst', 'The dependency is ready.');
     expect(f.archive.nativeControl!.mailbox).toMatchObject([
@@ -238,6 +287,7 @@ describe('native AgentControl mathematical-team host routing', () => {
       operationId: 'cold-attach', operation: 'attach', payload: { threadId: CHILD, sessionId: CHILD } }, child,
     { signal: new AbortController().signal });
     expect(response).toEqual({ result: { sessionId: ROOT } });
+    await f.control.options('analyst').bound!(child);
     vi.mocked(child.update).mockRejectedValueOnce(new Error('response-lost-after-native-acceptance'));
     await f.call('send', { caller: ROOT, target: { kind: 'id', threadId: CHILD },
       input: { kind: 'message', mode: 'queueOnly', message: { kind: 'plaintext', text: 'No false read receipt.' } } });
@@ -245,6 +295,38 @@ describe('native AgentControl mathematical-team host routing', () => {
     await f.control.options('analyst').bound!(child);
     expect(child.update).toHaveBeenCalledTimes(1);
     expect(f.lifecycle.followup).not.toHaveBeenCalled();
+  });
+
+  it('retries queued mail on reattach if the recipient disconnected before the update could send it', async () => {
+    const f = await fixture(), child = connection(CHILD, '/root/analyst');
+    await f.call('attach', { threadId: CHILD, sessionId: ROOT }, 'analyst', child);
+    await f.control.options('analyst').bound!(child);
+    const updating = deferred(), release = deferred();
+    vi.mocked(child.update).mockImplementationOnce(async request => {
+      updating.resolve(); await release.promise;
+      return { acceptedSequence: request.sequence };
+    });
+    const configUpdate = f.call('configUpdate', { serviceTier: 'priority' }).catch(error => (error as Error).message);
+    await updating.promise;
+    const send = f.call('send', { caller: ROOT, target: { kind: 'id', threadId: CHILD },
+      input: { kind: 'message', mode: 'queueOnly', message: { kind: 'plaintext', text: 'A dependency is ready.' } } });
+    await expect.poll(() => f.archive.nativeControl!.mailbox.length).toBe(1);
+    await f.control.options('analyst').disconnected!(child);
+    release.resolve();
+    await configUpdate;
+    await send;
+    const [mail] = f.archive.nativeControl!.mailbox;
+    expect(mail).toMatchObject({ status: 'queued' });
+    expect(mail.sequence).toBeUndefined();
+    expect(child.update).toHaveBeenCalledTimes(1);
+
+    const resumed = connection(CHILD, '/root/analyst');
+    await f.call('attach', { threadId: CHILD, sessionId: ROOT }, 'analyst', resumed);
+    await f.control.options('analyst').bound!(resumed);
+    expect(resumed.update).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      mailbox: [expect.objectContaining({ id: mail.id, message: { kind: 'plaintext', text: 'A dependency is ready.' } })],
+    }));
+    expect(mail.status).toBe('accepted');
   });
 
   it('returns one spawn receipt for the same operation and rejects a reused path for another assignment', async () => {

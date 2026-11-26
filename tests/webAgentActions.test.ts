@@ -36,6 +36,20 @@ const libraryCommand = (operation: string, result: unknown, extra: Record<string
   cwd: own, command: `bun '${tools}' library ${operation}`, aggregatedOutput: JSON.stringify(result), ...extra });
 
 describe('Agent actions as the run owner sees them', () => {
+  test('keeps native waiting and member activity visible without exporting raw prompts or thread ids', () => {
+    const wait = { id: 'wait', type: 'collabAgentToolCall', tool: 'wait', status: 'inProgress',
+      senderThreadId: 'private-thread', prompt: `private ${key}` };
+    const started = sanitizeAgentItem('started', wait, context);
+    const interrupted = sanitizeAgentItem('completed', { ...wait, status: 'interrupted' }, context);
+    expect(started).toEqual({ workerId: 'engineer', itemId: 'wait', phase: 'started',
+      kind: 'tool', tool: 'collaboration.wait_agent', status: 'running' });
+    expect(interrupted).toEqual({ ...started, phase: 'completed', status: 'failed' });
+    const member = done({ type: 'subAgentActivity', kind: 'completed', agentPath: '/root/specialist', agentThreadId: 'private-thread' });
+    expect(member).toEqual({ workerId: 'engineer', itemId: 'item-1', phase: 'completed',
+      kind: 'tool', tool: 'collaboration.agent_turn_completed', status: 'done', arguments: '/root/specialist' });
+    expect([started, interrupted, member].every(isWebAgentActionBody)).toBe(true);
+  });
+
   test('retains the matching Lean source and native recipient identity, but keeps stale diagnostics detached', async () => {
     const root = temporaryDirectory('web-check-probe-');
     try {

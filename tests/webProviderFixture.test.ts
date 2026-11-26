@@ -54,7 +54,7 @@ describe('web BYOK provider configuration and offline app-server fixture', () =>
     expect(source).toContain('by rfl');
     expect(source).toContain('by exact Nat.zero_add n');
     expect(source).not.toContain('sorry');
-    const checks = JSON.parse(fs.readFileSync(path.join(root, 'profile/web-fixture-checks.json'), 'utf8'));
+    const checks = JSON.parse(fs.readFileSync(path.join(root, 'profile/runtime/web-fixture-checks.json'), 'utf8'));
     expect(checks).toEqual({ apiKeyFromEnvironment: true, keyAbsentFromConfig: true, shellKeyExcluded: true,
       responsesProvider: true, privateProfile: true });
     expect(activity).toHaveBeenCalledWith({ event: 'item_started', itemType: 'commandExecution' });
@@ -119,7 +119,7 @@ describe('web BYOK provider configuration and offline app-server fixture', () =>
   it('refuses to start without an injected BYOK credential', async () => {
     await expect(createCodexMathSession({ ...options(), environment: { ...process.env,
       THEOREMOS_PROVIDER_API_KEY: '' } })).rejects.toThrow('math_model_api_key_missing:THEOREMOS_PROVIDER_API_KEY');
-    expect(fs.existsSync(path.join(root, 'profile/web-fixture-checks.json'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'profile/runtime/web-fixture-checks.json'))).toBe(false);
   });
 
   it('refuses a profile that persisted the API key', async () => {
