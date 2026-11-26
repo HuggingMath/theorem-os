@@ -3,15 +3,15 @@
 `upstream.json` pins the official Codex tag, commit, lockfiles and Rust toolchain.
 The build applies two reviewable patches:
 
-- `derived-lock.patch` aligns 173 local workspace package versions with the
-  release's `0.169.0` workspace version, and records the adapter's internal
-  `codex-app-server` dependency on `codex-rollout-trace`. External dependencies,
+- `derived-lock.patch` aligns 174 local workspace package versions with the
+  release's `0.172.0` workspace version. The upstream lock already includes
+  `codex-rollout-trace` for `codex-app-server`. External dependencies,
   sources and checksums are unchanged.
 - `agent-control.patch` adds the TheoremOS protocol adapter to the official
   AgentControl implementation. It excludes `Cargo.lock`.
 
 These patches are changes made by TheoremOS. The upstream code shown in them
-comes from [OpenAI Codex at the pinned revision](https://github.com/openai/codex/tree/d32063f96c2dff1dc96af839b3952abb6acfeda4).
+comes from [OpenAI Codex at the pinned revision](https://github.com/openai/codex/tree/3d86e43b075adeba2193ec5c22ac92f55afd82e6).
 This directory includes the upstream [Apache-2.0 license](LICENSE.codex) and
 [NOTICE](NOTICE.codex), including its credit to Ratatui. Both files also ship in
 the Web worker at `/opt/theorem-os/scripts/codex-backend/`. For a separate
@@ -28,7 +28,7 @@ scripts/build-codex-backend.sh \
   --jobs 16
 ```
 
-Install the explicitly pinned toolchain with `rustup toolchain install 1.95.0
+Install the explicitly pinned toolchain with `rustup toolchain install 1.99.1
 --profile minimal` if needed. The script does not change the default toolchain,
 Codex configuration or model credentials. `--prepare-only` fetches and verifies
 the official source without applying patches or compiling.

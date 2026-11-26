@@ -1,5 +1,5 @@
 diff --git a/codex-rs/app-server-protocol/src/protocol/common.rs b/codex-rs/app-server-protocol/src/protocol/common.rs
-index 52ed76c..44997b0 100644
+index a1c6feec..dfa8869e 100644
 --- a/codex-rs/app-server-protocol/src/protocol/common.rs
 +++ b/codex-rs/app-server-protocol/src/protocol/common.rs
 @@ -569,7 +569,37 @@ client_request_definitions! {
@@ -41,7 +41,7 @@ index 52ed76c..44997b0 100644
      // Thread lifecycle
      // Uses `inspect_params` because only some fields are experimental.
      ThreadStart => "thread/start" {
-@@ -1893,6 +1923,12 @@ impl TryFrom<JSONRPCRequest> for ServerRequest {
+@@ -1928,6 +1958,12 @@ impl TryFrom<JSONRPCRequest> for ServerRequest {
  }
  
  server_request_definitions! {
@@ -55,7 +55,7 @@ index 52ed76c..44997b0 100644
      /// Sent when approval is requested for a specific command execution.
      /// This request is used for Turns started via turn/start.
 diff --git a/codex-rs/app-server-protocol/src/protocol/v2/mod.rs b/codex-rs/app-server-protocol/src/protocol/v2/mod.rs
-index 96bb11c..869bf98 100644
+index d9fd7553..5b1d6688 100644
 --- a/codex-rs/app-server-protocol/src/protocol/v2/mod.rs
 +++ b/codex-rs/app-server-protocol/src/protocol/v2/mod.rs
 @@ -40,6 +40,7 @@ mod thread_data;
@@ -76,7 +76,7 @@ index 96bb11c..869bf98 100644
  pub use windows_sandbox::*;
 diff --git a/codex-rs/app-server-protocol/src/protocol/v2/theoremos_agent_control.rs b/codex-rs/app-server-protocol/src/protocol/v2/theoremos_agent_control.rs
 new file mode 100644
-index 0000000..e3ad31c
+index 00000000..e3ad31c9
 --- /dev/null
 +++ b/codex-rs/app-server-protocol/src/protocol/v2/theoremos_agent_control.rs
 @@ -0,0 +1,73 @@
@@ -154,7 +154,7 @@ index 0000000..e3ad31c
 +    }
 +}
 diff --git a/codex-rs/app-server/Cargo.toml b/codex-rs/app-server/Cargo.toml
-index 959373d..b2843a8 100644
+index 5e6ecb80..5ce2d0fe 100644
 --- a/codex-rs/app-server/Cargo.toml
 +++ b/codex-rs/app-server/Cargo.toml
 @@ -93,6 +93,7 @@ codex-app-server-transport = { workspace = true }
@@ -166,7 +166,7 @@ index 959373d..b2843a8 100644
  codex-state = { workspace = true }
  codex-thread-store = { workspace = true }
 diff --git a/codex-rs/app-server/src/lib.rs b/codex-rs/app-server/src/lib.rs
-index 7a2892b..829ec33 100644
+index ba0ad991..7242e001 100644
 --- a/codex-rs/app-server/src/lib.rs
 +++ b/codex-rs/app-server/src/lib.rs
 @@ -148,6 +148,7 @@ mod request_serialization;
@@ -178,10 +178,10 @@ index 7a2892b..829ec33 100644
  mod thread_state;
  mod thread_status;
 diff --git a/codex-rs/app-server/src/message_processor.rs b/codex-rs/app-server/src/message_processor.rs
-index 4bf10fc..07502a7 100644
+index 0e9354b1..4c825ccb 100644
 --- a/codex-rs/app-server/src/message_processor.rs
 +++ b/codex-rs/app-server/src/message_processor.rs
-@@ -151,6 +151,7 @@ fn reject_removed_permission_profile(request: &JSONRPCRequest) -> Result<(), JSO
+@@ -154,6 +154,7 @@ fn reject_removed_permission_profile(request: &JSONRPCRequest) -> Result<(), JSO
  
  pub(crate) struct MessageProcessor {
      pub(crate) turn_admission: TurnAdmission,
@@ -189,7 +189,7 @@ index 4bf10fc..07502a7 100644
      user_verification: Arc<crate::user_verification::Service>,
      outgoing: Arc<OutgoingMessageSender>,
      startup_warnings: StartupWarnings,
-@@ -367,6 +368,8 @@ impl MessageProcessor {
+@@ -370,6 +371,8 @@ impl MessageProcessor {
              app_server_extension_event_sink(outgoing.clone(), thread_state_manager.clone());
          let mut queue_service = None;
          let sample_responses = Arc::new(crate::thread_sample::SampleResponseRegistry::default());
@@ -198,9 +198,9 @@ index 4bf10fc..07502a7 100644
          let thread_manager = Arc::new_cyclic(|thread_manager| {
              queue_service = queue_store.map(|queue| {
                  Arc::new(QueuedItemService::new(
-@@ -423,11 +426,20 @@ impl MessageProcessor {
-                     Some(time_provider)
-                 },
+@@ -422,11 +425,20 @@ impl MessageProcessor {
+                 )),
+                 None,
              );
 +            let manager = if let Some(bridge) = &native_agent_bridge {
 +                let bridge = bridge.clone();
@@ -219,7 +219,7 @@ index 4bf10fc..07502a7 100644
          let runtime_auth = thread_manager.runtime_auth_manager();
          if let (Some(slot), Some(runtime)) = (runtime_auth_slot, &runtime_auth) {
              // Analytics starts before the harness. Bind its requests to the harness registration.
-@@ -644,6 +656,7 @@ impl MessageProcessor {
+@@ -643,6 +655,7 @@ impl MessageProcessor {
  
          Self {
              turn_admission,
@@ -227,7 +227,7 @@ index 4bf10fc..07502a7 100644
              user_verification,
              outgoing,
              startup_warnings: StartupWarnings {
-@@ -1363,6 +1376,102 @@ impl MessageProcessor {
+@@ -1424,6 +1437,102 @@ impl MessageProcessor {
                  .model_provider_capabilities_read()
                  .await
                  .map(|response| Some(response.into())),
@@ -331,10 +331,10 @@ index 4bf10fc..07502a7 100644
                  self.thread_processor
                      .thread_start(
 diff --git a/codex-rs/app-server/src/request_processors/thread_processor.rs b/codex-rs/app-server/src/request_processors/thread_processor.rs
-index 75761a2..c6a0ed4 100644
+index 7c9cded4..1dada718 100644
 --- a/codex-rs/app-server/src/request_processors/thread_processor.rs
 +++ b/codex-rs/app-server/src/request_processors/thread_processor.rs
-@@ -1472,6 +1472,23 @@ impl ThreadRequestProcessor {
+@@ -1527,6 +1527,23 @@ impl ThreadRequestProcessor {
          initial_config_warnings: Arc<Vec<ConfigWarningNotification>>,
      ) -> Result<(), JSONRPCErrorError> {
          let thread_start_started_at = std::time::Instant::now();
@@ -358,7 +358,7 @@ index 75761a2..c6a0ed4 100644
          let requested_cwd = typesafe_overrides.cwd.clone();
          let mut config = config_manager
              .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
-@@ -1618,7 +1635,10 @@ impl ThreadRequestProcessor {
+@@ -1673,7 +1690,10 @@ impl ThreadRequestProcessor {
              )
              .await?
          };
@@ -370,7 +370,7 @@ index 75761a2..c6a0ed4 100644
              .unwrap_or_else(|| listener_task_context.thread_manager.reserve_thread_id());
          start_options.reserved_thread_id = Some(thread_id);
          // Startup can prewarm the Responses socket before start_thread returns.
-@@ -1628,26 +1648,31 @@ impl ThreadRequestProcessor {
+@@ -1683,28 +1703,33 @@ impl ThreadRequestProcessor {
              .try_add_connection_to_thread(thread_id, request_id.connection_id)
              .await;
          let create_thread_started_at = std::time::Instant::now();
@@ -389,6 +389,8 @@ index 75761a2..c6a0ed4 100644
 +            parent_trace: request_trace,
 +            environments: Some(environment_requests),
 +            thread_extension_init,
++            prevent_daybreak_program_propagation_enrollment: daybreak_program_propagation_enrolled
++                == Some(false),
 +            client_mcp_extensions,
 +            ..start_options
 +        };
@@ -413,6 +415,8 @@ index 75761a2..c6a0ed4 100644
 -                parent_trace: request_trace,
 -                environments: Some(environment_requests),
 -                thread_extension_init,
+-                prevent_daybreak_program_propagation_enrollment:
+-                    daybreak_program_propagation_enrolled == Some(false),
 -                client_mcp_extensions,
 -                ..start_options
 -            })
@@ -420,7 +424,7 @@ index 75761a2..c6a0ed4 100644
              .instrument(tracing::info_span!(
                  "app_server.thread_start.create_thread",
                  otel.name = "app_server.thread_start.create_thread",
-@@ -1698,6 +1723,15 @@ impl ThreadRequestProcessor {
+@@ -1752,6 +1777,15 @@ impl ThreadRequestProcessor {
                  otel.name = "app_server.thread_start.config_snapshot",
              ))
              .await;
@@ -433,10 +437,10 @@ index 75761a2..c6a0ed4 100644
 +        } else {
 +            None
 +        };
-         let mut thread = build_thread_from_snapshot(
-             thread_id,
-             session_configured.session_id.to_string(),
-@@ -1771,14 +1805,27 @@ impl ThreadRequestProcessor {
+         let mut thread = build_thread_from_loaded_snapshot(&thread, &config_snapshot)?;
+         thread.project_id = project_id.clone();
+         thread.daybreak_enabled = daybreak_enabled;
+@@ -1821,14 +1855,27 @@ impl ThreadRequestProcessor {
              multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
          };
          let notif = thread_started_notification(thread);
@@ -472,7 +476,7 @@ index 75761a2..c6a0ed4 100644
  
          listener_task_context
              .outgoing
-@@ -4048,6 +4095,22 @@ impl ThreadRequestProcessor {
+@@ -4154,6 +4201,22 @@ impl ThreadRequestProcessor {
              initial_turns_page,
          } = params.clone();
          let include_turns = !exclude_turns;
@@ -493,9 +497,9 @@ index 75761a2..c6a0ed4 100644
 +            ));
 +        }
  
-         let prepared_model_context = prepared_config
-             .as_mut()
-@@ -4128,8 +4191,11 @@ impl ThreadRequestProcessor {
+         let prepared_model_context = retry
+             .prepared_config
+@@ -4258,8 +4321,11 @@ impl ThreadRequestProcessor {
              .await;
          }
  
@@ -509,7 +513,7 @@ index 75761a2..c6a0ed4 100644
              && let Some((source, _)) = thread_history.get_resumed_session_sources()
              && !can_accept_direct_input(thread_history.get_multi_agent_version(), &source)
          {
-@@ -4371,21 +4437,22 @@ impl ThreadRequestProcessor {
+@@ -4508,21 +4574,22 @@ impl ThreadRequestProcessor {
          }
          let response_history = thread_history.clone();
  
@@ -547,7 +551,7 @@ index 75761a2..c6a0ed4 100644
              Ok(NewThread {
                  thread_id,
                  thread: codex_thread,
-@@ -4594,9 +4661,32 @@ impl ThreadRequestProcessor {
+@@ -4733,9 +4800,32 @@ impl ThreadRequestProcessor {
                  };
  
                  let connection_id = request_id.connection_id;
@@ -585,10 +589,10 @@ index 75761a2..c6a0ed4 100644
                  if let Some(token_usage_turn_id) = token_usage_turn_id {
 diff --git a/codex-rs/app-server/src/theoremos_agent_control.rs b/codex-rs/app-server/src/theoremos_agent_control.rs
 new file mode 100644
-index 0000000..d66b8d6
+index 00000000..dcad9fc4
 --- /dev/null
 +++ b/codex-rs/app-server/src/theoremos_agent_control.rs
-@@ -0,0 +1,856 @@
+@@ -0,0 +1,860 @@
 +//! Opt-in stdio transport for the native AgentControl execution contract.
 +//! The model still invokes upstream collaboration handlers. The trusted host owns
 +//! isolated runtimes and durable membership; it is never a dynamic-tool facade.
@@ -1197,11 +1201,15 @@ index 0000000..d66b8d6
 +    ) -> Option<AgentExecutionGuard> {
 +        None
 +    }
-+    fn record_usage(&self, usage: TokenUsage) -> BoxFuture<'_, Result<()>> {
++    fn record_usage(
++        &self,
++        usage: Option<TokenUsage>,
++        _hook_charge: codex_core::HookCharge,
++    ) -> BoxFuture<'_, Result<()>> {
 +        Box::pin(async move {
 +            self.rpc(
 +                "recordUsage",
-+                json!({"usage":usage,"codexRolloutBudgetUnits":usage.codex_rollout_budget_units}),
++                json!({"usage":usage,"codexRolloutBudgetUnits":usage.as_ref().and_then(|usage| usage.codex_rollout_budget_units.as_ref())}),
 +            )
 +            .await?;
 +            Ok(())
@@ -1293,7 +1301,7 @@ index 0000000..d66b8d6
 +        report: AgentUsageReport,
 +    ) -> BoxFuture<'_, Result<UsageAccountingDecision>> {
 +        Box::pin(async move {
-+            self.rpc("recordUsage",json!({"threadId":report.thread_id,"turnId":report.turn_id,"usage":report.usage,"codexRolloutBudgetUnits":report.usage.codex_rollout_budget_units})).await?;
++            self.rpc("recordUsage",json!({"threadId":report.thread_id,"turnId":report.turn_id,"usage":report.usage,"codexRolloutBudgetUnits":report.usage.as_ref().and_then(|usage| usage.codex_rollout_budget_units.as_ref())})).await?;
 +            Ok(UsageAccountingDecision::Continue)
 +        })
 +    }
@@ -1446,11 +1454,11 @@ index 0000000..d66b8d6
 +    }
 +}
 diff --git a/codex-rs/core/src/agent/api.rs b/codex-rs/core/src/agent/api.rs
-index 7664a86..efee368 100644
+index b4c0a8c5..52f98f03 100644
 --- a/codex-rs/core/src/agent/api.rs
 +++ b/codex-rs/core/src/agent/api.rs
-@@ -41,6 +41,15 @@ const _: Option<&dyn AgentControl> = None;
- pub trait AgentControl: Send + Sync {
+@@ -47,6 +47,15 @@ pub trait AgentControl: Send + Sync {
+ 
      fn identity(&self) -> SessionId;
  
 +    /// Install backend-owned providers before root, child, or cold-resumed startup.
@@ -1466,7 +1474,7 @@ index 7664a86..efee368 100644
      /// The local backend lazily registers callers with no parent before resolving, including
      /// for direct IDs. Keeping resolution separate preserves tool error and analytics ordering.
 diff --git a/codex-rs/core/src/agent/host/mod.rs b/codex-rs/core/src/agent/host/mod.rs
-index 06a15b3..55a3ad0 100644
+index 06a15b39..55a3ad08 100644
 --- a/codex-rs/core/src/agent/host/mod.rs
 +++ b/codex-rs/core/src/agent/host/mod.rs
 @@ -36,3 +36,5 @@ pub use types::RestrictRootCapabilities;
@@ -1476,7 +1484,7 @@ index 06a15b3..55a3ad0 100644
 +
 +pub(crate) mod wire;
 diff --git a/codex-rs/core/src/agent/host/spawn.rs b/codex-rs/core/src/agent/host/spawn.rs
-index b0cffc5..33612c5 100644
+index 40e96627..690508e1 100644
 --- a/codex-rs/core/src/agent/host/spawn.rs
 +++ b/codex-rs/core/src/agent/host/spawn.rs
 @@ -29,7 +29,7 @@ use codex_protocol::protocol::MultiAgentVersion;
@@ -1490,10 +1498,10 @@ index b0cffc5..33612c5 100644
  ) -> Result<(
 diff --git a/codex-rs/core/src/agent/host/wire.rs b/codex-rs/core/src/agent/host/wire.rs
 new file mode 100644
-index 0000000..97e3d7b
+index 00000000..d9434be2
 --- /dev/null
 +++ b/codex-rs/core/src/agent/host/wire.rs
-@@ -0,0 +1,959 @@
+@@ -0,0 +1,961 @@
 +//! Narrow transport snapshots for a trusted host running each native child in its own process.
 +//! Provider credentials and Config never cross this boundary.
 +
@@ -2049,7 +2057,9 @@ index 0000000..97e3d7b
 +}
 +pub fn native_agent_input_value(input: AgentInput) -> Value {
 +    let input = match input {
-+        AgentInput::UserInput(items) => NativeAgentInput::UserInput { items },
++        AgentInput::UserInput(items) => NativeAgentInput::UserInput {
++            items: items.iter().map(|item| item.to_user_input()).collect(),
++        },
 +        AgentInput::Message { message, mode } => NativeAgentInput::Message {
 +            message: match message {
 +                AgentMessage::Plaintext(text) => NativeMessage::Plaintext(text),
@@ -2454,10 +2464,10 @@ index 0000000..97e3d7b
 +    }
 +}
 diff --git a/codex-rs/core/src/agent/types.rs b/codex-rs/core/src/agent/types.rs
-index 2b3626f..c8cad84 100644
+index 34abb01f..0841745c 100644
 --- a/codex-rs/core/src/agent/types.rs
 +++ b/codex-rs/core/src/agent/types.rs
-@@ -10,7 +10,8 @@ use codex_protocol::turn_input::CyberAccessProgram;
+@@ -11,7 +11,8 @@ use std::collections::HashMap;
  
  /// Registry identity shared by loaded and unloaded agents.
  /// Registered agents have an `agent_id`; a reserved spawn can still be awaiting its ID.
@@ -2467,7 +2477,7 @@ index 2b3626f..c8cad84 100644
  pub struct AgentMetadata {
      pub agent_id: Option<ThreadId>,
      pub agent_path: Option<AgentPath>,
-@@ -42,7 +43,8 @@ pub struct SpawnAgentOptions {
+@@ -56,7 +57,8 @@ pub struct SpawnAgentOptions {
  }
  
  /// Identity and status observed from a loaded agent, without a handle to its runtime.
@@ -2478,10 +2488,10 @@ index 2b3626f..c8cad84 100644
      pub thread_id: ThreadId,
      pub metadata: AgentMetadata,
 diff --git a/codex-rs/core/src/codex_thread.rs b/codex-rs/core/src/codex_thread.rs
-index 3b694fc..558b977 100644
+index 4b8e0b3c..d5f4442a 100644
 --- a/codex-rs/core/src/codex_thread.rs
 +++ b/codex-rs/core/src/codex_thread.rs
-@@ -94,9 +94,11 @@ use codex_rollout::state_db::StateDbHandle;
+@@ -106,11 +106,14 @@ use codex_rollout::state_db::StateDbHandle;
  
  static LIVE_THREADS: Gauge = Gauge::new("core.threads.live");
  
@@ -2489,16 +2499,19 @@ index 3b694fc..558b977 100644
 +#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 +#[serde(rename_all = "camelCase")]
  pub struct ThreadConfigSnapshot {
+     /// Trusted host country inherited by future turns.
++    #[serde(skip)]
+     pub request_country: RequestCountry,
      /// Host data inherited by future turns; not included in persisted settings.
 +    #[serde(skip)]
      pub turn_extension_init: codex_extension_api::ExtensionDataInit,
      pub model: String,
      pub model_provider_id: String,
 diff --git a/codex-rs/core/src/lib.rs b/codex-rs/core/src/lib.rs
-index d684b39..d06533c 100644
+index d9d87c6e..b9d39bd4 100644
 --- a/codex-rs/core/src/lib.rs
 +++ b/codex-rs/core/src/lib.rs
-@@ -296,3 +296,10 @@ pub use environment_selection::validate_environment_ids_and_cwds;
+@@ -306,3 +306,10 @@ pub use environment_selection::validate_environment_ids_and_cwds;
  
  mod runtime_auth;
  pub use runtime_auth::build_runtime_auth_manager;
@@ -2510,10 +2523,10 @@ index d684b39..d06533c 100644
 +    native_completion_communication, native_submit_agent_input, prepare_native_child_bootstrap,
 +};
 diff --git a/codex-rs/core/src/session/mod.rs b/codex-rs/core/src/session/mod.rs
-index ce93060..dbfb817 100644
+index 912b03fd..06e40706 100644
 --- a/codex-rs/core/src/session/mod.rs
 +++ b/codex-rs/core/src/session/mod.rs
-@@ -3177,7 +3177,7 @@ impl Session {
+@@ -3207,7 +3207,7 @@ impl Session {
              .map(|task| Arc::clone(&task.turn_context))
      }
  
@@ -2523,12 +2536,12 @@ index ce93060..dbfb817 100644
      ) -> Option<(Arc<TurnContext>, CancellationToken)> {
          let active = self.active_turn.lock().await;
 diff --git a/codex-rs/core/src/session/turn_input.rs b/codex-rs/core/src/session/turn_input.rs
-index fb75759..acb7562 100644
+index ab79e360..a2130097 100644
 --- a/codex-rs/core/src/session/turn_input.rs
 +++ b/codex-rs/core/src/session/turn_input.rs
-@@ -387,10 +387,15 @@ async fn start_or_steer(
-     request: WithTurnExtensionData<TurnInputRequest>,
+@@ -460,10 +460,15 @@ pub(super) async fn start_or_steer(
      submission_id: String,
+     realtime_handoff_id: Option<uuid::Uuid>,
  ) -> CodexResult<TurnInputSubmission> {
 +    let host_transport_input = request.turn_extension_init.as_ref().is_some_and(|data| {
 +        data.get::<crate::agent::host::wire::NativeAgentTransportInput>()
@@ -2543,7 +2556,7 @@ index fb75759..acb7562 100644
          return agent::submit(session, request, submission_id).await;
      }
      let WithTurnExtensionData {
-@@ -407,6 +412,7 @@ async fn start_or_steer(
+@@ -480,6 +485,7 @@ pub(super) async fn start_or_steer(
          ..
      } = request;
      let has_explicit_input = match &input {
@@ -2551,7 +2564,7 @@ index fb75759..acb7562 100644
          SubmittedTurnInput::UserInput { content, .. } => !content.is_empty(),
          SubmittedTurnInput::ResponseItem(ResponseItem::FunctionCallOutput {
              call_id: None,
-@@ -489,6 +495,14 @@ async fn start_or_steer(
+@@ -562,6 +568,14 @@ pub(super) async fn start_or_steer(
                  .await;
              let mut task_input =
                  merge_additional_context_input(session, &turn_context, additional_context).await;
@@ -2566,18 +2579,18 @@ index fb75759..acb7562 100644
              if has_explicit_input {
                  task_input.push(
                      pending_turn_input(
-@@ -695,6 +709,10 @@ async fn steer(
-     expected_turn_id: String,
+@@ -774,6 +788,10 @@ async fn steer(
      submission_id: String,
+     realtime_handoff_id: Option<uuid::Uuid>,
  ) -> CodexResult<TurnInputSubmission> {
 +    let host_transport_input = request.turn_extension_init.as_ref().is_some_and(|data| {
 +        data.get::<crate::agent::host::wire::NativeAgentTransportInput>()
 +            .is_some()
 +    });
      let WithTurnExtensionData {
-         request,
+         mut request,
          turn_extension_init,
-@@ -708,7 +726,10 @@ async fn steer(
+@@ -787,7 +805,10 @@ async fn steer(
          responsesapi_client_metadata,
          ..
      } = request;
@@ -2590,10 +2603,10 @@ index fb75759..acb7562 100644
              "only user input can steer a turn".to_string(),
          ));
 diff --git a/codex-rs/core/src/session/turn_input_tests.rs b/codex-rs/core/src/session/turn_input_tests.rs
-index 219a422..f742b29 100644
+index 5e51ce40..9b51532c 100644
 --- a/codex-rs/core/src/session/turn_input_tests.rs
 +++ b/codex-rs/core/src/session/turn_input_tests.rs
-@@ -111,6 +111,215 @@ async fn submit_steer_only(
+@@ -114,6 +114,215 @@ async fn submit_steer_only(
      .expect("steer-only submission should be valid")
  }
  
@@ -2810,20 +2823,20 @@ index 219a422..f742b29 100644
  #[expect(
      clippy::await_holding_invalid_type,
 diff --git a/codex-rs/core/src/thread_manager.rs b/codex-rs/core/src/thread_manager.rs
-index b7d841c..b6d6596 100644
+index b11e9bfa..c1c360b7 100644
 --- a/codex-rs/core/src/thread_manager.rs
 +++ b/codex-rs/core/src/thread_manager.rs
-@@ -2658,6 +2658,9 @@ impl ThreadManagerState {
+@@ -2828,6 +2828,9 @@ impl ThreadManagerState {
              }
              (_, control) => control,
          };
 +        if let AgentControlInit::Provided { control, .. } = &agent_control {
 +            control.configure_startup(&mut thread_extension_init, &config);
 +        }
-         let parent_thread_id = parent_thread_id
-             .or_else(|| initial_history.get_resumed_parent_thread_id())
-             .or(match &session_source {
-@@ -2713,6 +2716,8 @@ impl ThreadManagerState {
+         // Both resume entry points must restore identities before children can be loaded lazily.
+         if let InitialHistory::Resumed(resumed) = &initial_history
+             && initial_history.get_multi_agent_version() == Some(MultiAgentVersion::V2)
+@@ -2875,6 +2878,8 @@ impl ThreadManagerState {
                  .await,
              ),
          };
@@ -2832,7 +2845,7 @@ index b7d841c..b6d6596 100644
          let (originator, attachment_source) = match prepared_child {
              Some(child) => (child.originator, child.attachment_source),
              None => (
-@@ -2729,6 +2734,14 @@ impl ThreadManagerState {
+@@ -2891,6 +2896,14 @@ impl ThreadManagerState {
                      .filter(|_| matches!(&initial_history, InitialHistory::Forked(_))),
              ),
          };
@@ -2848,10 +2861,10 @@ index b7d841c..b6d6596 100644
              history_initialization,
              instructions,
 diff --git a/codex-rs/exec/src/lib.rs b/codex-rs/exec/src/lib.rs
-index bb01fc3..8f9743c 100644
+index 2907eb56..5258a3fa 100644
 --- a/codex-rs/exec/src/lib.rs
 +++ b/codex-rs/exec/src/lib.rs
-@@ -2232,6 +2232,15 @@ async fn handle_server_request(
+@@ -2386,6 +2386,15 @@ async fn handle_server_request(
  ) {
      let method = server_request_method_name(&request);
      let handle_result = match request {
@@ -2868,7 +2881,7 @@ index bb01fc3..8f9743c 100644
              // Exec auto-cancels elicitation instead of surfacing it
              // interactively. Preserve that behavior for attached subagent
 diff --git a/codex-rs/execpolicy/src/policy.rs b/codex-rs/execpolicy/src/policy.rs
-index 206094f..47be694 100644
+index 206094f3..47be6946 100644
 --- a/codex-rs/execpolicy/src/policy.rs
 +++ b/codex-rs/execpolicy/src/policy.rs
 @@ -35,11 +35,66 @@ pub struct Policy {
@@ -2985,7 +2998,7 @@ index 206094f..47be694 100644
 +    }
 +}
 diff --git a/codex-rs/execpolicy/src/rule.rs b/codex-rs/execpolicy/src/rule.rs
-index 92d94ba..36a1d60 100644
+index 92d94baa..36a1d609 100644
 --- a/codex-rs/execpolicy/src/rule.rs
 +++ b/codex-rs/execpolicy/src/rule.rs
 @@ -19,7 +19,7 @@ pub(crate) fn canonical_key(token: &str) -> impl Iterator<Item = char> + '_ {
@@ -3033,7 +3046,7 @@ index 92d94ba..36a1d60 100644
      pub host: String,
      pub protocol: NetworkRuleProtocol,
 diff --git a/codex-rs/protocol/src/capabilities.rs b/codex-rs/protocol/src/capabilities.rs
-index 651861e..2f48fe2 100644
+index 651861e4..2f48fe20 100644
 --- a/codex-rs/protocol/src/capabilities.rs
 +++ b/codex-rs/protocol/src/capabilities.rs
 @@ -22,7 +22,7 @@ pub struct SelectedCapabilityRoot {
@@ -3046,7 +3059,7 @@ index 651861e..2f48fe2 100644
  
  impl EnvironmentCapabilityRoots {
 diff --git a/codex-rs/protocol/src/config_types.rs b/codex-rs/protocol/src/config_types.rs
-index 87ffe6d..9d1098e 100644
+index 87ffe6dc..9d1098ec 100644
 --- a/codex-rs/protocol/src/config_types.rs
 +++ b/codex-rs/protocol/src/config_types.rs
 @@ -236,7 +236,7 @@ pub type EnvironmentVariablePattern = WildMatchPattern<'*', '?'>;
@@ -3101,7 +3114,7 @@ index 87ffe6d..9d1098e 100644
 +    }
 +}
 diff --git a/codex-rs/protocol/src/environment.rs b/codex-rs/protocol/src/environment.rs
-index c9f1a96..27a2b3b 100644
+index b5ad7ae2..75fc773d 100644
 --- a/codex-rs/protocol/src/environment.rs
 +++ b/codex-rs/protocol/src/environment.rs
 @@ -14,13 +14,14 @@ use codex_execpolicy::RequirementsExecPolicy;
@@ -3157,7 +3170,7 @@ index c9f1a96..27a2b3b 100644
      /// Hooks from this environment's effective managed requirements.
      pub environment_hooks: crate::hooks::HookEventsToml,
 diff --git a/codex-rs/protocol/src/mcp_policy.rs b/codex-rs/protocol/src/mcp_policy.rs
-index cb371c0..6a02c3c 100644
+index cb371c0c..6a02c3c4 100644
 --- a/codex-rs/protocol/src/mcp_policy.rs
 +++ b/codex-rs/protocol/src/mcp_policy.rs
 @@ -1,14 +1,15 @@
@@ -3227,7 +3240,7 @@ index cb371c0..6a02c3c 100644
      pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
  }
 diff --git a/codex-rs/protocol/src/permission_profile_snapshot.rs b/codex-rs/protocol/src/permission_profile_snapshot.rs
-index 34fe6fd..5f625ca 100644
+index 34fe6fdb..5f625ca8 100644
 --- a/codex-rs/protocol/src/permission_profile_snapshot.rs
 +++ b/codex-rs/protocol/src/permission_profile_snapshot.rs
 @@ -2,6 +2,7 @@
@@ -3259,11 +3272,11 @@ index 34fe6fd..5f625ca 100644
      permission_profile: PermissionProfile,
      active_permission_profile: Option<ActivePermissionProfile>,
 diff --git a/codex-rs/tui/src/app/app_server_event_targets.rs b/codex-rs/tui/src/app/app_server_event_targets.rs
-index cc5d3d8..3e1d155 100644
+index 34e923a0..85f94820 100644
 --- a/codex-rs/tui/src/app/app_server_event_targets.rs
 +++ b/codex-rs/tui/src/app/app_server_event_targets.rs
-@@ -27,7 +27,8 @@ pub(super) fn server_request_thread_id(request: &ServerRequest) -> Option<Thread
-         ServerRequest::CurrentTimeRead { params, .. } => {
+@@ -24,7 +24,8 @@ pub(super) fn server_request_thread_id(request: &ServerRequest) -> Option<Thread
+         ServerRequest::DynamicToolCall { params, .. } => {
              ThreadId::from_string(&params.thread_id).ok()
          }
 -        ServerRequest::ChatgptAuthTokensRefresh { .. }
@@ -3273,10 +3286,10 @@ index cc5d3d8..3e1d155 100644
          | ServerRequest::ApplyPatchApproval { .. }
          | ServerRequest::ExecCommandApproval { .. } => None,
 diff --git a/codex-rs/tui/src/app/app_server_events.rs b/codex-rs/tui/src/app/app_server_events.rs
-index 8f179f3..485a90f 100644
+index a23c09a1..1f5bb319 100644
 --- a/codex-rs/tui/src/app/app_server_events.rs
 +++ b/codex-rs/tui/src/app/app_server_events.rs
-@@ -740,7 +740,8 @@ impl App {
+@@ -804,7 +804,8 @@ impl App {
          }
          let unsupported_request = matches!(
              &request,
@@ -3284,10 +3297,10 @@ index 8f179f3..485a90f 100644
 +            ServerRequest::TheoremosAgentControlRequest { .. }
 +                | ServerRequest::DynamicToolCall { .. }
                  | ServerRequest::AttestationGenerate { .. }
-                 | ServerRequest::CurrentTimeRead { .. }
                  | ServerRequest::ApplyPatchApproval { .. }
+                 | ServerRequest::ExecCommandApproval { .. }
 diff --git a/codex-rs/tui/src/app/app_server_requests.rs b/codex-rs/tui/src/app/app_server_requests.rs
-index be5c776..ccfc6a9 100644
+index 0ee0dd2d..b5b71313 100644
 --- a/codex-rs/tui/src/app/app_server_requests.rs
 +++ b/codex-rs/tui/src/app/app_server_requests.rs
 @@ -195,6 +195,12 @@ impl PendingAppServerRequests {
@@ -3303,7 +3316,7 @@ index be5c776..ccfc6a9 100644
              ServerRequest::DynamicToolCall { .. } => None,
              ServerRequest::ChatgptAuthTokensRefresh { .. } => None,
              ServerRequest::AttestationGenerate { request_id, .. } => {
-@@ -528,7 +534,8 @@ impl PendingAppServerRequests {
+@@ -522,7 +528,8 @@ impl PendingAppServerRequests {
                  })
              }
              ServerRequest::ChatgptAuthTokensRefresh { .. } => None,
@@ -3311,10 +3324,10 @@ index be5c776..ccfc6a9 100644
 +            ServerRequest::TheoremosAgentControlRequest { .. }
 +            | ServerRequest::DynamicToolCall { .. }
              | ServerRequest::AttestationGenerate { .. }
-             | ServerRequest::CurrentTimeRead { .. }
              | ServerRequest::ApplyPatchApproval { .. }
+             | ServerRequest::ExecCommandApproval { .. } => None,
 diff --git a/codex-rs/tui/src/app/side.rs b/codex-rs/tui/src/app/side.rs
-index a97fdea..80366d8 100644
+index 3e20f832..fa07a3a3 100644
 --- a/codex-rs/tui/src/app/side.rs
 +++ b/codex-rs/tui/src/app/side.rs
 @@ -65,7 +65,8 @@ impl SideParentStatus {
@@ -3325,10 +3338,10 @@ index a97fdea..80366d8 100644
 +            ServerRequest::TheoremosAgentControlRequest { .. }
 +            | ServerRequest::DynamicToolCall { .. }
              | ServerRequest::AttestationGenerate { .. }
-             | ServerRequest::CurrentTimeRead { .. }
              | ServerRequest::ChatgptAuthTokensRefresh { .. } => None,
+         }
 diff --git a/codex-rs/tui/src/chatwidget/protocol_requests.rs b/codex-rs/tui/src/chatwidget/protocol_requests.rs
-index e76b50b..49a24b8 100644
+index bae49e84..31b257ec 100644
 --- a/codex-rs/tui/src/chatwidget/protocol_requests.rs
 +++ b/codex-rs/tui/src/chatwidget/protocol_requests.rs
 @@ -48,7 +48,8 @@ impl ChatWidget {
@@ -3339,5 +3352,5 @@ index e76b50b..49a24b8 100644
 +            ServerRequest::TheoremosAgentControlRequest { .. }
 +            | ServerRequest::DynamicToolCall { .. }
              | ServerRequest::AttestationGenerate { .. }
-             | ServerRequest::CurrentTimeRead { .. }
              | ServerRequest::ChatgptAuthTokensRefresh { .. }
+             | ServerRequest::ApplyPatchApproval { .. }

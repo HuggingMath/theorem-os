@@ -3,7 +3,7 @@ FROM docker:29-cli AS docker-cli
 
 # Compile against the worker's libc; a binary from the development host may
 # require a newer glibc even when the Codex source and architecture match.
-FROM rust:1.95.0-bookworm AS codex-backend
+FROM rust:1.99.1-bookworm AS codex-backend
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 cmake pkg-config libssl-dev libcap-dev libasound2-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -60,7 +60,7 @@ ENV ELAN_HOME=/opt/elan \
     DEEPSCIENTIST_MATH_SANDBOX_BACKEND=bwrap \
     DEEPSCIENTIST_MATH_TRUSTED_ELAN_ROOTS=/opt/elan
 COPY scripts/install-elan.sh ./scripts/install-elan.sh
-RUN npm install --global @openai/codex@0.162.0 \
+RUN npm install --global @openai/codex@0.172.0 \
     && sh scripts/install-elan.sh \
     && elan toolchain install leanprover/lean4:v4.33.0 \
     && chmod -R a+rX /opt/elan \
