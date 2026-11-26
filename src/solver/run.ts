@@ -6,6 +6,7 @@ import { VerificationCheckpointError, withVerificationCheckpoints } from './veri
 import { parseArgs } from 'node:util';
 import { readMathBuildManifest } from '../math/mathBuildManifest';
 import { MathGitError } from '../math/mathGit';
+import { scheduleMathTimeout } from '../math/mathTimers';
 import { canonicalMathJson, mathDigest, readMathJson, readMathText, withMathRuntimeLease, writeMathJsonDurable, type MathLease } from '../math/mathRuntimeIo';
 import { projectMathematicsRuntimeEnvironment, resolveMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnvironment';
 import { checkResolvedLeanToolchainReadiness } from '../math/leanToolchainReadiness';
@@ -248,7 +249,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
   let preparing = true;
   let deadline = Infinity;
   let executionClock: ExecutionDeadline | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined = Number.isFinite(preparationMs) ? setTimeout(abort, preparationMs) : undefined;
+  const cancelPreparation = scheduleMathTimeout(abort, preparationMs);
   let ownedState: SolverRunState | undefined;
   let proofEnvironment: Awaited<ReturnType<typeof prepareMathProofEnvironment>> | undefined;
   let continuationSeeding = false;
@@ -371,7 +372,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
           }
           return;
         }
-        clearTimeout(timer); timer = undefined;
+        cancelPreparation();
         try {
           await disposeProofEnvironment();
           await generateSolverExplanations({ problem: state.problem, worktree, directory, root, buildManifest: buildFile,
@@ -685,13 +686,12 @@ export async function runSolver(args: string[], root: string, customModules?: So
         return 0;
       }
       signal.throwIfAborted();
-      clearTimeout(timer);
+      cancelPreparation();
       preparing = false;
       state.solveStartedAt = Date.now();
       state.solveFinishedAt = undefined;
       state.solveWaitingMs = 0;
       deadline = state.solveStartedAt + maxRunMs;
-      timer = undefined;
       executionClock = new ExecutionDeadline(maxRunMs, abort);
       const executionBudget = {
         remainingMs: () => executionClock!.remainingMs(),
@@ -716,8 +716,6 @@ export async function runSolver(args: string[], root: string, customModules?: So
         profile,
         signal, deadline, executionBudget, maxTurns, maxTurnMs, maxTotalTokens, proofTimeoutMs,
         freshContinuationChecks, prepareTeamWorker, save, emit }));
-      clearTimeout(timer);
-      timer = undefined;
       executionClock.stop();
       state.solveWaitingMs = executionClock.waitingMs();
       state.solveFinishedAt = Date.now();
@@ -727,7 +725,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
         readMathBuildManifest(buildFile, root, bundleRoot);
         const evaluationStarted = Date.now();
         emit('evaluation_started', { workerId: state.winningWorker ?? 'solver' });
-        evaluation = await evaluateSolverProof(state.problem, winner.worktree, winner.check, env, signal,
+        evaluation = await evaluateSolverProof(state.problem, winner.check, env, signal,
           { command: values['evaluator-command'], timeoutMs: evaluatorMs,
             teamContributions: state.agentTeam?.transport === 'native-agent-control' && state.agentTeam.deliveries.length > 0 });
         emit('evaluation_finished', { status: evaluation.status, durationMs: Date.now() - evaluationStarted });
@@ -799,7 +797,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
     return controller.signal.aborted ? 4 : 1;
   } finally {
     executionClock?.stop();
-    clearTimeout(timer);
+    cancelPreparation();
     hostSignal?.removeEventListener('abort', hostAbort);
     process.removeListener('SIGINT', abort); process.removeListener('SIGTERM', abort);
   }

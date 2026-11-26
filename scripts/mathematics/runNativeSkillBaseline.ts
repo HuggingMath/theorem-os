@@ -140,7 +140,7 @@ export async function runNativeSkillBaseline(argv: string[]): Promise<number> {
           emit('proof_check_started');
           check = await checkSolverProof(problem, worktree, prepared.environment, lease.signal, undefined, Infinity);
           emit('proof_checked', { commit: check.commit, passed: check.passed });
-          if (check.passed) evaluation = await evaluateSolverProof(problem, worktree, check, prepared.environment,
+          if (check.passed) evaluation = await evaluateSolverProof(problem, check, prepared.environment,
             lease.signal, { timeoutMs: Infinity });
         } catch (cause) {
           error = cause instanceof Error && /^math_/u.test(cause.message) ? cause.message : 'native_comparison_verifier_unavailable';

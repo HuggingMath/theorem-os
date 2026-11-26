@@ -406,17 +406,25 @@ export abstract class CooperationCore {
       ...proposedDefinitionContractChecks(this.archive, identity, now)]) {
       const previous = this.archive.nextChecks?.find(record => record.id === proposed.record.id);
       if (previous) {
-        // A pause or removed downstream path can expire an unfinished definition check.
-        // When that exact question becomes relevant again, resume its one existing record.
-        if (previous.origin === 'definition-contract' && previous.status === 'stale' && !previous.outcome) {
-          const node = this.archive.tasks.find(item => item.nextCheckId === previous.id);
-          if (currentNextCheck({ ...previous, status: 'pending' }, this.archive, identity)) {
-            previous.status = 'pending';
-            if (node) { node.task = { ...node.task, status: 'active' }; this.moveTask(node, 'pending', 'reopened'); }
-            else this.archive.tasks.push(proposed.node);
-            this.input.emit('next_check_resumed', { checkId: previous.id, taskId: previous.taskId });
-          }
+        if (previous.status !== 'stale' || previous.outcome) continue;
+        const nodeIndex = this.archive.tasks.findIndex(item => item.nextCheckId === previous.id);
+        if (previous.origin === 'definition-contract') {
+          // An unfinished definition check can resume when the same question becomes relevant again.
+          if (!currentNextCheck({ ...previous, status: 'pending' }, this.archive, identity)) continue;
+          previous.status = 'pending';
+          const node = this.archive.tasks[nodeIndex];
+          if (node) { node.task = { ...node.task, status: 'active' }; this.moveTask(node, 'pending', 'reopened'); }
+          else this.archive.tasks.push(proposed.node);
+        } else {
+          // A republished gap needs a current delivery and a fresh assignment.
+          const { record, node } = proposed;
+          if (record.gapDeliveryId === previous.gapDeliveryId || !currentNextCheck(record, this.archive, identity)) continue;
+          Object.assign(previous, { status: 'pending', gapDeliveryId: record.gapDeliveryId, scope: record.scope,
+            check: record.check, proofSearchSeed: record.proofSearchSeed });
+          if (nodeIndex < 0) this.archive.tasks.push(node);
+          else this.archive.tasks[nodeIndex] = { ...node, attempts: this.archive.tasks[nodeIndex].attempts };
         }
+        this.input.emit('next_check_resumed', { checkId: previous.id, taskId: previous.taskId });
         continue;
       }
       // A model task cannot take ownership of the host's deterministic check id.

@@ -431,7 +431,7 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
     expect(source).toContain('exact combined n'); expect(source).not.toContain('sorry');
     expect(git(receipt.workspaceRoot, ['rev-parse', 'HEAD'])).toBe(problem.baseCommit);
 
-    const evaluation = await evaluateSolverProof(problem, winner!.worktree, winner!.check,
+    const evaluation = await evaluateSolverProof(problem, winner!.check,
       environment, controller.signal, { timeoutMs: 30_000 });
     expect(evaluation).toMatchObject({ status: 'passed', method: 'host-lean-kernel-all-targets',
       verification: { passed: true, commit: winner!.check.commit, verification: { status: 'kernel_verified' } } });

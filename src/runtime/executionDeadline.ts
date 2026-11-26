@@ -1,6 +1,8 @@
+import { scheduleMathTimeout } from '../math/mathTimers';
+
 /** A finite execution allowance that excludes time explicitly spent waiting for a person. */
 export class ExecutionDeadline {
-  private timer?: ReturnType<typeof setTimeout>;
+  private cancelTimer?: () => void;
   private activeSince = Date.now();
   private usedMs = 0;
   private waitedMs = 0;
@@ -19,7 +21,7 @@ export class ExecutionDeadline {
     const now = Date.now();
     if (waiting) {
       this.usedMs = this.executionMs();
-      clearTimeout(this.timer);
+      this.cancelTimer?.();
       // A late pause must not revive an execution allowance that already ran out.
       if (this.usedMs >= this.limitMs) { this.stopped = true; this.expire(); return; }
       this.waitingSince = now;
@@ -37,10 +39,13 @@ export class ExecutionDeadline {
     this.waitedMs = this.waitingMs();
     this.waitingSince = undefined;
     this.stopped = true;
-    clearTimeout(this.timer);
+    this.cancelTimer?.();
   }
 
   private arm() {
-    if (Number.isFinite(this.limitMs)) this.timer = setTimeout(() => { this.stop(); this.expire(); }, this.remainingMs());
+    this.cancelTimer = scheduleMathTimeout(() => {
+      this.stop();
+      this.expire();
+    }, this.remainingMs());
   }
 }

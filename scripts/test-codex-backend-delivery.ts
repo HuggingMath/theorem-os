@@ -279,7 +279,7 @@ export async function verifyNativeProofDelivery(input: { repository: string; exe
     assert.ok(state.agentTeam!.leadExposures?.some(exposure => exposure.kind === 'inspected' && exposure.deliveryId === reference.id));
     assert.ok(state.agentTeam!.leadExposures?.some(exposure => exposure.kind === 'adopted' && exposure.deliveryId === reference.id));
     assert.equal(git(receipt.workspaceRoot, ['rev-parse', 'HEAD']), problem.baseCommit, 'Research must not publish into the original workspace.');
-    const evaluation = await evaluateSolverProof(problem, worktree, winner.check, environment, signal,
+    const evaluation = await evaluateSolverProof(problem, winner.check, environment, signal,
       { timeoutMs: Infinity, teamContributions: true });
     assert.equal(evaluation.status, 'passed');
     const contributions = buildAgentTeamContributions(state, evaluation);

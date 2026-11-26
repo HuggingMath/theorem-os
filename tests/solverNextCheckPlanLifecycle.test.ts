@@ -3,7 +3,7 @@ import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { currentNextCheck } from '../src/solver/nextChecks';
 import { commitSolverSources } from '../src/solver/problem';
-import { parseCooperationPlan } from '../src/solver/tasks';
+import { parseCooperationPlan, taskVersion } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 
@@ -103,6 +103,62 @@ it('preserves the host check and its dispatch identity across a group revision',
   expect(action && f.cooperation.started(f.checker, action)).toBe(true);
   expect(f.events).not.toContain('next_check_expired');
   expect(f.state.cooperation!.invalidTaskTransitions ?? []).toEqual([]);
+});
+
+it('redispatches an unfinished gap check from a fresh report after a group revision', async () => {
+  const example = localExample('next-check-gap-lifecycle-');
+  const lead = leadWorker(example.problem, example.workspace);
+  const author = peerWorker(example, 'author'), checker = peerWorker(example, 'checker'), prover = peerWorker(example, 'prover');
+  const plan = parseCooperationPlan(example.problem, { tasks: [
+    ...example.problem.targets.map((target, index) => ({ ...target, id: `goal_${index}`, kind: 'goal',
+      objective: 'Prove the original target.', ownerId: prover.id })),
+    { id: 'survey', kind: 'research', objective: 'Study the missing step.', ownerId: author.id },
+  ] });
+  const state = solverState(example.problem, example.workspace, { runId: 'next-check-gap-fixture', phase: 'running',
+    cooperation: { canonicalCommit: example.problem.baseCommit,
+      tasks: plan.tasks.map(task => ({ task, status: 'pending', attempts: 0 })),
+      groups: plan.groups.map(group => ({ group, turns: 0 })) } });
+  const controller = new AbortController();
+  const cooperation = cooperativeResearch({ state, workers: [lead, author, checker, prover], retrievalRoot: example.directory,
+    signal: controller.signal });
+  cleanup.push(async () => { controller.abort(); await cooperation.stop(); fs.rmSync(example.directory, { recursive: true, force: true }); });
+  await cooperation.restore();
+  const budget = { maxTurns: Infinity, remainingMs: Infinity };
+  const archive = state.cooperation!, target = plan.tasks.find(task => task.id === 'goal_0')!;
+  const mathematicalGap = {
+    consumer: { taskId: target.id, taskDigest: taskVersion(target) }, previousGap: 'Missing the main inference.',
+    remaining: 'Connect the estimates.', reduced: 'The estimates are stated.', evidenceScope: 'Current goal.',
+    reconsiderWhen: [], nextCheck: { action: 'feasibility', objective: 'Check the remaining inference.',
+      expectedEvidence: 'Find an exact missing premise.' },
+  };
+  const report = async (summary: string) => {
+    const action = await cooperation.next(author, budget);
+    if (action?.kind !== 'task' || action.task.id !== 'survey') throw new Error('fixture_expected_survey');
+    expect(cooperation.started(author, action)).toBe(true);
+    fs.writeFileSync(path.join(author.worktree, 'RESEARCH.md'), JSON.stringify({ summary, conclusion: 'inconclusive', mathematicalGap }));
+    await cooperation.deliver(author, action, commitSolverSources(example.problem, author.worktree));
+    return archive.deliveries!.at(-1)!;
+  };
+
+  const firstDelivery = await report('First delivery.');
+  const record = archive.nextChecks![0];
+  expect(record).toMatchObject({ status: 'pending', gapDeliveryId: firstDelivery.id });
+  const firstAssignment = await cooperation.next(checker, budget);
+  if (firstAssignment?.kind !== 'task') throw new Error('fixture_expected_gap_check');
+  expect(firstAssignment.task.id).toBe(record.taskId);
+  const revised = structuredClone(plan);
+  revised.groups[0].revision++;
+  await (cooperation as unknown as { acceptPlan(plan: typeof revised): Promise<void> }).acceptPlan(revised);
+  expect(firstDelivery.status).toBe('superseded');
+  expect(record.status).toBe('stale');
+
+  const freshDelivery = await report('Updated notes on the same question.');
+  expect(archive.nextChecks).toHaveLength(1);
+  expect(record).toMatchObject({ status: 'pending', gapDeliveryId: freshDelivery.id });
+  const reassignment = await cooperation.next(checker, budget);
+  expect(reassignment).toMatchObject({ kind: 'task', task: { id: record.taskId } });
+  expect(reassignment?.kind === 'task' && reassignment.assignment.assignmentId).not.toBe(firstAssignment.assignment.assignmentId);
+  expect(archive.invalidTaskTransitions ?? []).toEqual([]);
 });
 
 it('expires a changed exact definition contract without leaving an ordinary orphan task', async () => {
