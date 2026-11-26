@@ -13,15 +13,15 @@ const custom: CustomResearchModule[] = [
 ];
 
 describe('one frozen identity for executable research modules and the optional web registry', () => {
-  it('pins the remediation behavior digests for both executable modules and shared identity functions', () => {
-    // The frozen identity includes the M5 dispatch changes for checked proof handoffs.
+  it('pins the method digests for both executable modules and shared identity functions', () => {
+    // These digests include the module versions for final review and research handoffs.
     const original: [ResearchModulePlan['scheduler'], ResearchModulePlan['context'], string][] = [
-      ['plan', 'full', '935851fe71cd8df6a3c13c4990841577951fbebd1514f2814e48c8fd6f18c03a'],
-      ['plan', 'essential', '5201ca940f5c877067ba41d91641b7c6ab7b3d310c3b2af3964574f7b1758e68'],
-      ['critical-path', 'full', '396752078f86be19d6df79dbe678dd0f599a23a882c4c226bb307db3f3d81ab5'],
-      ['critical-path', 'essential', 'ab565c8e3dc52cac02539d516f6e3558e52e664be63e57fd1f12ec34b63c6fb3'],
-      ['continuation', 'full', 'd130cad7831837a91ea2779469bbb536a605a7b8dbf9e2736fb5ddb9b1a7c0d1'],
-      ['continuation', 'essential', 'fb0034002077c65500df139084758594ee618e5b76937774adba43b7e26a78bc'],
+      ['plan', 'full', '21fc6be379970092aff994a851cb58205449b5ba9e4dda358184463b0c16a2c6'],
+      ['plan', 'essential', '478c4f19065692fd55d226b2e2368bc85f669f5580ffd4008cffa101293d0843'],
+      ['critical-path', 'full', 'bdc715b53f5fffa4d606170f9020fd232f5e6eeb7c42943260908b2985d3c075'],
+      ['critical-path', 'essential', 'b7eb54e73acd05a12441b9cfafde14e68cb5008e89cfaf95f7db077e1918dc6e'],
+      ['continuation', 'full', '31df4a061f0659a4e786c1e0665253576c61a2d428e2464bb0474b3e55e613fc'],
+      ['continuation', 'essential', '01e21dbb7fe4e08273a119086eb99fa67240e9719bd4a63f42e03e8e4dd371dd'],
     ];
     for (const [scheduler, context, digest] of original) {
       const plan = { scheduler, context, custom: [] };
@@ -29,10 +29,10 @@ describe('one frozen identity for executable research modules and the optional w
       expect(solverIdentityMethodDigest(configuredResearchModuleIdentity(plan).identity, 'cooperative')).toBe(digest);
     }
     const advised: ['cooperative' | 'independent', number, string][] = [
-      ['cooperative', 1, 'd731d4e682be4de6bff67d21d46752601750a667ad2aa8a8a009c3ea34c8cfa8'],
-      ['cooperative', 4, 'ae141dc83a933b5dbb7d6fc083c0b42d50f26622b2ffa0b8582066622817cc55'],
-      ['independent', 1, 'a2d5213a8d7b7543f94dab5912495a576f2456c94b3ae9d24c4d62a88ef61a4b'],
-      ['independent', 4, 'a2d5213a8d7b7543f94dab5912495a576f2456c94b3ae9d24c4d62a88ef61a4b'],
+      ['cooperative', 1, 'ab420dc942068047a7985e8e1fb42e2e5b56f854c7172e6ad57ba84ff1869d96'],
+      ['cooperative', 4, 'c98d52416c3252a1aee24ce65ca28cafb63e077862fd3212caafe226918cc36a'],
+      ['independent', 1, '83d8708d1b164f45dee5ebc83c847867cc46637427bb058df60508333676fb25'],
+      ['independent', 4, '83d8708d1b164f45dee5ebc83c847867cc46637427bb058df60508333676fb25'],
     ];
     for (const [coordination, workers, digest] of advised) {
       const plan: ResearchModulePlan = { scheduler: 'continuation', context: 'essential', custom };
