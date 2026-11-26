@@ -88,7 +88,7 @@ export abstract class CooperationCore {
   protected planSynchronizations = new Set<Promise<void>>();
   protected leadDeliveries = new Set<Promise<unknown>>();
   protected active = new Map<string, { action: CooperativeAction; interrupt: () => Promise<void>; notify: (message: string, options?: { requireTurn?: boolean; mode?: 'advisory' }) => Promise<void>;
-    requestReady?: () => Promise<void>; cancelled?: boolean }>();
+    requestReady?: () => Promise<void>; requestAdvisoryCheckpoint?: (commit: string) => void; cancelled?: boolean }>();
   private freshProofReady = new WeakMap<CooperativeAction, string>();
   protected notifications = new Set<Promise<void>>();
   private deliveryReceiptNotifications = new Set<string>();
@@ -952,8 +952,8 @@ export abstract class CooperationCore {
     this.freshProofReady.delete(action); this.changed();
   }
   activate(worker: ResearchWorker, action: CooperativeAction, interrupt: () => Promise<void>, notify: (message: string, options?: { requireTurn?: boolean; mode?: 'advisory' }) => Promise<void>,
-    requestReady?: () => Promise<void>) {
-    this.active.set(worker.id, { action, interrupt, notify, requestReady }); this.changed();
+    requestReady?: () => Promise<void>, requestAdvisoryCheckpoint?: (commit: string) => void) {
+    this.active.set(worker.id, { action, interrupt, notify, requestReady, requestAdvisoryCheckpoint }); this.changed();
   }
   deactivate(worker: ResearchWorker) { this.active.delete(worker.id); this.changed(); }
   protected nextCheckDispatchable(node: TaskRecord) {
@@ -1013,7 +1013,14 @@ export abstract class CooperationCore {
       if (isStatementAction(active.action)) continue;
       const task = active.action.kind === 'task' ? active.action.task : undefined;
       if (task && record.taskId && !this.deliveryVisible(record, task, versions)) continue;
-      const notice = `Cooperation update: ${record.kind} ${record.id}, task ${record.taskId ?? 'original'}, status ${record.status}. Read COOPERATION.json for peer state and current-version references; use M4 to choose relevant material. This notification grants no proof acceptance.`;
+      const source = record.taskId && versions.get(record.taskId)?.task;
+      const forConsumer = task && source && !active.cancelled && record.kind === 'research' &&
+        (record.status === 'advisory' || record.status === 'conditional') && record.summary.trim() &&
+        (source.consumerGoalIds?.includes(task.id) || task.dependsOn.includes(source.id)) && this.current(active.action);
+      const update = `Cooperation update: ${record.kind} ${record.id}, task ${record.taskId ?? 'original'}, status ${record.status}. Read COOPERATION.json for peer state and current-version references; use M4 to choose relevant material. This notification grants no proof acceptance.`;
+      const notice = forConsumer ? update + '\nAdvisory finding for your current task (verify before using): ' +
+        JSON.stringify({ summary: bounded(record.summary, 1800), remainingObligations: record.remainingObligations.slice(0, 3)
+          .map(obligation => bounded(obligation, 280)) }) : update;
       const pending = active.notify(notice, { mode: 'advisory' }).catch(() => { this.input.emit('notification_deferred', { workerId: id, deliveryId: record.id }); });
       this.notifications.add(pending); void pending.finally(() => this.notifications.delete(pending));
     }

@@ -202,6 +202,42 @@ describe('isolated advisory research drafts', () => {
     expect(fs.readFileSync(notes(), 'utf8')).toBe(fullNotes);
   });
 
+  it('includes a scoped checkpoint finding in live notices to its consumers', async () => {
+    const example = { directory, workspace: lead.worktree, problem };
+    const consumer = peerWorker(example, 'consumer', { role: 'engineer' });
+    const other = peerWorker(example, 'other');
+    inputWorkers.push(consumer, other);
+    state.workers!.push(...inputWorkers.map(worker => ({ ...worker, phase: 'running' as const, turns: 0 })));
+    const goal = node('goal_1'), research = node('first_route'), unrelated = node('second_route');
+    research.task = { ...research.task, consumerGoalIds: [goal.task.id], ownerId: peer.id };
+    goal.task = { ...goal.task, dependsOn: [], ownerId: consumer.id };
+    unrelated.task = { ...unrelated.task, status: 'active', ownerId: other.id };
+    cooperative = create();
+    const action = await task();
+    const activate = async (worker: ResearchWorker, taskId: string) => {
+      const work = await cooperative.next(worker, budget);
+      expect(work).toMatchObject({ kind: 'task', task: { id: taskId } });
+      expect(cooperative.started(worker, work!)).toBe(true);
+      const notify = vi.fn(async () => {});
+      cooperative.activate(worker, work!, async () => {}, notify);
+      return notify;
+    };
+    const consumerNotice = await activate(consumer, goal.task.id);
+    const otherNotice = await activate(other, unrelated.task.id);
+    write(peer, { summary: 'FIRST_ROUTE_FINDING', conclusion: 'supporting', remainingObligations: ['Exact missing inequality'] });
+    await cooperative.deliver(peer, action, commitSolverSources(problem, peer.worktree), true, 'scheduling-checkpoint');
+
+    const delivery = state.cooperation!.deliveries?.find(record => record.kind === 'research');
+    expect(delivery, JSON.stringify(state.cooperation!.deliveryReceipts)).toMatchObject({
+      taskId: 'first_route', status: 'conditional', summary: 'FIRST_ROUTE_FINDING',
+    });
+    const notice = `Cooperation update: research ${delivery!.id}, task first_route, status conditional.`;
+    expect(consumerNotice).toHaveBeenCalledWith(expect.stringContaining(
+      '{"summary":"FIRST_ROUTE_FINDING","remainingObligations":["Exact missing inequality"]}'), { mode: 'advisory' });
+    expect(otherNotice).toHaveBeenCalledWith(expect.stringContaining(notice), { mode: 'advisory' });
+    expect(otherNotice.mock.calls.flat().join(' ')).not.toContain('FIRST_ROUTE_FINDING');
+  });
+
   it.each([
     'The local boundary case is proved; the uniform inference is still unknown.',
     'Illustrative graph only.\n```json\n{"nodes":["boundary","uniform"]}\n```\n',

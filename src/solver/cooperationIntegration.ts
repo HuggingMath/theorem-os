@@ -65,7 +65,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
         if (!result.helpers.length || !result.helpers.every(helper => eligible({ file: helper.file, name: helper.qualifiedName }))) return;
         this.pin(result.commit);
         this.archive.canonicalCommit = result.commit;
-        (this.archive.landedHelpers ??= []).push(...result.helpers);
+        (this.archive.landedHelpers ??= []).push(...result.helpers.map(helper => ({ ...helper, producer: worker.id })));
         this.changed();
         this.input.emit('incremental_helpers_landed', { workerId: worker.id, taskId: action.task.id,
           commit: result.commit, declarations: result.helpers.map(helper => helper.qualifiedName), summary });

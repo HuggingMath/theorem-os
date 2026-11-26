@@ -63,7 +63,7 @@ export function isTaskSourceRepairFeedback(feedback: string): boolean {
 }
 
 export type ReviewRecord = { commit: string; sourceDigest: string; status: 'pending' | 'running' | 'accepted' | 'changes_requested';
-  workerId?: string; assignmentId?: string; summary?: string };
+  producerIds?: string[]; independent?: boolean; workerId?: string; assignmentId?: string; summary?: string };
 export type HumanEditRecord = { id: string; status: 'received' | 'applied' | 'rejected'; reason?: string;
   receivedAt?: number; appliedAt?: number; baseVersion?: string; planVersion?: string; affectedTasks?: string[]; pendingSync?: boolean;
   recheck?: { status: 'pending' | 'passed' | 'failed' | 'not-required' | 'superseded';
@@ -80,7 +80,7 @@ export type FailedTaskInput = { id: string; taskId: string; taskDigest: string; 
   canonicalSourceDigest: string; canonicalTargetDigest: string; feedback: string;
   repair?: { taskId: string; taskDigest: string; workerId: string; pending: boolean; startedAttempt?: number } };
 export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; canonicalCommit?: string; leadSeedCommit?: string; review?: ReviewRecord; error?: string;
-  landedHelpers?: LandedHelper[];
+  landedHelpers?: (LandedHelper & { producer?: string })[];
   /** Context-only notes actually delivered to this worker; decisions remain separate from proof state. */
   humanGuidance?: HumanGuidanceRecord[];
   /** Context-only reverse uses, projected from the full archive without expanding execution visibility. */

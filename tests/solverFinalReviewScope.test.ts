@@ -127,6 +127,42 @@ describe('fixed-candidate statement review scope', () => {
     expect(state.cooperation!.statementReviews!.every(item => item.status === 'pending')).toBe(true);
   });
 
+  it('waits for the nonauthor to be available before assigning review of the fixed proof', async () => {
+    const example = { directory, workspace, problem };
+    const canonical = check.commit;
+    const author = peerWorker(example, 'engineer', { role: 'engineer', commit: canonical });
+    const secondAuthor = peerWorker(example, 'prover', { role: 'prover', commit: canonical });
+    workers.push(author, secondAuthor);
+    task('goal_0').assignment = { workerId: author.id, taskId: 'goal_0', taskDigest: taskVersion(task('goal_0').task), seedCommit: canonical };
+    state.cooperation!.landedHelpers = [{ producer: secondAuthor.id, file: 'Submission.lean', qualifiedName: 'Tutorial.used',
+      type: 'True', commit: canonical }];
+    reports.set(problem.targets[0]!.theoremName, { statement: [], proof: [{ name: 'Tutorial.used', file: 'Submission.lean' }] });
+    await freshCheck();
+    cooperative = create();
+    const nonauthor = workers[1]!;
+    const occupied = { kind: 'lead' as const, seedCommit: canonical };
+    cooperative.activate(nonauthor, occupied, async () => {}, async () => {});
+    cooperative.requireReview(check);
+    track(cooperative.next(author, budget));
+    track(cooperative.next(secondAuthor, budget));
+    await Promise.resolve();
+    expect(events.filter(event => event.event === 'review_assigned')).toEqual([]);
+    cooperative.deactivate(nonauthor);
+    await completeFinalReview();
+    expect(events.find(event => event.event === 'review_assigned')?.details)
+      .toMatchObject({ workerId: nonauthor.id, independent: true });
+    expect(state.cooperation!.review!.producerIds).toEqual([author.id, secondAuthor.id].sort());
+  });
+
+  it('labels a fresh-session review by the only available author as non-independent', async () => {
+    const author = workers[1]!;
+    task('goal_0').assignment = { workerId: author.id, taskId: 'goal_0', taskDigest: taskVersion(task('goal_0').task), seedCommit: check.commit };
+    cooperative.requireReview(check);
+    const action = await cooperative.next(author, budget);
+    expect(action).toMatchObject({ kind: 'review', independent: false });
+    expect(events.find(event => event.event === 'review_assigned')?.details).toMatchObject({ workerId: author.id, independent: false });
+  });
+
   it.each(['paused', 'stopped', 'parked', 'group-paused', 'group-exhausted'] as const)
   ('dispatches both necessary review stages for a %s helper without reopening its proof work', async control => {
     reports.set(problem.targets[0]!.theoremName, { statement: [], proof: [{ name: 'Tutorial.used', file: 'Submission.lean' }] });
@@ -207,6 +243,45 @@ describe('fixed-candidate statement review scope', () => {
     expect(review('used').status).toBe(used ? 'translating' : 'pending');
     cooperative.deactivate(workers[1]!);
     if (!used) await completeFinalReview();
+  });
+
+  it.each(['changes-requested', 'candidate-source'] as const)('resumes waiting advisory work after %s', async reason => {
+    const idle = peerWorker({ directory, workspace, problem }, 'engineer', { role: 'engineer', commit: check.commit });
+    workers.push(idle);
+    state.workers = workers.map(worker => ({ ...worker, phase: 'running', turns: 0 }));
+    state.cooperation!.tasks.push({ task: { id: 'investigate', kind: 'research', objective: 'Investigate another construction.',
+      dependsOn: [], revision: 0, ownerId: idle.id }, status: 'pending', attempts: 0 });
+    cooperative = create();
+    cooperative.requireReview(check);
+    const reviewer = workers[1]!;
+    const reviewAction = await cooperative.next(reviewer, budget);
+    expect(reviewAction).toMatchObject({ kind: 'review' });
+    if (reviewAction?.kind !== 'review') throw new Error('missing_final_review');
+    expect(cooperative.started(reviewer, reviewAction)).toBe(true);
+    const waiting = track(cooperative.next(idle, budget));
+    expect(events).toContainEqual({ event: 'dispatch_wait',
+      details: expect.objectContaining({ workerId: idle.id, stage: 'final-review' }) });
+    expect(task('investigate')).toMatchObject({ status: 'pending', attempts: 0 });
+    if (reason === 'changes-requested') {
+      fs.writeFileSync(path.join(reviewer.worktree, 'RESEARCH.md'),
+        JSON.stringify({ commit: check.commit, verdict: 'changes_requested' }));
+      await cooperative.deliver(reviewer, reviewAction, commitSolverSources(problem, reviewer.worktree));
+      expect(state.cooperation!.review?.status).toBe('changes_requested');
+    } else {
+      state.cooperation!.canonicalCommit = problem.baseCommit;
+      cooperative.workerAvailabilityChanged();
+    }
+    expect(await waiting).toMatchObject({ kind: 'task', task: { id: 'investigate' } });
+  });
+
+  it('does not start a reserved review after its candidate changes', async () => {
+    cooperative.requireReview(check);
+    const reviewer = workers[1]!;
+    const action = await cooperative.next(reviewer, budget);
+    expect(action).toMatchObject({ kind: 'review' });
+    state.cooperation!.canonicalCommit = problem.baseCommit;
+    expect(cooperative.started(reviewer, action!)).toBe(false);
+    expect(state.turns).toBe(0);
   });
 
   it.each(['environment', 'task-contract', 'candidate-source'] as const)('invalidates selective review scope after a changed %s', async change => {

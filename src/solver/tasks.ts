@@ -73,7 +73,8 @@ export type CooperativeAction = { kind: 'lead' | 'assemble'; seedCommit: string;
   planNonce?: string;
   /** Stable mathematical responsibility, independent of graph presentation. */
   responsibilityDigest?: string; } |
-  { kind: 'review'; seedCommit: string; sourceDigest: string; assignmentId?: string } | { kind: 'task'; assignment: TaskAssignment; task: CooperativeTask } | StatementAction;
+  { kind: 'review'; seedCommit: string; sourceDigest: string; assignmentId?: string; independent?: false } |
+  { kind: 'task'; assignment: TaskAssignment; task: CooperativeTask } | StatementAction;
 
 export const taskVersion = (task: CooperativeTask) => {
   const { status: _status, ownerId: _owner, preferredOwnerId: _preferredOwner, statementReview: _review, informalStatement: _intent,

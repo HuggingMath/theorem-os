@@ -229,7 +229,9 @@ describe('isolated solver and host acceptance', () => {
       if (id === 'codex') {
         const profile = path.join(directory, 'codex-profile'); fs.mkdirSync(profile);
         fs.writeFileSync(path.join(profile, 'config.toml'), 'model="fixture"\n');
-        flags = ['--harness', id, '--harness-profile', profile, '--harness-executable', '/usr/bin/true', '--model', 'fixture'];
+        const executable = path.join(directory, 'codex');
+        fs.symlinkSync('/usr/bin/true', executable);
+        flags = ['--harness', id, '--harness-profile', profile, '--harness-executable', executable, '--model', 'fixture'];
       } else flags = workflowHarnessFixture(directory, id).flags;
       const modules = { ...directSolverModules, M1: { ...directSolverModules.M1,
         open: async (options: MathAgentOptions) => host.createSession(options) } };
@@ -245,7 +247,9 @@ describe('isolated solver and host acceptance', () => {
       host.createSession.mockClear(); host.explain.mockClear();
       expect(await runSolver([...selected, '--resume'], directory, modules)).toBe(0);
       expect(host.createSession).not.toHaveBeenCalled();
-      expect(host.explain.mock.calls[0][0].writer.agentHarness).toEqual(binding);
+      expect(host.explain.mock.calls[0][0].writer).toMatchObject({
+        profile: binding.profile, executable: binding.executable, agentHarness: binding,
+      });
     });
 
   it('keeps proof acceptance when explanation generation fails and resumes only explanation work', async () => {
