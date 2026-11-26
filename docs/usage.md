@@ -42,7 +42,7 @@ bun run build
 
 构建生成 `out/main/math-solver.js`、`search-lean.js`、`check-lean.js` 和 `proof-search.js`，并输出 JSON。记录其中的 **`buildManifestRef`**，运行时需要传入这个文件的绝对路径。源码与 bundle 均校验哈希，修改运行时代码后需重新构建。
 
-CLI 默认使用 `~/.config/deepscientist/math-sol-codex` 中的 Codex profile（本地 Sub2API 网关的 `deepseek-flash` / `max`，网关 `http://127.0.0.1:8080/v1`）。本机 profile 的认证命令按需读取已有部署的 Westlake 号池密钥，无需复制密钥或手动 export。也可通过 `CODEX_HOME` 指向其他已有 profile。
+CLI 默认使用 `~/.config/deepscientist/math-sol-codex` 中的 Codex profile，通过本地 Sub2API 网关 `http://127.0.0.1:8080/v1` 调用模型。`run` 的默认模型为 `deepseek-flash`，新运行的默认推理强度为 `high`。本机 profile 的认证命令按需读取已有部署的 Westlake 号池密钥，无需复制密钥或手动 export。也可通过 `CODEX_HOME` 指向其他已有 profile。
 
 `compare --provider sub2api` 和 `sample-putnam` 创建的独立 profile 使用环境变量 `SUB2API_WESTLAKE_API_KEY`；启动这些实验前需要在调用环境中设置它。密钥不会写入实验 profile 或数学工具环境文件。
 
@@ -101,7 +101,7 @@ bun run math run \
   --output "$MATH_RUN_ROOT/result.json"
 ```
 
-默认启用四个 Agent，解题预算为 30 分钟、合计 200 次模型调度。运行向标准输出发送 JSON 进度事件，并将结果写入 `result.json`。
+默认启用四个 Agent。CLI 默认不限制解题时间、模型调度次数和 token 用量。需要限制时，可设置 `--max-run-seconds`、`--max-turns` 或 `--max-total-tokens`。Web worker 会传入该次运行的预算。运行向标准输出发送 JSON 进度事件，并将结果写入 `result.json`。
 
 首次配置环境时，可在上述命令末尾加 `--startup-only`，只检查准备条件，不调用模型。预检会创建运行状态；之后使用相同参数加 `--resume` 开始求解。
 
@@ -346,21 +346,21 @@ Lead 的普通规划和初始规划执行 90 秒后收到保存提醒，120 秒�
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
 | `--model` | `deepseek-flash` | 所选 provider 提供的模型 ID |
-| `--effort` | `max` | 推理强度（Sub2API DeepSeek 支持 low/high/max） |
+| `--effort` | `high` | 推理强度（Sub2API DeepSeek 支持 low/high/max） |
 | `--workers` | `4` | Agent 总数，支持 1–8；四人以上增加专门的辅助引理 Prover |
 | `--method` | `direct` | 仅支持 `direct`，保留以兼容已有命令 |
 | `--coordination` | `cooperative` | 协作，或 `independent` 独立并行尝试 |
 | `--continuation-manifest` | 无 | 新建时绑定显式历史附件；恢复时沿用同一只读快照 |
 | `--scheduler` | `plan` | 按计划顺序调度；`critical-path` 按依赖链排序；`continuation` 优先承接已证成果的主路径任务 |
-| `--prepare-timeout-seconds` | `1800` | 环境准备与依赖预编译预算 |
-| `--max-run-seconds` | `1800` | 准备完成后的共享解题时间预算 |
-| `--max-turns` | `200` | 所有 Agent 合计模型调度次数 |
+| `--prepare-timeout-seconds` | `0` | 环境准备与依赖预编译预算 |
+| `--max-run-seconds` | `0` | 准备完成后的共享解题时间预算 |
+| `--max-turns` | `0` | 所有 Agent 合计模型调度次数 |
 | `--max-total-tokens` | `0` | 全部角色累计的 provider 报告 token 阈值；`0` 不限。达到后停止新模型请求，在途请求仍可完成并产生超额 |
-| `--max-turn-seconds` | `180` | 单轮时间限制；停止写入后检查已保存源码 |
-| `--proof-timeout-seconds` | `1800` | 单次宿主证明检查预算；超时保存可恢复检查点 |
-| `--evaluator-timeout-seconds` | `1800` | 集成后 Lean 复核与最终评测共享的独立时间预算 |
+| `--max-turn-seconds` | `0` | 单轮时间限制；停止写入后检查已保存源码 |
+| `--proof-timeout-seconds` | `0` | 单次宿主证明检查预算；超时保存可恢复检查点 |
+| `--evaluator-timeout-seconds` | `0` | 集成后 Lean 复核与最终评测共享的独立时间预算 |
 
-`--prepare-timeout-seconds`、`--max-run-seconds`、`--max-turns`、`--max-turn-seconds`、`--proof-timeout-seconds` 与 `--evaluator-timeout-seconds` 可设为 `0` 关闭对应限制。证明检查预算独立于总解题时间；关闭总解题时间限制不会关闭证明检查期限。同一源码、任务和环境的检查超时后保留候选，恢复时逐次延长检查时间，最多 24 小时。
+`--prepare-timeout-seconds`、`--max-run-seconds`、`--max-turns`、`--max-turn-seconds`、`--proof-timeout-seconds` 与 `--evaluator-timeout-seconds` 在 CLI 中均默认为 `0`，表示不限。可以分别设置解题、证明检查和最终评测的时限。显式设置证明检查时限后，同一源码、任务和环境的检查超时会保留候选，恢复时逐次延长检查时间，最多 24 小时。
 
 `--max-total-tokens` 包含规划、研究、证明和审阅角色，按跨线程累计消费计算；恢复时继续使用历史用量，省略参数时保留已存额度。它依据 provider 的事后通知阻止新请求，不能保证并发在途消费不超过阈值。报告保留超额与用量完整性；有限额度下缺失已执行请求的用量会停止继续派发。旧运行未记录逐轮用量完整性，不能直接当作严格 token 对照。默认不限 token，不为已有长跑增加停止条件。原生 provider 的用量按完整 turn 记账：turn 被 `--max-turn-seconds` 截断时该轮用量记为不完整，有限额度会以 usage-unavailable 停止；需要有限 token 额度时应同时放宽 `--max-turn-seconds`（或设为 0）。
 

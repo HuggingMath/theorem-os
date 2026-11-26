@@ -530,7 +530,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   let turnHasOutput = false;
   const earlyOutputTurns = new Set<string>();
   let completion: { resolve: (turn: Json) => void; reject: (error: Error) => void } | undefined;
-  let compacting: { resolve: (turn?: Json) => void; reject: (error: Error) => void;
+  let compacting: { resolve: (turn: Json) => void; reject: (error: Error) => void;
     turnId?: string; installed?: boolean } | undefined;
   const earlyCompletions = new Map<string, Json>();
   const completedMessages = new Map<string, string>();
@@ -740,12 +740,10 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       const { id } = object(params.turn);
       if (typeof id === 'string') compacting.turnId ??= id;
     }
-    if (compacting && (method === 'thread/compacted' || method === 'item/completed' && object(params.item).type === 'contextCompaction')) {
-      if (!nativeControl) compacting.resolve();
-      else if (method === 'item/completed' && params.turnId === compacting.turnId) compacting.installed = true;
-    }
     if (method === 'item/started' || method === 'item/completed') {
       const item = object(params.item);
+      if (compacting?.turnId && method === 'item/completed' && params.turnId === compacting.turnId
+        && item.type === 'contextCompaction') compacting.installed = true;
       if (isTurnOutputItem(item)) recordTurnOutput(params.turnId);
       observePublicItem(method, params, item);
       if (method === 'item/completed' && completion && typeof params.turnId === 'string' &&
@@ -796,12 +794,10 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       const turn = object(params.turn);
       if (typeof turn.id !== 'string' || typeof turn.status !== 'string' ||
           !['completed', 'interrupted', 'failed'].includes(turn.status)) return;
-      if (compacting && (!compacting.turnId || turn.id === compacting.turnId)) {
+      if (compacting && turn.id === compacting.turnId) {
         if (turn.status !== 'completed') compacting.reject(new Error('math_codex_compaction_' + turn.status));
-        else if (nativeControl) {
-          if (compacting.installed) compacting.resolve(turn);
-          else compacting.reject(new Error('math_codex_compaction_missing_summary'));
-        }
+        else if (compacting.installed) compacting.resolve(turn);
+        else compacting.reject(new Error('math_codex_compaction_missing_summary'));
       }
       if (turn.id === activeTurn && completion) completion.resolve(turn);
       else if (completion && !activeTurn) {
@@ -872,8 +868,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       ...(tools ? { dynamicTools: tools.definitions } : {}),
     } } : undefined;
     // Codex restores history internally. Echoing it can exceed the stdio frame limit.
-    // Keep the historical usage notification for direct providers with an active budget gate.
-    const metadataOnlyResume = nativeControl && (usesRequestReceipts || !options.requestGate);
+    // Retain historical usage replay for sessions that depend on native thread totals.
+    const metadataOnlyResume = usesRequestReceipts || (nativeControl && !options.requestGate);
     const threadSettings = {
       ...settings,
       ...(options.threadId ? { threadId: options.threadId, ...(metadataOnlyResume ? { excludeTurns: true } : {}) } : {}),
@@ -940,7 +936,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         options.signal?.throwIfAborted();
         if (closing || transportFailure) throw transportFailure ?? new Error('math_codex_transport_closed:closing');
         if (completion || activeTurn || compacting) throw new Error('math_codex_turn_already_running');
-        const done = new Promise<Json | undefined>((resolve, reject) => { compacting = { resolve, reject }; });
+        const done = new Promise<Json>((resolve, reject) => { compacting = { resolve, reject }; });
         turnSettled = false; turnStopping = false; turnCheckpointReached = false; requestTurn++;
         const cancel = scheduleMathTimeout(() => {
           compacting?.reject(new Error('math_codex_compaction_timeout'));
@@ -950,7 +946,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         options.signal?.addEventListener('abort', stop, { once: true });
         try {
           const [, turn] = await Promise.all([rpc.request('thread/compact/start', { threadId }), done]);
-          if (turn && nativeControl) await nativeControl.waitTurnSettled(String(turn.id), turn.status);
+          if (nativeControl) await nativeControl.waitTurnSettled(String(turn.id), turn.status);
         }
         catch (error) { await closeSession(); options.signal?.throwIfAborted(); throw error; }
         finally {
