@@ -100,8 +100,9 @@ export async function verifyNativeProofDelivery(input: { repository: string; exe
       if (!childRequest) assert.doesNotMatch(host.description, /\bD\d{3}\b/u,
         'The shared Lead tool must not preselect a domain expert for unrelated assignments.');
       assert.deepEqual([...host.parameters.properties.operation.enum].sort(), (childRequest
-        ? ['yield', 'history', 'inspect', 'inspect-research', 'submit']
-        : ['finish', 'history', 'inspect', 'inspect-research', 'adopt']).sort(), 'Native host operations must stay limited to proof delivery and inspection.');
+        ? ['yield', 'history', 'inspect', 'inspect-research', 'submit', 'submit_helpers', 'route_summary']
+        : ['finish', 'history', 'inspect', 'inspect-research', 'adopt', 'retire_route', 'route_summary']).sort(),
+      'Native host operations must stay limited to proof delivery, route management and inspection.');
       assert.equal(body.tool_choice, 'auto', 'The host must not impose a collaboration decision.');
       if (!childRequest && JSON.stringify(body.input).includes(finding)) result.nativeFindingReceived = true;
       let items: Json[];
