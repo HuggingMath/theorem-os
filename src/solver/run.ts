@@ -34,7 +34,7 @@ import { solverProofIsCurrent } from './modules/evidence';
 import { checkCodexProviderConnectivity } from '../runtime/codexConnectivity';
 import { aggregateUsage, buildTokenBudget } from './usageBudget';
 import { selectedDeepSeekProfile } from '../runtime/deepseek';
-import { selectedWestlakeProfile } from '../runtime/westlake';
+import { WESTLAKE_NATIVE_TEAM_UNSUPPORTED, selectedWestlakeProfile } from '../runtime/westlake';
 import { selectedSub2apiProfile } from '../runtime/sub2api';
 import { copyKnowledgeSnapshot } from './theoremKnowledgeStore';
 import { readAuthorizedKnowledgeCatalog } from './theoremKnowledgeAuthorization';
@@ -106,7 +106,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
     console.log(`Usage: theorem-os run --workspace DIR --task-file FILE --output FILE --build-manifest FILE [--receipt-file FILE] [--resume] [--method direct] [--scheduler plan|critical-path|continuation] [--module-plan FILE] [--coordination cooperative|independent] [--workers 1..${MAX_RESEARCH_WORKERS}] [--plan-approval] [--model MODEL --effort LEVEL] [--max-run-seconds N --max-turns N --max-turn-seconds N] [--max-total-tokens N] [--prepare-timeout-seconds N] [--proof-timeout-seconds N] [--evaluator-command CMD --evaluator-timeout-seconds N] [--proof-environment-cache-dir DIR] [--startup-only] [--check-statement]\n--module-plan loads the shared research-module plan JSON; use --scheduler plan.\nUse 0 for --prepare-timeout-seconds, --max-run-seconds, --max-turns, --max-turn-seconds, --proof-timeout-seconds or --evaluator-timeout-seconds to disable that limit. All time, turn and token limits default to 0 (unlimited). With an explicit proof-check timeout, an expired check saves a resumable checkpoint and the identical candidate gets more time on its next check.\n--max-total-tokens defaults to 0 (unlimited). A finite value stops new model turns after provider-reported consumption reaches it; in-flight turns finish and may exceed it. Resume retains cumulative usage and the saved allowance unless explicitly changed.`);
     console.log('--knowledge-base FILE attaches an immutable saved-theorem catalog. Resume requires the same catalog digest. Historical knowledge never grants proof acceptance.');
     console.log('--portfolio-exploration enables parallel route scouting before proof work. Use --portfolio-seconds N (default 1800) to bound it, or --skip-portfolio to bypass a pending stage.');
-    console.log('--agent-team N selects one Codex Lead and a team of 2..8 agents including Lead. New teams start with native collaboration tools and can retry a failed initial native startup with host tools. Omit the preset to retain ordinary solver dispatch.');
+    console.log('--agent-team N selects one Codex Lead and a team of 2..8 agents including Lead. New teams start with native collaboration tools and can retry a failed initial native startup with host tools. The direct Westlake Chat profile uses host tools. Omit the preset to retain ordinary solver dispatch.');
     console.log('New proof runs default to --effort high. Resume retains the saved effort when --effort is omitted; an explicit effort must match the frozen run.');
     console.log('Accepted proofs automatically generate audited explanations of every original target. --explanation-language zh|en selects the language (default zh; resume keeps the previous language). --no-explanations skips generation. The result.explanations field records progress and artifact/proof.md paths. Explanation failures preserve proof acceptance and exit code; --resume retries them without solving again. Explanation time and tokens are separate from solving limits.');
     console.log('--library-catalog FILE --library-catalog-sha256 DIGEST enables agent search/get/request against one pinned release. Installation requests end this frozen run for host-controlled continuation.');
@@ -167,8 +167,6 @@ export async function runSolver(args: string[], root: string, customModules?: So
     throw new Error('invalid --skill-preferred-profiles: requires --skill-delegation team');
   if (values['skill-expert-cards-file'] !== undefined && delegationMode !== 'team')
     throw new Error('invalid --skill-expert-cards-file: requires --skill-delegation team');
-  // A saved team without this discriminator retains its original transport.
-  const nativeTeamRun = delegationMode === 'team' && (!values.resume || savedConfiguration?.agentTeam?.transport === 'native-agent-control');
   if (skillMode) {
     if (!specified('workers')) values.workers = String(savedConfiguration?.workerCount ??
       (specified('coordination') && values.coordination === 'cooperative' ? 4 : 1));
@@ -301,6 +299,13 @@ export async function runSolver(args: string[], root: string, customModules?: So
       const profile = profileArgument ? fs.realpathSync(profileArgument) :
         process.env.CODEX_HOME || path.join(os.homedir(), '.config/deepscientist/math-sol-codex');
       const cli = harness.id === 'cli' ? readCliConfiguration(profile) : undefined;
+      const resumedState = values.resume ? readSolverRunState(stateFile) : undefined;
+      const codexWestlake = harness.id === 'codex' ? selectedWestlakeProfile(profile) : undefined;
+      // The legacy Chat bridge does not carry native collaboration namespaces or attributed messages.
+      const newWestlakeTeam = delegationMode === 'team' && !values.resume && Boolean(codexWestlake);
+      // Historical runs keep the transport frozen by their existing checkpoint.
+      const nativeTeamRun = delegationMode === 'team' && (resumedState
+        ? resumedState.agentTeam?.transport === 'native-agent-control' : !newWestlakeTeam);
       const sourceEnvironment = { ...process.env };
       // Explicit CLI-only inputs, including unusually named credentials, never enter host Lean.
       for (const key of cli?.inheritEnvironment ?? []) delete sourceEnvironment[key];
@@ -312,18 +317,17 @@ export async function runSolver(args: string[], root: string, customModules?: So
           cli?.executable ?? (harness.id === 'codex' ? process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex' : harness.id === 'claude-code' ? 'claude' : 'opencode'));
       // Historical Codex checkpoints retain their existing binding; explicit new flags opt into full launch identity.
       const pinHarness = harness.id !== 'codex' || specified('harness-executable') || specified('harness-profile') ||
-        Boolean(savedConfiguration?.agentHarness) || nativeTeamRun;
+        Boolean(savedConfiguration?.agentHarness) || nativeTeamRun || newWestlakeTeam;
       const agentHarness = pinHarness ? bindResearchHarness(harness.id, executable, profile, process.env, values.model) : undefined;
       const harnessEnvironment = harness.id === 'codex' ? undefined : researchHarnessEnvironment(harness.id, process.env,
         { profile, model: values.model! });
       const assertHarnessCurrent = agentHarness ? () => assertResearchHarnessCurrent(agentHarness, harnessEnvironment ?? {}, values.model) : undefined;
       const sub2apiProfile = modules.M1.open === directSolverModules.M1.open ? selectedSub2apiProfile(profile) : undefined;
-      const westlakeProfile = modules.M1.open === directSolverModules.M1.open && !sub2apiProfile ? selectedWestlakeProfile(profile) : undefined;
+      const westlakeProfile = modules.M1.open === directSolverModules.M1.open ? codexWestlake : undefined;
       const providerProfile = modules.M1.open === directSolverModules.M1.open
         ? selectedDeepSeekProfile(profile) ?? sub2apiProfile ?? westlakeProfile : undefined;
       const knowledge = values['knowledge-base'] ? readAuthorizedKnowledgeCatalog(values['knowledge-base'], workspace,
         values['receipt-file'] || path.join(workspace, 'active-problem.json')) : undefined;
-      const resumedState = values.resume ? readSolverRunState(stateFile) : undefined;
       const portfolio = configurePortfolioExploration(resumedState?.portfolioExploration, {
         enable: values['portfolio-exploration'], skip: values['skip-portfolio'],
         durationMs: portfolioSeconds === undefined ? undefined : portfolioSeconds * 1000,
@@ -451,6 +455,9 @@ export async function runSolver(args: string[], root: string, customModules?: So
             return result.status === 'evaluated_passed' ? 0 : 2;
           }
         }
+        if (codexWestlake && nativeTeamRun)
+          throw new Error(WESTLAKE_NATIVE_TEAM_UNSUPPORTED +
+            ': create a new team run with your saved artifacts. Direct Westlake uses host tools for new runs.');
       } else {
         if (fs.existsSync(stateFile) || fs.existsSync(output)) throw new Error('math_run_exists_use_resume');
         if (git(workspace, ['status', '--porcelain', '--untracked-files=no'])) throw new Error('math_workspace_has_uncommitted_sources');
@@ -461,7 +468,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
           agentSessionPlan: plannedSession,
           ...(researchSkill ? { researchMode: 'skill', researchSkill, researchSkillWorkflow: 'full' } : {}),
           ...(commonResearchSkill ? { commonResearchSkill } : {}), ...(researchDelegation ? { researchDelegation } : {}),
-          ...(nativeTeamRun ? { agentTeam: { schema: 'theorem-os.agent-team.v1' as const, transport: 'native-agent-control' as const,
+          ...(nativeTeamRun || newWestlakeTeam ? { agentTeam: { schema: 'theorem-os.agent-team.v1' as const,
+            transport: nativeTeamRun ? 'native-agent-control' as const : 'host-tools' as const,
             workers: [], events: [], deliveries: [], adoptions: [], operations: [] } } : {}),
           ...(continuation ? { continuationDigest: continuation.digest } : {}),
           worktree: path.join(directory, 'worktree'), phase: 'prepared', turns: 0, dispatchCounts: {}, workerCount,

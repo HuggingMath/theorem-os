@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { createServer, type ServerResponse } from 'node:http';
 import { buildSync } from 'esbuild';
+import { prepareWebProviderProfile, webSolverModules } from '../apps/web/worker';
+import type { WebAgentActionBody, WorkerInput } from '../apps/web/shared';
 import { bootstrapLeanTask } from '../src/math/leanTask';
 import { mathBuildFile, mathBuildSource, MATH_BUILD_INPUTS, MATH_RUNTIME_BUNDLES } from '../src/math/mathBuildManifest';
 import { canonicalMathJson, mathDigest, writeMathJsonDurable } from '../src/math/mathRuntimeIo';
@@ -47,16 +49,27 @@ function freezeRuntime(repository: string, runtime: string) {
 }
 
 /** Offline provider, real Codex process, production team runtime and real Lean acceptance. */
-export async function verifyNativeProofDelivery(input: { repository: string; executable: string; output: string; signal: AbortSignal }) {
+export async function verifyNativeProofDelivery(input: { repository: string; executable: string; output: string; signal: AbortSignal;
+  webProvider?: boolean }) {
   const temporaryRoot = process.env.TMPDIR ?? '/data/lzh/default-storage/tmp';
   fs.mkdirSync(temporaryRoot, { recursive: true }); fs.mkdirSync(input.output, { recursive: true });
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(temporaryRoot, 'native-proof-delivery-')));
   const requests: Json[] = [], events: Json[] = [], processes = new Map<string, HarnessProcessIdentity>();
-  const result: Json = { status: 'running', paidModelCalls: 0 };
+  const responseIds = new Map<string, string[]>(), concurrentWriters = new Set<string>();
+  const writerPaths = ['/root', '/root/proof_writer', '/root/proof_observer'];
+  const result: Json = { status: 'running', paidModelCalls: 0, providerProfile: input.webProvider ? 'web' : 'cli' };
+  const apiKey = 'synthetic-offline-key';
+  const webRequest: WorkerInput = { id: 'offline-native-proof-delivery',
+    provider: { id: 'sub2api', name: 'Fixture gateway', baseUrl: 'http://host.docker.internal:8080/v1' },
+    input: { apiKey, providerId: 'sub2api', model: 'deepseek-flash', effort: 'high',
+      task: 'Prove the frozen original using one checked child helper.', source: '',
+      workers: 1, coordination: 'independent', maxTurns: 0, maxRunSeconds: 0,
+      researchMode: 'skill', nativeTeamCapacity: writerPaths.length } };
   const controller = new AbortController();
   const signal = AbortSignal.any([input.signal, controller.signal]);
   const originalFetch = globalThis.fetch;
   const leadProcesses: HarnessProcessIdentity[] = [];
+  const webActions: WebAgentActionBody[] = [];
   let state: SolverRunState | undefined, sequence = 0;
   const quote = (value: string) => "'" + value.replace(/'/gu, "'\\''") + "'";
   const call = (id: string, name: string, args: Json, namespace?: string) => ({
@@ -87,13 +100,17 @@ export async function verifyNativeProofDelivery(input: { repository: string; exe
   const server = createServer(async (request, response) => {
     try {
       assert.equal(request.url, '/v1/responses');
+      assert.equal(request.headers.authorization, 'Bearer ' + apiKey);
       const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
       const body = JSON.parse(Buffer.concat(chunks).toString());
       admitResponsesRequest(body, 'deepseek-flash', 'high'); requests.push(body);
+      const expectedWriter = JSON.parse(body.client_metadata['x-codex-turn-metadata']).agent_name as string;
+      assert.ok(writerPaths.includes(expectedWriter), 'Native request must identify its writer.');
       const text = body.input.filter((item: Json) => ['message', 'agent_message'].includes(item.type))
         .flatMap((item: Json) => item.content ?? []).map((part: Json) => part.text ?? part.encrypted_content ?? '').join('\n');
       const receipts = new Set(body.input.filter((item: Json) => item.type === 'function_call_output').map((item: Json) => item.call_id));
       const childRequest = text.includes('Current native task instructions');
+      assert.equal(childRequest, expectedWriter !== '/root');
       const declarations = [...(body.tools ?? []), ...body.input.filter((item: Json) => item.type === 'additional_tools')
         .flatMap((item: Json) => item.tools)].flatMap((tool: Json) => tool.type === 'namespace' ? tool.tools : [tool]);
       const host = declarations.find((tool: Json) => tool.name === 'theoremos_team');
@@ -105,8 +122,21 @@ export async function verifyNativeProofDelivery(input: { repository: string; exe
       'Native host operations must stay limited to proof delivery, route management and inspection.');
       assert.equal(body.tool_choice, 'auto', 'The host must not impose a collaboration decision.');
       if (!childRequest && JSON.stringify(body.input).includes(finding)) result.nativeFindingReceived = true;
+      const overlap = expectedWriter === '/root' ? receipts.has('proof_spawn_observer') && !receipts.has('proof_draft')
+        : !responseIds.has(expectedWriter);
+      if (overlap) {
+        concurrentWriters.add(expectedWriter);
+        if (concurrentWriters.size === writerPaths.length) {
+          const records = [state!, ...state!.agentTeam!.workers];
+          assert.deepEqual(records.map(record => record.requestUsageAccounting?.pendingRequests), [1, 1, 1],
+            'The real Lead and both native members must be in flight through the relay at the same time.');
+          result.simultaneousWriters = [...concurrentWriters].sort();
+        }
+        if (!await until(() => concurrentWriters.size === writerPaths.length, response)) return;
+      }
       let items: Json[];
-      if (childRequest) {
+      if (expectedWriter === '/root/proof_observer') items = [message('Read only review complete.')];
+      else if (childRequest) {
         assert.deepEqual(state!.agentTeam!.workers[0]!.tasks[0]!.profileEvidence?.loaded, ['prover']);
         assert.match(text, /### Lean Prover/u, 'The corrected specialty must reach the actual writer request.');
         for (const contradictoryHint of ['All agents share the same directory',
@@ -141,6 +171,8 @@ export async function verifyNativeProofDelivery(input: { repository: string; exe
         items = [call('proof_spawn', 'spawn_agent', {
           task_name: 'proof_writer', fork_turns: 'none', message: 'Profiles: prover\nProve an independent NativeProof.helper (n : Nat) : n + 0 = n in your owned file. Lead consumes it in NativeProof.original. Report the first useful result and submit the helper; leave the original target unfinished.' }, 'collaboration')];
       }
+      else if (!receipts.has('proof_spawn_observer')) items = [call('proof_spawn_observer', 'spawn_agent', {
+        task_name: 'proof_observer', fork_turns: 'none', message: 'Inspect the frozen original independently. Return an advisory review without editing any files.' }, 'collaboration')];
       else if (!receipts.has('proof_draft')) items = [call('proof_draft', 'exec_command', { login: false,
         cmd: 'printf %s ' + quote(consumerDraft) + ' > generated/problem/Submission.lean && printf %s ' +
           quote('The first conjunct calls the agreed helper. Lead owns the remaining conjunct.\n') + ' > RESEARCH.md' })];
@@ -174,6 +206,8 @@ export async function verifyNativeProofDelivery(input: { repository: string; exe
       else items = [message('Original proof is saved.')];
       const base = { id: 'resp_proof_' + ++sequence, object: 'response', created_at: 1,
         model: 'deepseek-flash', status: 'in_progress', output: [] };
+      const ids = responseIds.get(expectedWriter) ?? [];
+      ids.push(base.id); responseIds.set(expectedWriter, ids);
       const emit = (value: Json) => response.write('event: ' + value.type + '\ndata: ' + JSON.stringify(value) + '\n\n');
       response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
       emit({ type: 'response.created', response: base });
@@ -201,12 +235,13 @@ export async function verifyNativeProofDelivery(input: { repository: string; exe
   });
   try {
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-    // Keep the production sub2api profile and request gate. Only its upstream
+    // Keep the production provider profile and request gate. Only its upstream
     // network destination is replaced; no request can reach a real provider.
     const endpoint = `http://127.0.0.1:${(server.address() as any).port}/v1/responses`;
     globalThis.fetch = (async (resource, options) => {
       const url = typeof resource === 'string' ? resource : resource instanceof URL ? resource.href : resource.url;
-      assert.equal(url, SUB2API_PROVIDER.baseUrl + '/responses', 'Only the fixed production relay endpoint may be requested.');
+      assert.equal(url, (input.webProvider ? webRequest.provider.baseUrl : SUB2API_PROVIDER.baseUrl) + '/responses',
+        'Only the fixed production relay endpoint may be requested.');
       result.relayRequests = (result.relayRequests ?? 0) + 1;
       return originalFetch(endpoint, options);
     }) as typeof fetch;
@@ -220,21 +255,25 @@ export async function verifyNativeProofDelivery(input: { repository: string; exe
     state = { schema: 'deepscientist.math.solver.v1', runId: 'offline-native-proof-delivery', phase: 'prepared', problem,
       worktree, model: 'deepseek-flash', effort: 'high', turns: 0, taskDigest: mathDigest('proof-fixture'), buildDigest: 'fixture',
       environmentDigest: mathDigest('native-proof-delivery'), evaluatorDigest: 'fixture', researchMode: 'skill',
-      researchSkillWorkflow: 'full', researchSkill: identity, researchDelegation: { mode: 'team', maxAgents: 2 },
+      researchSkillWorkflow: 'full', researchSkill: identity, researchDelegation: { mode: 'team', maxAgents: writerPaths.length },
       agentTeam: { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control', workers: [],
         events: [], deliveries: [], adoptions: [], operations: [] } };
-    const profile = path.join(directory, 'profile'); prepareSub2apiProfile(profile, state.model, state.effort);
+    const profile = path.join(directory, 'profile');
+    if (input.webProvider) prepareWebProviderProfile(profile, webRequest);
+    else prepareSub2apiProfile(profile, state.model, state.effort);
     const toolchain = path.join(os.homedir(), '.elan/toolchains/leanprover--lean4---v4.33.0');
     assert.ok(fs.existsSync(path.join(toolchain, 'bin/lean')), 'Native delivery acceptance requires Lean 4.33.0.');
     const environment = { PATH: `${toolchain}/bin:${path.dirname(process.execPath)}:/usr/bin:/bin`,
       ELAN_HOME: path.join(os.homedir(), '.elan'), LEAN_PATH: '', LEAN_SYSROOT: '', NO_PROXY: '127.0.0.1,localhost',
-      SUB2API_WESTLAKE_API_KEY: 'synthetic-offline-key', DEEPSCIENTIST_MATH_SANDBOX_BACKEND: 'bwrap',
+      ...(!input.webProvider && { SUB2API_WESTLAKE_API_KEY: apiKey }), DEEPSCIENTIST_MATH_SANDBOX_BACKEND: 'bwrap',
       DEEPSCIENTIST_MATH_ENV_FILE: path.join(directory, 'missing.env') };
+    const modules = input.webProvider ? webSolverModules(webRequest, { sink: action => webActions.push(action),
+      hidden: [directory], solverRunId: () => state?.runId }) : directSolverModules;
     const winner = await runResearchWorkers({ state, root: runtime, buildFile,
       taskText: 'Prove NativeProof.original by consuming one independently checked child declaration.',
-      executable: input.executable, profile, modules: { ...directSolverModules, M1: { ...directSolverModules.M1,
+      executable: input.executable, profile, modules: { ...modules, M1: { ...modules.M1,
         open: async options => {
-          const session = await directSolverModules.M1.open(options);
+          const session = await modules.M1.open(options);
           if (options.workspace === worktree && session.processIdentity) {
             const previous = leadProcesses.at(-1);
             if (previous) assert.equal(confirmHarnessProcessStopped(previous).status, 'stopped', 'Previous Lead writer must stop before reopening.');
@@ -251,15 +290,33 @@ export async function verifyNativeProofDelivery(input: { repository: string; exe
         writeMathJsonDurable(path.join(input.output, 'state.json'), state);
       }, emit: (event, details) => { events.push({ event, ...details }); } });
     assert.equal(result.providerFailure, undefined);
+    if (input.webProvider) {
+      const toolActions = webActions.filter(action => action.kind === 'tool' && action.tool?.startsWith('collaboration.'));
+      assert.ok(toolActions.some(action => action.tool === 'collaboration.wait_agent' && action.status === 'running'));
+      assert.ok(toolActions.some(action => action.tool === 'collaboration.agent_started' &&
+        action.arguments === '/root/proof_writer'));
+      result.webCollaborationActions = toolActions.length;
+    }
     assert.ok(result.childContextsChecked > 0);
     assert.equal(result.relayRequests, requests.length, 'Every upstream fixture request must cross the production relay.');
-    const accounting = [state, ...state.agentTeam!.workers].map(record => record.requestUsageAccounting!);
-    for (const record of accounting) {
-      assert.ok(record, 'Each native writer must report production request accounting.');
-      assert.equal(record.incomplete, false); assert.equal(record.pendingRequests, 0);
-      assert.equal(record.reportedRequests, record.startedRequests);
-    }
-    assert.equal(accounting.reduce((total, record) => total + record.reportedRequests, 0), requests.length);
+    const writerRecords = [state, ...state.agentTeam!.workers];
+    assert.deepEqual(result.simultaneousWriters, [...writerPaths].sort());
+    result.writerAccounting = writerRecords.map(record => {
+      const accounting = record.requestUsageAccounting!;
+      assert.ok(accounting, 'Each native writer must report production request accounting.');
+      assert.equal(accounting.incomplete, false); assert.equal(accounting.pendingRequests, 0);
+      assert.equal(accounting.reportedRequests, accounting.startedRequests);
+      const writerPath = 'native' in record ? record.native!.agentPath : '/root';
+      const taskId = 'tasks' in record ? record.tasks[0]!.id : undefined;
+      const threadId = 'native' in record ? record.native!.threadId : state!.agentTeam!.nativeControl!.rootThreadId;
+      const receipts = accounting.receipts!;
+      assert.deepEqual(receipts.map(receipt => receipt.providerRequestId).sort(), responseIds.get(writerPath)!.sort());
+      assert.ok(receipts.every(receipt => receipt.threadId === threadId && receipt.taskId === taskId && receipt.status === 'reported'));
+      return { writer: writerPath, threadId, taskId, reportedRequests: accounting.reportedRequests };
+    });
+    assert.equal(result.writerAccounting.reduce((total: number, record: Json) => total + record.reportedRequests, 0), requests.length);
+    assert.equal(state.tokenBudget?.status, 'unlimited');
+    assert.equal(state.tokenBudget?.reportedTotalTokens, requests.length * 12);
     assert.equal(winner?.check.passed, true, 'The original must pass independent production M2 checking.');
     assert.equal(winner.check.verification.status, 'kernel_verified');
     assert.deepEqual(winner.check.verification.results.map(item => item.theoremName), ['NativeProof.original']);
@@ -300,7 +357,7 @@ export async function verifyNativeProofDelivery(input: { repository: string; exe
     result.leadWriterProcesses = leadProcesses;
     result.originalCheck = { passed: winner.check.passed, status: winner.check.verification.status,
       commit: winner.check.commit, declarations: winner.check.verification.results.map(item => item.theoremName) };
-    result.checks = ['production-relay', 'minimal-native-host-operations', 'native-role-context', 'pinned-skill-read',
+    result.checks = ['production-relay', 'simultaneous-writer-request-accounting', 'minimal-native-host-operations', 'native-role-context', 'pinned-skill-read',
       'native-spawn', 'native-source-write', 'native-finding-message', 'native-wait', 'submit', 'writer-stop', 'adopted-host-mail',
       'independent-helper-check', 'inspect', 'adopt', 'native-source-consumption', 'independent-original-check',
       'final-s3-check', 'final-uses-one-of-two-adopted-declarations'];

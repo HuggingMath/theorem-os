@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { mathDigest, canonicalMathJson } from '../math/mathRuntimeIo';
+import { createHash } from 'node:crypto';
+import { mathDigest, canonicalMathJson, mathFileIdentity } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath } from '../math/paths';
 import type { MathAgentHarnessId } from './agentSession';
 import { createCodexMathSession } from './codexSession';
@@ -20,6 +21,30 @@ export type ResearchHarnessIdentity = {
 };
 
 const secretKey = /API[_-]?KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|PRIVATE[_-]?KEY/iu;
+
+const executableDigests = new Map<string, { stamp: string; digest: string }>();
+
+function executableDigest(file: string): string {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const start = fs.fstatSync(fd, { bigint: true });
+    if (!start.isFile()) throw new Error('math_harness_identity_changed');
+    // Match both the inode and change time so replacement and same-size rewrites invalidate the digest.
+    const stamp = mathFileIdentity(start);
+    const cached = executableDigests.get(file);
+    if (cached?.stamp === stamp) return cached.digest;
+    const hash = createHash('sha256');
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    let bytes: number;
+    while ((bytes = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) hash.update(buffer.subarray(0, bytes));
+    if (mathFileIdentity(fs.fstatSync(fd, { bigint: true })) !== stamp ||
+        mathFileIdentity(fs.statSync(file, { bigint: true })) !== stamp) throw new Error('math_harness_identity_changed');
+    const digest = hash.digest('hex');
+    executableDigests.set(file, { stamp, digest });
+    return digest;
+  } finally { fs.closeSync(fd); }
+}
+
 /** Native OpenCode expands these references after reading OPENCODE_CONFIG_CONTENT. */
 function openCodeEnvironmentReferences(profile: string, model?: string): string[] {
   const configured = JSON.parse(fs.readFileSync(path.join(profile, 'opencode.json'), 'utf8')) as { provider?: Record<string, unknown> };
@@ -65,7 +90,7 @@ export function bindResearchHarness(id: ResearchHarnessIdentity['id'], command: 
   });
   const endpoints = cli ? cli.inheritEnvironment.filter(key => key !== cli.sealedRole?.provider.apiKeyEnvironment && !secretKey.test(key)) : id === 'codex' ? [] : id === 'claude-code' ? ['ANTHROPIC_BASE_URL'] :
     [...new Set(['OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL', ...openCodeEnvironmentReferences(profile, model).filter(key => !secretKey.test(key))])];
-  return { id, executable: binary, executableDigest: mathDigest(fs.readFileSync(binary)), profile,
+  return { id, executable: binary, executableDigest: executableDigest(binary), profile,
     configurationDigest: mathDigest(canonicalMathJson({ configuration,
       endpoints: Object.fromEntries(endpoints.map(key => [key, environment[key] ?? null])),
       ...(cli?.sealedRole?.runtime ? { sealedRuntime: sealedRuntimeIdentity(binary, environment, cli.sealedRole.runtime) } : {}) })) };

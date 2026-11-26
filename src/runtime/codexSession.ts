@@ -8,7 +8,7 @@ import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { mathProofEnvironmentWorkerEnvironment } from '../math/mathProofEnvironment';
 import { assertMathCanonicalPath, isMathPathWithin } from '../math/paths';
 import { startChatCompletionsBridge } from './chatCompletionsBridge';
-import { WESTLAKE_PROVIDER, validateWestlakeModel } from './westlake';
+import { WESTLAKE_NATIVE_TEAM_UNSUPPORTED, WESTLAKE_PROVIDER, validateWestlakeModel } from './westlake';
 import { SUB2API_PROVIDER } from './sub2api';
 import type { ModelRequestGate } from './modelRequest';
 import { prepareFormalizationSandbox } from './formalizationSandbox';
@@ -304,12 +304,16 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   const frozenConfig = fs.existsSync(configFile) ? fs.readFileSync(configFile, 'utf8') : undefined;
   const profileConfig = frozenConfig === undefined ? {} : parseToml(frozenConfig);
   const providerId = typeof profileConfig.model_provider === 'string' ? profileConfig.model_provider : undefined;
+  if (providerId === WESTLAKE_PROVIDER.id && options.nativeAgentControl)
+    throw new Error(WESTLAKE_NATIVE_TEAM_UNSUPPORTED);
   const providers = profileConfig.model_providers;
   const selectedProvider = providerId && providers && typeof providers === 'object' && !Array.isArray(providers)
     ? (providers as Record<string, unknown>)[providerId] : undefined;
   const provider = selectedProvider && typeof selectedProvider === 'object' && !Array.isArray(selectedProvider)
     ? selectedProvider as Json : undefined;
-  const useResponsesRelay = providerId === SUB2API_PROVIDER.id && !options.readIsolation && Boolean(options.requestGate);
+  const webNativeTeam = providerId === 'web_provider' && Boolean(options.nativeAgentControl);
+  const useResponsesRelay = (providerId === SUB2API_PROVIDER.id || webNativeTeam) &&
+    !options.readIsolation && Boolean(options.requestGate);
   if (options.delegation && (!skills.length || !useResponsesRelay))
     throw new Error('math_native_delegation_requires_skill_and_metered_relay');
   if (options.delegation) validateNativeDelegation(options.delegation);
@@ -438,7 +442,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       model: options.model, effort: options.effort, env: options.environment, signal: options.signal,
       requestGate, onUsageIncomplete: options.onUsageIncomplete });
     environment = Object.fromEntries(Object.entries(environment ?? process.env)
-      .filter(([name]) => !name.startsWith(SUB2API_PROVIDER.apiKeyEnvironment)));
+      .filter(([name]) => name !== envKey && !name.startsWith(SUB2API_PROVIDER.apiKeyEnvironment)));
     environment[RELAY_CAPABILITY_ENV] = responsesRelay.apiKey;
   }
   if (providerId === WESTLAKE_PROVIDER.id) {
@@ -449,6 +453,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       .filter(([name]) => !name.startsWith('WESTLAKEHPC_API_KEY')));
     environment[WESTLAKE_PROVIDER.apiKeyEnvironment] = bridge.apiKey;
   }
+  const usesRequestReceipts = Boolean((bridge || responsesRelay || isolated) && options.requestGate);
   const providerSettings: Json = isolated ? {
     model_provider: isolated.providerId,
     [`model_providers.${isolated.providerId}.base_url`]: isolated.providerBaseUrl,
@@ -525,7 +530,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   let turnHasOutput = false;
   const earlyOutputTurns = new Set<string>();
   let completion: { resolve: (turn: Json) => void; reject: (error: Error) => void } | undefined;
-  let compacting: { resolve: () => void; reject: (error: Error) => void } | undefined;
+  let compacting: { resolve: (turn?: Json) => void; reject: (error: Error) => void;
+    turnId?: string; installed?: boolean } | undefined;
   const earlyCompletions = new Map<string, Json>();
   const completedMessages = new Map<string, string>();
   let lastCompletedResponse: Readonly<{ turnId: string; text: string }> | undefined;
@@ -730,8 +736,14 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     }
     investigations?.observe(method, params);
     if (threadId !== undefined && params.threadId !== undefined && params.threadId !== threadId) return;
-    if (method === 'thread/compacted' || method === 'item/completed' && object(params.item).type === 'contextCompaction')
-      compacting?.resolve();
+    if (compacting && method === 'turn/started') {
+      const { id } = object(params.turn);
+      if (typeof id === 'string') compacting.turnId ??= id;
+    }
+    if (compacting && (method === 'thread/compacted' || method === 'item/completed' && object(params.item).type === 'contextCompaction')) {
+      if (!nativeControl) compacting.resolve();
+      else if (method === 'item/completed' && params.turnId === compacting.turnId) compacting.installed = true;
+    }
     if (method === 'item/started' || method === 'item/completed') {
       const item = object(params.item);
       if (isTurnOutputItem(item)) recordTurnOutput(params.turnId);
@@ -782,10 +794,15 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     }
     if (method === 'turn/completed') {
       const turn = object(params.turn);
-      if (compacting && (turn.status === 'failed' || turn.status === 'interrupted'))
-        compacting.reject(new Error('math_codex_compaction_' + turn.status));
       if (typeof turn.id !== 'string' || typeof turn.status !== 'string' ||
           !['completed', 'interrupted', 'failed'].includes(turn.status)) return;
+      if (compacting && (!compacting.turnId || turn.id === compacting.turnId)) {
+        if (turn.status !== 'completed') compacting.reject(new Error('math_codex_compaction_' + turn.status));
+        else if (nativeControl) {
+          if (compacting.installed) compacting.resolve(turn);
+          else compacting.reject(new Error('math_codex_compaction_missing_summary'));
+        }
+      }
       if (turn.id === activeTurn && completion) completion.resolve(turn);
       else if (completion && !activeTurn) {
         if (earlyCompletions.size >= 32) earlyCompletions.delete(earlyCompletions.keys().next().value!);
@@ -826,7 +843,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         'features.shell_snapshot': false,
         'shell_environment_policy.experimental_use_profile': false,
         ...(bridge || responsesRelay || isolated ? { ...(!nativeControl ? { 'features.multi_agent': false, 'features.multi_agent_v2': false } : {}),
-          'features.goals': false, 'features.view_image': false } : {}),
+          'features.goals': false, 'features.view_image': false,
+          ...(responsesRelay ? { web_search: 'disabled' } : {}) } : {}),
         // Native role files cannot narrow inherited writer permissions; profiles cannot enable children implicitly.
         ...(!nativeControl && (options.skills?.length || options.tools) ? { 'features.multi_agent': false, 'features.multi_agent_v2': false,
           'agents.enabled': false, 'features.goals': false } : {}),
@@ -853,8 +871,12 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       ...object(capturedBootstrap.hostOverrides ?? {}), developerInstructions: settings.developerInstructions,
       ...(tools ? { dynamicTools: tools.definitions } : {}),
     } } : undefined;
+    // Codex restores history internally. Echoing it can exceed the stdio frame limit.
+    // Keep the historical usage notification for direct providers with an active budget gate.
+    const metadataOnlyResume = nativeControl && (usesRequestReceipts || !options.requestGate);
     const threadSettings = {
-      ...settings, ...(options.threadId ? { threadId: options.threadId } : {}),
+      ...settings,
+      ...(options.threadId ? { threadId: options.threadId, ...(metadataOnlyResume ? { excludeTurns: true } : {}) } : {}),
       ...(!options.threadId && (options.delegation || tools?.definitions.length) ? { dynamicTools: [
         ...(options.delegation ? [nativeInvestigationTool(options.delegation.maxAgents)] : []), ...(tools?.definitions ?? []),
       ] } : {}),
@@ -867,8 +889,6 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     if (bootstrap && (threadId !== bootstrap.threadId || object(result.agentControl).sessionId !== bootstrap.sessionId ||
         object(object(result.agentControl).agent).threadId !== threadId))
       throw new Error('math_native_agent_control_child_binding_mismatch');
-    if (nativeControl) await nativeControl.bind(result.agentControl ??
-      await rpc.request('theoremos/agentControl/snapshot', { threadId }));
     if (options.threadId && threadId !== options.threadId) throw new Error('math_codex_session_binding_mismatch');
     if (result.model !== options.model || result.reasoningEffort !== options.effort || result.approvalPolicy !== 'never')
       throw new Error('math_codex_session_binding_mismatch');
@@ -900,6 +920,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       assertMathAgentSkillsCurrent(skills);
     }
     options.signal?.throwIfAborted();
+    if (nativeControl) await nativeControl.bind(result.agentControl ??
+      await rpc.request('theoremos/agentControl/snapshot', { threadId }));
     let skillsDispatched = false;
     return {
       threadId,
@@ -907,7 +929,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       nativeConfiguration,
       ...(isolated ? { isolationReceipt: isolated.receipt } : processLaunch ? { isolationReceipt: processLaunch.isolationReceipt } : {}),
       ...(processIdentity ? { processIdentity } : {}),
-      usageSource: (bridge || responsesRelay || isolated) && options.requestGate ? 'upstream-requests' as const : 'native-thread-totals' as const,
+      usageSource: usesRequestReceipts ? 'upstream-requests' as const : 'native-thread-totals' as const,
       advisoryNotifications: 'native-history',
       ...(nativeControl ? { nativeAgentControl: nativeControl.connection } : {}),
       get lastError() { return lastError; },
@@ -918,15 +940,18 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         options.signal?.throwIfAborted();
         if (closing || transportFailure) throw transportFailure ?? new Error('math_codex_transport_closed:closing');
         if (completion || activeTurn || compacting) throw new Error('math_codex_turn_already_running');
-        const done = new Promise<void>((resolve, reject) => { compacting = { resolve, reject }; });
-        turnSettled = false; turnStopping = false; requestTurn++;
+        const done = new Promise<Json | undefined>((resolve, reject) => { compacting = { resolve, reject }; });
+        turnSettled = false; turnStopping = false; turnCheckpointReached = false; requestTurn++;
         const cancel = scheduleMathTimeout(() => {
           compacting?.reject(new Error('math_codex_compaction_timeout'));
           void closeSession();
         }, options.turnTimeoutMs ?? 120_000);
         const stop = () => compacting?.reject(new Error('math_codex_compaction_closed'));
         options.signal?.addEventListener('abort', stop, { once: true });
-        try { await Promise.all([rpc.request('thread/compact/start', { threadId }), done]); }
+        try {
+          const [, turn] = await Promise.all([rpc.request('thread/compact/start', { threadId }), done]);
+          if (turn && nativeControl) await nativeControl.waitTurnSettled(String(turn.id), turn.status);
+        }
         catch (error) { await closeSession(); options.signal?.throwIfAborted(); throw error; }
         finally {
           cancel?.(); options.signal?.removeEventListener('abort', stop);
@@ -1207,10 +1232,11 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       },
     };
   } catch (error) {
-    await closeSession();
-    options.signal?.throwIfAborted();
+    const closeResult = await closeSession().then(() => ({ ok: true } as const), cause => ({ ok: false, cause } as const));
     if (nativeControl && processLaunch && await rpc.confirmStopped().then(receipt => receipt.status !== 'stopped'))
-      throw new Error('math_codex_startup_shutdown_unconfirmed');
+      throw new Error('math_codex_startup_shutdown_unconfirmed', { cause: error });
+    if (closeResult.ok === false) throw closeResult.cause;
+    options.signal?.throwIfAborted();
     throw error;
   }
 }

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { isIP, type AddressInfo } from 'node:net';
 import { parse as parseToml } from 'smol-toml';
 import { z } from 'zod';
 import { createParser } from 'eventsource-parser';
@@ -22,25 +22,29 @@ const MAX_CREDENTIAL_BYTES = 8192;
 const MAX_ACTIVE_REQUESTS = 8;
 const MAX_USAGE_EVENT_BYTES = 2 * 1024 * 1024;
 
-/** Native metadata/header spellings vary by Codex version. Conflicting or invalid
- * identities remain unattributed; provider usage is still accounted for once. */
+/** Older Codex versions use a session ID as the thread ID. Current teams share
+ * a root session while each member has a distinct thread. */
 function nativeRequestThread(body: Record<string, unknown>, request: IncomingMessage): string | undefined {
   const metadata = body.client_metadata && typeof body.client_metadata === 'object' && !Array.isArray(body.client_metadata)
     ? body.client_metadata as Record<string, unknown> : {};
-  const values: unknown[] = [metadata.session_id, request.headers.session_id, request.headers['session-id'],
-    request.headers['thread-id'], request.headers['x-codex-thread-id']].filter(value => value !== undefined && value !== null);
+  const sessions: unknown[] = [metadata.session_id, request.headers.session_id, request.headers['session-id']];
+  const threads: unknown[] = [metadata.thread_id, request.headers['thread-id'], request.headers['x-codex-thread-id']];
   for (const raw of [metadata['x-codex-turn-metadata'], request.headers['x-codex-turn-metadata']]) {
     if (raw === undefined) continue;
     if (typeof raw !== 'string' || raw.length > 16_384) return;
     try {
       const parsed: unknown = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'thread_id' in parsed)
-        values.push(parsed.thread_id);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        if ('session_id' in parsed) sessions.push(parsed.session_id);
+        if ('thread_id' in parsed) threads.push(parsed.thread_id);
+      }
     } catch { return; }
   }
-  if (!values.length || values.some(value => typeof value !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/u.test(value)) ||
-      new Set(values).size !== 1) return;
-  return values[0] as string;
+  const unique = (values: unknown[]) => new Set(values.filter(value => value !== undefined && value !== null));
+  const sessionIds = unique(sessions), threadIds = unique(threads);
+  if (sessionIds.size > 1 || threadIds.size > 1 || [...sessionIds, ...threadIds].some(value =>
+    typeof value !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/u.test(value))) return;
+  return [...threadIds, ...sessionIds][0] as string | undefined;
 }
 
 /** Observe the existing Responses wire stream without changing its bytes or accepting model claims. */
@@ -161,7 +165,7 @@ const selectedTool = z.object({ type: z.enum(['function', 'custom']), name: tool
 const statelessResponsesRequest = z.object({
   model: z.string(), input: z.union([z.string(), z.array(inlineInputItem)]),
   instructions: z.string().nullable().optional(), stream: z.boolean().optional(), store: z.literal(false),
-  reasoning: z.object({ effort: z.enum(['low', 'high', 'max']),
+  reasoning: z.object({ effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']),
     summary: z.enum(['auto', 'concise', 'detailed', 'none']).nullable().optional(),
     context: z.literal('all_turns').optional() }).strict(),
   tools: z.array(z.union([clientTool, inlineTool])).optional(),
@@ -238,7 +242,7 @@ export type NativeRelayProtocol = Readonly<{
   observe: (streaming: boolean) => ReturnType<typeof responseUsageObserver>;
 }>;
 
-function readProfile(directory: string, model: string): Profile {
+function readProfile(directory: string, model: string, loopback: boolean): Profile {
   try {
     if (!path.isAbsolute(directory)) throw new Error();
     const file = path.join(directory, 'config.toml'), stat = fs.statSync(file);
@@ -253,7 +257,11 @@ function readProfile(directory: string, model: string): Profile {
         provider.env_http_headers !== undefined || provider.query_params !== undefined) throw new Error();
     if (providerId === 'web_provider') {
       const url = new URL(provider.base_url);
-      if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash ||
+      const [first, second] = url.hostname.split('.').map(Number);
+      const privateIPv4 = isIP(url.hostname) === 4 &&
+        (first === 10 || first === 172 && second >= 16 && second <= 31 || first === 192 && second === 168);
+      const internalHttp = loopback && url.protocol === 'http:' && (url.hostname === 'host.docker.internal' || privateIPv4);
+      if (url.protocol !== 'https:' && !internalHttp || url.username || url.password || url.search || url.hash ||
           provider.env_key !== 'THEOREMOS_PROVIDER_API_KEY' || provider.auth !== undefined ||
           !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u.test(model)) throw new Error();
       return { providerId, endpoint: url.href.replace(/\/$/u, '') + '/responses', envKey: provider.env_key };
@@ -340,9 +348,12 @@ export async function startFormalizationRelay(input: {
   requestGate?: ModelRequestGate; onUsageIncomplete?: () => void;
   native?: NativeRelayProtocol;
 }): Promise<FormalizationRelay> {
+  const loopback = input.transport === 'loopback-http';
   const profile: Profile = input.native ? { providerId: 'web_provider', endpoint: input.native.endpoint, envKey: input.native.envKey }
-    : readProfile(input.profile, input.model);
-  if (!(input.native ? ['none', 'low', 'medium', 'high', 'xhigh', 'max'] : ['low', 'high', 'max']).includes(input.effort))
+    : readProfile(input.profile, input.model, loopback);
+  const efforts = input.native ? ['none', 'low', 'medium', 'high', 'xhigh', 'max'] :
+    loopback && profile.providerId === 'web_provider' ? ['low', 'medium', 'high', 'xhigh', 'max'] : ['low', 'high', 'max'];
+  if (!efforts.includes(input.effort))
     throw new Error('formalization_relay_effort_invalid');
   if (input.timeoutMs !== undefined && (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs <= 0))
     throw new Error('formalization_relay_timeout_invalid');
@@ -350,7 +361,6 @@ export async function startFormalizationRelay(input: {
   if (idleMs !== undefined && (input.native || !Number.isSafeInteger(idleMs) || idleMs <= 0 || idleMs > 2_147_483_647))
     throw new Error('formalization_relay_idle_timeout_invalid');
   input.signal?.throwIfAborted();
-  const loopback = input.transport === 'loopback-http';
   const socketPath = !loopback && input.socketPath ? path.resolve(input.socketPath) : undefined;
   if (!loopback) {
     if (!socketPath) throw new Error('formalization_relay_socket_invalid');

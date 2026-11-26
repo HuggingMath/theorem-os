@@ -28,6 +28,8 @@ import { verifyNativeProofDelivery } from './test-codex-backend-delivery';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const flag = (name: string) => { const index = process.argv.indexOf(name); return index < 0 ? undefined : process.argv[index + 1]; };
 const capacityTest = process.argv.includes('--team-capacity');
+const largeForkTest = process.argv.includes('--large-fork');
+assert.ok(!capacityTest || !largeForkTest, 'Select only one fixture mode.');
 const maxAgents = capacityTest ? 8 : 3;
 const requestedExecutable = flag('--executable') ?? process.env.THEOREMOS_TEST_CODEX_EXECUTABLE ?? path.join(root, 'out/codex-backend/codex');
 if (!fs.existsSync(requestedExecutable)) throw new Error('Native backend acceptance requires a real Codex binary. ' +
@@ -60,6 +62,28 @@ const call = (id: string, name: string, args: unknown, namespace?: string) => ({
   arguments: JSON.stringify(args), status: 'completed',
 });
 const nativeCall = (id: string, name: string, args: unknown) => call(id, name, args, 'collaboration');
+
+async function largeForkResponse(body: Record<string, any>, text: string, mode: string) {
+  if (mode.includes('You are a member')) {
+    assert.match(text, /LARGE_FORK_FRESH_WORKER/u);
+    assert.doesNotMatch(text, /LARGE_FORK_HISTORY/u);
+    return [message('Fresh worker completed.')];
+  }
+  if (!text.includes('LARGE_FORK_ACTION')) return [message('Stored a disposable history segment.')];
+  const receipts = new Map<string, string>(body.input.filter((item: any) => item.type === 'function_call_output')
+    .map((item: any) => [item.call_id, item.output]));
+  if (!receipts.has('oversized_fork')) return [nativeCall('oversized_fork', 'spawn_agent', {
+    task_name: 'large_fork', fork_turns: 'all', message: 'Try an oversized history transfer.' })];
+  const rejection = receipts.get('oversized_fork')!;
+  assert.match(rejection, /exceeds the 8 MiB transport limit.*fork_turns=none/u);
+  if (!receipts.has('fresh_after_oversized_fork')) return [nativeCall('fresh_after_oversized_fork', 'spawn_agent', {
+    task_name: 'large_fork', fork_turns: 'none', message: 'LARGE_FORK_FRESH_WORKER Continue this disposable fixture.' })];
+  assert.equal(JSON.parse(receipts.get('fresh_after_oversized_fork')!).task_name, '/root/large_fork');
+  await until(() => !team!.hasActiveWorkers);
+  observations.largeFork = { rejection, leadThreadId: lead!.threadId,
+    workerStatus: state.agentTeam!.workers[0]?.tasks.at(-1)?.status };
+  return [message('Lead finished after recovering from the oversized fork.')];
+}
 
 const pendingMembers = new Set<string>();
 let releaseMembers = false;
@@ -138,7 +162,7 @@ const server = createServer(async (request, response) => {
     // Exercise the production relay's contract against actual native requests,
     // including child message history. A permissive fixture server hid this boundary.
     admitResponsesRequest(body, 'deepseek-flash', 'high');
-    requests.push(body);
+    requests.push(largeForkTest ? { bytes: chunks.reduce((total, chunk) => total + chunk.length, 0) } : body);
     const text = body.input.filter((item: any) => ['message', 'agent_message'].includes(item.type))
       .flatMap((item: any) => item.content ?? []).map((part: any) => part.text ?? part.encrypted_content ?? '').join('\n');
     let items: any[];
@@ -150,6 +174,7 @@ const server = createServer(async (request, response) => {
       'The current native mode must honor the explicitly requested team.');
     assert.equal(body.tool_choice, 'auto', 'Native collaboration must remain a model choice.');
     if (capacityTest) return sendResponse(response, await capacityResponse(body, text, mode));
+    if (largeForkTest) return sendResponse(response, await largeForkResponse(body, text, mode));
     if (member) {
       assert.match(mode, /You are a member of an explicitly requested flat team\./u);
       assert.match(mode, /Do not spawn sub-agents or dispatch, redirect or interrupt other members\./u);
@@ -210,7 +235,17 @@ const server = createServer(async (request, response) => {
     } else {
       // Resume and full-history forks retain prior tool calls. Advance the scripted
       // workflow only after the original tool's actual receipt is in history.
-      const receipts = new Set(body.input.filter((item: any) => item.type === 'function_call_output').map((item: any) => item.call_id));
+      const receipts = new Map<string, string>(body.input.filter((item: any) => item.type === 'function_call_output')
+        .map((item: any) => [item.call_id, item.output]));
+      if (!receipts.has('spawn_wrong_effort')) return sendResponse(response, [nativeCall('spawn_wrong_effort', 'spawn_agent', {
+        task_name: 'expert', message: 'This assignment should be rejected before a writer opens.',
+        fork_turns: 'none', reasoning_effort: 'low',
+      })]);
+      assert.match(receipts.get('spawn_wrong_effort')!, /math_team_native_run_config_frozen/u);
+      if (!receipts.has('spawn_fresh')) {
+        assert.equal(state.agentTeam!.workers.length, 0, 'Changing the frozen effort must not reserve a worker.');
+        assert.equal(processes.size, 1, 'Changing the frozen effort must not open a writer.');
+      }
       const stages = ['spawn_fresh', 'queue_idle', 'followup', 'spawn_fork', 'native_list', 'interrupt_idle',
         'followup_interrupt', 'native_wait', 'followup_busy', 'followup_effective', 'interrupt_active'];
       let step = 0; while (receipts.has(stages[step])) step++;
@@ -293,6 +328,18 @@ try {
   config.model_provider = 'offline_native_backend';
   config.model_providers = { offline_native_backend: { ...config.model_providers.sub2api,
     base_url: `http://127.0.0.1:${(server.address() as any).port}/v1`, env_key: 'OFFLINE_NATIVE_BACKEND_KEY' } };
+  if (largeForkTest) {
+    // Each user-message notification stays under the stdio frame limit. The
+    // scripted provider accepts their combined history without auto-compacting.
+    const window = 8_000_000;
+    config.model_context_window = window;
+    config.model_auto_compact_token_limit = window;
+    const catalogFile = path.resolve(profile, config.model_catalog_json);
+    const catalog = JSON.parse(fs.readFileSync(catalogFile, 'utf8'));
+    for (const model of catalog.models) Object.assign(model, { context_window: window, max_context_window: window });
+    fs.chmodSync(catalogFile, 0o600);
+    fs.writeFileSync(catalogFile, JSON.stringify(catalog));
+  }
   fs.chmodSync(configFile, 0o600); fs.writeFileSync(configFile, stringify(config));
   const toolchain = path.join(os.homedir(), '.elan/toolchains/leanprover--lean4---v4.33.0');
   const environment = { PATH: `${toolchain}/bin:${path.dirname(process.execPath)}:/usr/bin:/bin`,
@@ -357,16 +404,25 @@ try {
     instructions: agentTeamInstructions({ id: 'lead', role: 'lead' }, maxAgents, 'native-agent-control'),
     signal: controller.signal, onUsage: () => {} });
   team.setLeadSession(lead); state.writerProcess = lead.processIdentity; save();
-  observations.rootStatus = await lead.run('NATIVE_ROOT_TEST Execute the scripted disposable backend fixture.', 'root-task', worktree, () => {});
+  if (largeForkTest) for (const index of [1, 2, 3, 4]) {
+    const text = `LARGE_FORK_HISTORY ${index} ` + '界'.repeat(800_000);
+    assert.equal(await lead.run(text, 'history-' + index, worktree, () => {}), 'completed');
+  }
+  observations.rootStatus = await lead.run(largeForkTest ? 'LARGE_FORK_ACTION' :
+    'NATIVE_ROOT_TEST Execute the scripted disposable backend fixture.', 'root-task', worktree, () => {});
   assert.equal(observations.rootStatus, 'completed');
   if (capacityTest) {
     assert.ok(observations.capacity, 'must reach the full team and observe the failed overflow spawn');
     assert.ok(state.agentTeam!.workers.every(w => w.tasks.at(-1)?.status === 'completed'));
     observations.loopbackRequests = requests.length;
+  } else if (largeForkTest) {
+    assert.equal(observations.largeFork?.workerStatus, 'completed');
+    assert.equal(state.agentTeam!.workers.length, 1, 'The oversized fork must not reserve a worker.');
+    assert.equal(events.filter(event => event.event === 'native_host_callback' && event.operation === 'spawn').length, 1);
   } else checkLifecycle(worktree, problem.projectRelative);
   await team.close(); await lead.close(); team = undefined; lead = undefined;
-  if (!capacityTest) observations.proofDelivery = await verifyNativeProofDelivery({ repository: root, executable,
-    output: path.join(output, 'proof-delivery'), signal: controller.signal });
+  if (!capacityTest && !largeForkTest) observations.proofDelivery = await verifyNativeProofDelivery({ repository: root, executable,
+    output: path.join(output, 'proof-delivery'), signal: controller.signal, webProvider: process.argv.includes('--web-provider') });
   observations.status = 'passed';
 } catch (error) {
   observations.status = 'failed'; observations.error = error instanceof Error ? { message: error.message, stack: error.stack } : String(error);

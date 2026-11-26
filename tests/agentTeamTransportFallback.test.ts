@@ -16,7 +16,7 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 
 function fixture(open: (options: MathAgentOptions, signal: AbortController) => Promise<MathAgentSession>,
-  previous?: { turns: number; threadId: string }) {
+  previous?: { turns: number; threadId: string }, maxTurns = (previous?.turns ?? 0) + 1) {
   const { problem, workspace, directory } = localExample('agent-team-transport-');
   roots.push(directory);
   const root = path.resolve('.');
@@ -41,9 +41,12 @@ function fixture(open: (options: MathAgentOptions, signal: AbortController) => P
   const run = () => runResearchWorkers({ state, workers: [worker],
     access: new Map([[worker.id, { environment: {}, researchSkill, retrievalRoot: directory }]]),
     modules: { ...directSolverModules, M1: { ...directSolverModules.M1, open: start },
-      M2: { ...directSolverModules.M2, check } }, root, buildFile: path.join(directory, 'build.json'),
+      M2: { ...directSolverModules.M2, check }, M3: { ...directSolverModules.M3, retry: (...args) => {
+        const retry = directSolverModules.M3.retry(...args);
+        return retry && { ...retry, delayMs: 0 };
+      } } }, root, buildFile: path.join(directory, 'build.json'),
     taskText: 'Prove the frozen targets.', executable: 'offline', profile: 'offline', signal: controller.signal,
-    deadline: Infinity, maxTurns: (previous?.turns ?? 0) + 1, maxTurnMs: Infinity, maxTotalTokens: 0,
+    deadline: Infinity, maxTurns, maxTurnMs: Infinity, maxTotalTokens: 0,
     save: () => writeSolverRunState(stateFile, state), emit });
   return { run, state, stateFile, start, emit, controller };
 }
@@ -101,5 +104,36 @@ describe('AgentResearchTeam startup transport fallback', () => {
     expect(f.start).toHaveBeenCalledOnce();
     expect(readSolverRunState(f.stateFile).agentTeam?.transport).toBe('native-agent-control');
     expect(f.emit.mock.calls.map(([event]) => event)).not.toContain('team_transport_fallback');
+  });
+});
+
+describe('native Lead recovery', () => {
+  it.each(['transport exit', 'context overflow'] as const)('reopens the same team root after %s', async failure => {
+    const threadId = 'native-lead';
+    const sequence: string[] = [];
+    const compact = vi.fn(async () => { sequence.push('compact'); });
+    const f = fixture(async options => {
+      const reopening = f.start.mock.calls.length > 1;
+      expect(options.nativeAgentControl).toBeDefined();
+      expect(options.threadId).toBe(reopening ? threadId : undefined);
+      if (!reopening) f.state.agentTeam!.nativeControl = { sessionId: threadId, rootThreadId: threadId, sequence: 0, mailbox: [] };
+      let lastError: string | undefined;
+      return { threadId, compact, get lastError() { return lastError; },
+        close: async () => { sequence.push('close'); }, interrupt: async () => {},
+        stopForFreeze: async () => ({ status: 'stopped' }),
+        run: async (_message, _id, _workspace, started) => {
+          sequence.push(reopening ? 'retry' : 'first');
+          started(reopening ? 'native-turn-2' : 'native-turn-1');
+          if (reopening) return 'completed';
+          lastError = failure === 'transport exit'
+            ? 'math_codex_transport_closed:process_exit:code=9:signal=none' : 'math_model_context_window_exceeded';
+          throw new Error(lastError);
+        } };
+    }, undefined, 2);
+    await f.run();
+    expect(sequence).toEqual(failure === 'transport exit'
+      ? ['first', 'close', 'retry', 'close'] : ['first', 'close', 'compact', 'retry', 'close']);
+    expect(readSolverRunState(f.stateFile)).toMatchObject({ threadId, turns: 2,
+      agentTeam: { nativeControl: { sessionId: threadId, rootThreadId: threadId } } });
   });
 });

@@ -1,6 +1,14 @@
 import type { MathAgentSession } from '../runtime/agentSession';
 import type { SolverRunState } from './archive';
 
+/** Opening can fail before the caller has a session to stop. */
+export function recordUnconfirmedWriterStartup(record: Pick<SolverRunState, 'writerStopUnconfirmed'>, error: unknown, save: () => void): boolean {
+  if (!(error instanceof Error) || error.message !== 'math_codex_startup_shutdown_unconfirmed') return false;
+  record.writerStopUnconfirmed = { at: Date.now(), reason: error.message };
+  save();
+  return true;
+}
+
 /** Confirm that every writer has stopped before any caller freezes proof sources. */
 export async function stopProofWriter(input: {
   session: MathAgentSession;

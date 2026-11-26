@@ -71,6 +71,12 @@ not call a paid model or alter a running mathematical solve.
 Mathematical nominations, source freezing, Lean checks and adoption remain host
 operations; a native final answer does not create a proof delivery.
 
+Pass `--team-capacity` to exercise eight writers with seven simultaneous member
+requests. Pass `--large-fork` to verify that an oversized full-history fork
+returns a tool error and Lead can retry with `fork_turns: "none"`. Pass
+`--web-provider` to exercise proof delivery through the generated Web provider
+profile, including metered requests before and after Lead cold resume.
+
 The built runtime link installs this backend for new local CLI team runs.
 The Web worker Dockerfile builds the same pinned source on Debian Bookworm
 and installs a separate binary at `/opt/theoremos-codex-backend/codex`.

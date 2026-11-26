@@ -49,7 +49,7 @@ import { committedResearchNotesDigest, researchHandoffNotesDigest } from './rese
 import { SingleSolverProofHandoff } from './singleSolverProofHandoff';
 import { assertMathAgentSkillsCurrent, type MathAgentSkill } from '../runtime/agentSkills';
 import { buildSkillResearchContext, teamTurnTiming } from './skillResearchContext';
-import { stopProofWriter } from './proofWriter';
+import { recordUnconfirmedWriterStartup, stopProofWriter } from './proofWriter';
 import { createSkillProofLifecycle } from './skillProofLifecycle';
 import { createSoftSlice, softSliceSettings, type SoftSliceSettings } from './softSlice';
 import { materializeResearchToolHelp } from './researchToolHelp';
@@ -260,6 +260,7 @@ export async function runResearchWorkers(input: {
       let sessionInstructions: string | undefined;
       let closing: Promise<void> | undefined;
       let retries = 0;
+      let nativeContextRecovery: 'pending' | 'attempted' | undefined;
       let lastCheck: ProofCheck | undefined;
       research.error = undefined;
       const access = input.access.get(worker.id)!;
@@ -1220,6 +1221,7 @@ export async function runResearchWorkers(input: {
               team?.setLeadSession(session);
               if (team && session.processIdentity) { state.writerProcess = session.processIdentity; save(); }
             } catch (error) {
+              if (recordUnconfirmedWriterStartup(research, error, save)) throw error;
               signal.throwIfAborted();
               // M1.open disposes failed launches before rejecting. Rebuild Lead's
               // instructions for host tools before reserving the same turn again.
@@ -1275,6 +1277,10 @@ export async function runResearchWorkers(input: {
           overflow.maxOptionalContextBytes = 0;
           if (turnContext?.fresh && !overflow.failedFreshContextDigests.includes(turnContext.digest))
             overflow.failedFreshContextDigests.push(turnContext.digest);
+          if (team?.nativeAgentControlEnabled && research.threadId && team.archive.nativeControl?.rootThreadId === research.threadId) {
+            if (nativeContextRecovery === 'attempted') throw new Error('math_model_context_capacity_blocked');
+            nativeContextRecovery = 'pending';
+          }
           await rotateSession('context');
           retries = 0;
           emit('worker_context_recovering', { reason: research.lastFailure.reason,
@@ -1299,8 +1305,7 @@ export async function runResearchWorkers(input: {
           return;
         }
         retries = retry.attempt;
-        // A transient upstream failure does not invalidate the saved native thread. Retry it
-        // once after closing the failed writer; a repeated failure still gets a fresh thread.
+        // Close failed writers before retrying. A bound native team must reopen its existing root.
         if (research.threadId && (retry.reason === 'math_model_tool_failed' ||
             retry.reason === 'math_model_request_failed' && retries === 2 || retries === 1 &&
             ['math_model_request_timeout', 'math_codex_transport_closed'].includes(retry.reason)))
@@ -1319,6 +1324,13 @@ export async function runResearchWorkers(input: {
         }
         const previous = research.threadId;
         await close();
+        if (previous && team?.nativeAgentControlEnabled && team.archive.nativeControl?.rootThreadId === previous) {
+          // Child lineage, mailbox ownership and the host's usage baseline all bind this thread ID.
+          sessionHasHistory = false; compactedUsageVersion = -1;
+          save();
+          emit('context_reconnecting', { threadId: previous, turns: research.turns, reason });
+          return;
+        }
         if (previous) research.previousThreadIds = [...(research.previousThreadIds ?? []), previous];
         research.threadId = undefined; research.lastInputTokens = undefined; research.contextCheckpoint = undefined; research.contextCheckpointBaseline = undefined;
         sessionHasHistory = false; compactedUsageVersion = -1;
@@ -1326,11 +1338,13 @@ export async function runResearchWorkers(input: {
         emit('context_restarted', { previousThreadId: previous, turns: research.turns, reason });
       };
       const maintainContext = async (assignment?: CooperativeAction): Promise<'unchanged' | 'compacted' | 'rotated'> => {
-        if (skillMode || !research.threadId || !session || !sessionHasHistory) return 'unchanged';
+        const recoverNative = nativeContextRecovery === 'pending';
+        if (skillMode && !recoverNative || !research.threadId || !session || !sessionHasHistory) return 'unchanged';
         const threadId = research.threadId, lastInputTokens = Math.max(session.lastInputTokens ?? 0, research.lastInputTokens ?? 0);
         const notesDigest = currentCheckpointNotesDigest();
-        if (lastInputTokens < 96_000 && !notesDigest) return 'unchanged';
-        if (session.compact && (compactedUsageVersion !== contextUsageVersion || notesDigest)) {
+        if (!recoverNative && lastInputTokens < 96_000 && !notesDigest) return 'unchanged';
+        if (recoverNative) nativeContextRecovery = 'attempted';
+        if (session.compact && (recoverNative || compactedUsageVersion !== contextUsageVersion || notesDigest)) {
           const startedAt = Date.now();
           if (notesDigest) emit('context_checkpoint_ready', { threadId, notesDigest });
           emit('context_compaction_requested', { threadId, lastInputTokens });
@@ -1346,9 +1360,11 @@ export async function runResearchWorkers(input: {
           } catch (error) {
             signal.throwIfAborted();
             emit('context_compaction_failed', { threadId, reason: failureDetail(error) });
+            if (recoverNative) throw new Error('math_model_context_capacity_blocked', { cause: error });
           } finally { explicitCompaction = false; usage.finishMaintenance(); }
           await rotateSession('context'); return 'rotated';
         }
+        if (recoverNative) throw new Error('math_model_context_capacity_blocked');
         if (session.compact) return 'unchanged'; // Wait for a new usage observation before another native maintenance request.
         if (!cooperation || !assignment || notesDigest) {
           if (notesDigest) emit('context_checkpoint_ready', { threadId, notesDigest });
@@ -1760,7 +1776,7 @@ export async function runResearchWorkers(input: {
           research.candidate = candidate;
           const turn = cooperation && assignment && candidate.status === 'interrupted' ? 'checkpoint' : candidate.status;
           if (!['completed', 'failed', 'checkpoint'].includes(turn)) break;
-          if (turn !== 'failed') retries = 0;
+          if (turn !== 'failed') { retries = 0; nativeContextRecovery = undefined; }
           if (turn === 'checkpoint') emit('turn_checkpoint', { turn: research.turns,
             ...(team?.leadCompletionCheckpoint ? { reason: 'math_team_completion_checkpoint' } :
               team?.leadAdoptionCheckpoint ? { reason: 'math_team_adoption_checkpoint' } :

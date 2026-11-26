@@ -7,6 +7,7 @@ import type { MathAgentOptions, MathAgentSession } from '../src/runtime/agentSes
 import type { NativeAgentControlOptions } from '../src/runtime/nativeAgentControl';
 import { nativeAgentControlModelCatalog } from '../src/runtime/nativeAgentControl';
 import { readMathAgentSkill } from '../src/runtime/agentSkills';
+import { deferred } from './helpers/async';
 
 const fixture = String.raw`
 const fs = require('node:fs'), path = require('node:path'), readline = require('node:readline');
@@ -21,7 +22,9 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   const reply = result => send({id:call.id,result});
   if (call.id === 'attach') {
     fs.writeFileSync(path.join(directory,'attach.json'), JSON.stringify(call));
-    return send({id:start.id,result:{thread:{id:threadId},model:settings.model,approvalPolicy:'never',
+    const turns = process.env.LONG_RESUME_HISTORY && !settings.excludeTurns
+      ? [{id:'old-turn', items:[{type:'agentMessage', text:'x'.repeat(8 * 1024 * 1024)}]}] : [];
+    return send({id:start.id,result:{thread:{id:threadId,turns},model:settings.model,approvalPolicy:'never',
       reasoningEffort:settings.config.model_reasoning_effort,
       activePermissionProfile:start.params.bootstrap ? null : {id:'math-worker'},
       agentControl:{sessionId:'root-id',agent:{threadId},configSnapshot:{model:settings.model,
@@ -39,6 +42,16 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     if (process.env.THEOREMOS_HOST_AGENT_CONTROL === '1') return host('attach','attach');
     return reply({thread:{id:threadId},model:settings.model,approvalPolicy:'never',
       reasoningEffort:settings.config.model_reasoning_effort,activePermissionProfile:{id:'math-worker'}});
+  }
+  if (call.method === 'thread/compact/start') {
+    const turn = { id:'compact-turn',status:'inProgress' };
+    host('admitTurn','compact-admit',{turnId:turn.id});
+    send({method:'turn/started',params:{threadId,turn}});
+    send({method:'item/completed',params:{threadId,turnId:turn.id,item:{id:'summary',type:'contextCompaction'}}});
+    send({method:'turn/completed',params:{threadId,turn:{...turn,status:'completed'}}});
+    host('turnFinished','compact-finished',{outcome:{threadId,turnId:turn.id,status:{completed:null}}});
+    host('releaseTurn','compact-release',{turnId:turn.id});
+    return reply({});
   }
   if (['turn/start','theoremos/agentControl/input'].includes(call.method)) {
     const turn = {id:'native-turn-'+ ++counter,status:'inProgress'};
@@ -168,15 +181,18 @@ describe('native AgentControl stdio integration without model calls', () => {
   });
 
   it('requires the native child to report its actual restricted permission intersection', async () => {
+    const bound = vi.fn();
     await expect(createCodexMathSession({ ...options, environment: { ...options.environment, BAD_CHILD_PERMISSIONS: '1' },
-      nativeAgentControl: { ...host, bootstrap: { version: 1, sessionId: 'root-id', threadId: 'child-id' } },
+      nativeAgentControl: { ...host, bound, bootstrap: { version: 1, sessionId: 'root-id', threadId: 'child-id' } },
     })).rejects.toThrow('math_codex_sandbox_profile_mismatch');
+    expect(bound).not.toHaveBeenCalled();
     expect(calls().some(call => call.method === 'theoremos/agentControl/input')).toBe(false);
   });
 
   it('registers the captured child identity before cold resume without replaying fork history', async () => {
     const bootstrap = { version: 1, sessionId: 'root-id', threadId: 'saved-child', initialHistory: 'parent-fork' };
-    session = await createCodexMathSession({ ...options, threadId: 'saved-child', nativeAgentControl: {
+    session = await createCodexMathSession({ ...options, threadId: 'saved-child',
+      environment: { ...options.environment, LONG_RESUME_HISTORY: '1' }, nativeAgentControl: {
       ...host, bootstrap, initialInput: { author: '/root', input: { kind: 'message', mode: 'triggerTurn',
         message: { kind: 'plaintext', text: 'Continue the saved child.' } }, startOptions: {} },
     } });
@@ -186,6 +202,40 @@ describe('native AgentControl stdio integration without model calls', () => {
     expect(start.thread).toBeUndefined();
     expect(calls().some(call => call.method === 'thread/resume')).toBe(false);
     expect(await session.run('Current source and feedback.', 'task', directory, () => {})).toBe('completed');
+  });
+
+  it('resumes the Lead when the stored history exceeds the stdio frame limit', async () => {
+    session = await createCodexMathSession({ ...options, threadId: 'root-id', nativeAgentControl: host,
+      environment: { ...options.environment, LONG_RESUME_HISTORY: '1' } });
+    expect(session.threadId).toBe('root-id');
+    expect(await session.run('Continue the saved proof.', 'task', directory, () => {})).toBe('completed');
+  });
+
+  it('keeps resume usage replay for a direct provider with a budget gate', async () => {
+    session = await createCodexMathSession({ ...options, threadId: 'root-id', nativeAgentControl: host,
+      requestGate: () => ({ allowed: true, settle: () => {} }) });
+    const resume = calls().find(call => call.method === 'thread/resume').params;
+    expect(resume.excludeTurns).toBeUndefined();
+    expect(session.usageSource).toBe('native-thread-totals');
+  });
+
+  it('keeps native compaction open until the completed maintenance turn releases the writer', async () => {
+    const release = deferred<void>(), reachedRelease = deferred<void>();
+    session = await createCodexMathSession({ ...options, nativeAgentControl: { request: async request => {
+      if (request.operation === 'releaseTurn' && request.payload.turnId === 'compact-turn') {
+        reachedRelease.resolve();
+        await release.promise;
+      }
+      return { result: { admitted: request.operation === 'admitTurn' } };
+    } } });
+    let settled = false;
+    const compact = session.compact!().then(() => { settled = true; });
+    try {
+      await reachedRelease.promise;
+      expect(settled).toBe(false);
+      await expect(session.run('Too early.', 'task', directory, () => {})).rejects.toThrow('math_codex_turn_already_running');
+    } finally { release.resolve(); await compact; }
+    expect(await session.run('Use the compacted context.', 'task', directory, () => {})).toBe('completed');
   });
 
   it('does not activate a backend through inherited process environment', async () => {
