@@ -142,9 +142,9 @@ describe('certificate slot guidance in research prompts', () => {
       assignment: task ? { kind: 'task', task, assignment: { taskId: task.id, taskDigest: taskVersion(task), workerId: 'worker',
         seedCommit: 'fixed-commit' } } : { kind: 'lead', seedCommit: 'fixed-commit' } }).instructions;
 
-  it('collapses certificate parts, freezes the library and keeps research source keys complete', () => {
+  it('collapses certificate parts and keeps the frozen kernel out of planning and edits', () => {
     const lead = build(fixture(ownedFiles));
-    expect(lead).toContain('Edit only /proof/RESEARCH.md.');
+    expect(lead).toContain('Edit only /proof/RESEARCH.md, /proof/.scratch/plan.json.');
     expect(lead).toContain('Leave all Lean source files, imports and environment configuration unchanged.');
     expect(lead).toContain('Choose proofPath from ["Helper.lean","Submission.lean"]; workers generate Submission/Certificates modules');
     expect(lead).toContain('"proofPath":"Helper.lean"');
@@ -153,11 +153,11 @@ describe('certificate slot guidance in research prompts', () => {
       `/proof/${parts[0]} … /proof/${parts[2]}, /proof/RESEARCH.md, `);
     expect(worker).toContain(`kernel-certificate --json 'SPEC' --workspace '/proof'`);
     expect(worker).toContain(`"kernelModule":"${CERTIFICATE_KERNEL_MODULE}"`);
-    expect(worker).toContain('frozen local modules already imported by the original owned files, or other owned modules, without import cycles');
-    expect(worker).toContain(`Its keys must be exactly ${JSON.stringify(ownedFiles)}`);
+    expect(worker).toContain('frozen local modules already imported by the original owned files, or other owned modules. Avoid import cycles');
+    expect(worker.split('\n').find(line => line.startsWith('Edit only '))).not.toContain(CERTIFICATE_KERNEL_MODULE);
 
     const plain = build(fixture(['Submission.lean']));
-    expect(plain).toContain('Edit only /proof/RESEARCH.md.');
+    expect(plain).toContain('Edit only /proof/RESEARCH.md, /proof/.scratch/plan.json.');
     expect(plain).toContain('Choose proofPath from ["Submission.lean"]; goals infer');
     expect(plain).not.toContain('kernel-certificate');
   });

@@ -410,17 +410,16 @@ describe('library module guidance in research prompts', () => {
       assignment: task ? { kind: 'task', task, assignment: { taskId: task.id, taskDigest: taskVersion(task), workerId: 'worker',
         seedCommit: 'fixed-commit' } } : { kind: 'lead', seedCommit: 'fixed-commit' } });
 
-  it('omits frozen libraries from editable files, proof paths and source bindings and references them once', () => {
+  it('keeps frozen libraries out of editable files and plan proof paths while retaining import guidance', () => {
     const lead = build();
     expect(lead.instructions).toContain('Leave all Lean source files, imports and environment configuration unchanged.');
-    expect(lead.instructions).toMatch(/^Edit only \/proof\/RESEARCH\.md\.$/mu);
+    expect(lead.instructions).toContain('Edit only /proof/RESEARCH.md, /proof/.scratch/plan.json.');
     expect(lead.instructions).toContain('Save RESEARCH.md and delivery logs at these exact worktree-root paths');
     expect(lead.instructions).toContain('Choose proofPath from ["Submission.lean"]; goals infer');
     const prover = build(lemma);
     expect(prover.instructions).toContain('Edit only /proof/Submission.lean, /proof/RESEARCH.md,');
     expect(prover.instructions).toContain(`${lib} is a frozen host library that Lean rechecked before this run: import the module that holds a declaration`);
     expect(prover.instructions).toContain('lines whose file starts with Submission/Library/ are library declarations');
-    expect(prover.instructions).toContain('Its keys must be exactly ["Submission.lean"]');
     expect(prover.message).toContain(JSON.stringify({ commit: 'fixed-commit', path: lib, digest: 'd'.repeat(64), frozenLibrary: true, declarationCount: 1 }));
     expect(prover.message).not.toContain('frozen-context:');
     expect(prover.message).not.toContain('two_mul_two');
