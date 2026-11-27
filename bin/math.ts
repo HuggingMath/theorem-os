@@ -22,11 +22,8 @@ const commands: Readonly<Record<string, string>> = {
   knowledge: 'scripts/mathematics/theoremKnowledge.ts',
   hub: 'scripts/mathematics/huggingMath.ts',
   'check-lean': 'scripts/mathematics/checkLean.ts',
-  'proof-search': 'scripts/mathematics/proofSearch.ts',
-  'research-observe': 'scripts/mathematics/researchObserve.ts',
   checkpoint: 'scripts/mathematics/checkpoint.ts',
   'plan-validate': 'scripts/mathematics/planValidate.ts',
-  'plan-apply': 'scripts/mathematics/planApply.ts',
   'check-finite': 'scripts/mathematics/checkFinite.ts',
   'kernel-certificate': 'scripts/mathematics/kernelCertificate.ts',
   'library-pack': 'scripts/mathematics/libraryPack.ts',
@@ -38,7 +35,6 @@ const commands: Readonly<Record<string, string>> = {
   inspect: 'scripts/mathematics/inspectMathRun.ts',
   recover: 'scripts/mathematics/recoverMathSnapshot.ts',
   edit: 'scripts/mathematics/editMathRun.ts',
-  'import-proof': 'scripts/mathematics/importProofFragment.ts',
   compare: 'scripts/mathematics/compareMathRuns.ts',
   'sample-putnam': 'scripts/mathematics/samplePutnamRuns.ts',
   'first-proof': 'scripts/mathematics/firstProof.ts',
@@ -66,11 +62,8 @@ if (!command || ['help', '--help', '-h'].includes(command)) {
   knowledge            Build and query previously checked theorem sources
   hub                  Export frozen results and import private HuggingMath drafts
   check-lean           Check changed Lean files with bounded diagnostics
-  proof-search         Explore bounded tactic branches and retain resumable proof states
-  research-observe     Validate and publish one research finding with retained Lean probes
   checkpoint           Save the acknowledgment requested by the active host
   plan-validate        Check a cooperative Lead plan and report field-level issues
-  plan-apply           Validate and save or publish a cooperative Lead plan
   check-finite         Replay finite Boolean constraints and return witnesses
   kernel-certificate   Generate chunked decide +kernel certificate modules
   library-pack         Extract checked run modules or backport upstream files as a frozen library
@@ -81,10 +74,9 @@ if (!command || ['help', '--help', '-h'].includes(command)) {
   continuation-seed    Initialize a new prepared run from advisory sources and fresh helper checks
   inspect              Read a research report or export a versioned task plan
   recover              Restore a research snapshot and recheck saved helpers
-  edit                 Validate and queue a human plan edit
-  import-proof         Queue a Lean fragment for host-checked task delivery
-  compare              Compare fixed-budget coordination arms or module plans
-  sample-putnam        Prepare and report reproducible PutnamBench samples
+  edit                 Approve the exact version of a native team's initial route
+  compare              Read and check saved comparison reports
+  sample-putnam        Read and check saved PutnamBench sample reports
   first-proof          Audit and prepare the First Proof Batch 3 Lean adaptation offline
   formalize            Formalize an informal problem and review its Lean statement
   informalize          Explain a checked Lean proof in natural language, step by step with audits

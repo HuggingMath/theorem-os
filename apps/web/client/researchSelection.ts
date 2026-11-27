@@ -93,7 +93,8 @@ export class ResearchSelection {
       }));
       if (this.releases.filter(release => release.type === 'agent').length > 1) throw new Error(t('每次研究只能选择一个 Agent，请在 Library 调整选择。'));
       const agent = this.releases.find(release => release.type === 'agent')?.content as { environment?: WebEnvironment } | undefined;
-      const selectedEnvironment = nativeTeam ? environment : savedEnvironment ?? this.releases.find(release => release.mathematics)?.mathematics?.environment ?? agent?.environment ?? environment;
+      const libraryEnvironment = this.releases.find(release => release.mathematics)?.mathematics?.environment;
+      const selectedEnvironment = savedEnvironment ?? libraryEnvironment ?? (nativeTeam ? undefined : agent?.environment) ?? environment;
       const { item } = await this.api<{ item: FrozenResearchConfiguration }>('/api/research/configuration', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ environment: selectedEnvironment, selection: this.value(), ...(nativeTeam ? { nativeTeam: true } : {}) }) });
       this.selectedEnvironment = item.environment;

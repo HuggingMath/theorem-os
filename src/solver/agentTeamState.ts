@@ -42,6 +42,7 @@ const task = z.object({ id: z.string(), message: z.string(), seedCommit: z.strin
   budget: agentTeamAllowanceSchema.optional(), turns: z.number().int().nonnegative().optional(),
   pauseRequested: z.object({ at: z.number(), kind: z.enum(['handoff', 'budget']), reason: z.string() }).strict().optional(),
   pausedAt: z.number().optional(), lastStartedAt: z.number().optional(),
+  lastStartedSourceCommit: z.string().regex(/^[a-f0-9]{40,64}$/u).optional(),
   startedAt: z.number().optional(), finishedAt: z.number().optional(),
   declarations: z.array(declaration).optional(), summary: z.string().optional(), deliveryId: z.string().optional(),
   helperSubmission: z.array(declaration).min(1).max(32).optional(),

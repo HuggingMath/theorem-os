@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 // Statement draft preservation and historical human-claim release. Local disposable accounts and observations only.
+import { seedCooperativeRun } from './web-cooperative-fixture';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -12,7 +13,7 @@ import type { WebRunner } from '../apps/web/runner';
 import type { WebRunInput, WorkerMessage } from '../apps/web/shared';
 import type { WebObservation, WebInspection } from '../apps/web/collaboration';
 import type { ResearchProjectDetail } from '../apps/web/researchProjectTypes';
-import { freePort, postRun, preferFullCollaboration, startBrowser } from './web-scenario';
+import { freePort, preferFullCollaboration, startBrowser } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/frontend-round5/collaboration');
@@ -154,7 +155,7 @@ try {
   checks.push({ name: 'An unchanged submitted draft still clears after a successful save', payload: unchangedReply.request().postDataJSON(), status: unchangedReply.status() });
 
   phase = 'release-the-existing-claim-after-task-version-changes';
-  const run = await postRun({ page }, runInput); assert.ok(controls.has(run.id));
+  const run = await seedCooperativeRun(service, page.context(), origin, runInput); assert.ok(controls.has(run.id));
   project = (await http<{ item: ResearchProjectDetail }>(page, 'GET', projectPath)).item;
   project = (await http<{ item: ResearchProjectDetail }>(page, 'POST', `${projectPath}/runs`, {
     requestId: crypto.randomUUID(), expectedRevision: project.revision, statementVersionId: version, runId: run.id,

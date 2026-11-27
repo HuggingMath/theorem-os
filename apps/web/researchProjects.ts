@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import { canonicalMathJson, mathDigest } from '../../src/math/mathRuntimeIo';
 import { webGuidanceSchema, webPlanApprovalSchema, webPlanProposalSchema } from './collaborationValidation';
-import type { WebCommandResult, WebGuidanceRecord, WebInspectedTask, WebObservation } from './collaboration';
+import type { WebCommandResult, WebGuidanceRecord, WebInspectedTask, WebObservation, WebPlanApproval } from './collaboration';
 import { webLimits } from './shared';
 import { WebStorage, WebStorageError } from './storage';
 import type { ResearchCollaborationInbox, ResearchCollaborationState, ResearchCollaborationView, ResearchHandoff,
@@ -925,7 +925,7 @@ export class WebResearchProjects {
     if (record.candidateDelivery && ['queued', 'delivered', 'deferred'].includes(record.delivery.status)) record.candidateDelivery.status = 'dispatched';
     const observed = receipt.observation ?? resolved.run.observation;
     this.observeDecision(record, receipt.guidance ?? observed?.guidance.find(item => item.id === record.id));
-    this.observeExecution(record, observed);
+    this.observeExecution(record, observed, resolved.run.initialPlanApproval?.receipt);
     if (canonicalMathJson(record) !== before) {
       record.revision++; record.updatedAt = now();
       this.event(stored, viewer, 'feedback-updated', '更新反馈投递与执行回执', { feedbackId }); this.save(stored);
@@ -942,7 +942,16 @@ export class WebResearchProjects {
       evidenceRefs: decision.evidenceRefs.map(ref => ref.kind === 'edit' ? `edit:${ref.id}` : ref.kind === 'plan' ? `plan:${ref.version}`
         : `task:${ref.id}@${ref.version}`) };
   }
-  private observeExecution(record: ResearchFeedback, observation?: WebObservation) {
+  private observeExecution(record: ResearchFeedback, observation?: WebObservation, initialApproval?: WebPlanApproval) {
+    if (record.kind === 'plan-approval') {
+      const approval = [initialApproval, observation?.inspection.planApproval].find(item => item?.approvedId === record.id);
+      if (approval) {
+        record.delivery = { status: 'delivered', commandId: record.id };
+        record.execution = { status: 'completed', planVersion: approval.approvedVersion, taskRefs: [],
+          resultRefs: [...new Set([...record.execution.resultRefs, `plan-approval:${record.id}`])] };
+      }
+      return;
+    }
     if (!observation || record.kind === 'proof-submission' && record.proofCheck?.status !== 'checked') return;
     const previous = record.execution;
     if (record.kind === 'proof-submission') {
@@ -964,12 +973,6 @@ export class WebResearchProjects {
       return;
     }
     if (edit?.status === 'rejected') { record.execution.status = 'failed'; return; }
-    const approval = observation.inspection.planApproval;
-    if (approval?.approvedId === record.id) {
-      record.execution = { status: 'completed', planVersion: approval.approvedVersion, taskRefs: [],
-        resultRefs: [...new Set([...previous.resultRefs, `plan-approval:${record.id}`])] };
-      return;
-    }
     if (record.decision.status !== 'accepted' || record.kind !== 'guidance') return;
     const tasks = new Map([...(observation.history ?? []), ...observation.inspection.tasks]
       .map(task => [`task:${task.id}@${task.version}`, task]));
@@ -1036,15 +1039,16 @@ export class WebResearchProjects {
   /** Refreshes from server-owned observations. It does not submit commands or infer adoption from temporal proximity. */
   syncRunObservation(viewer: string, projectId: string, runId: string): void {
     const resolved = this.resolveBinding(viewer, projectId, runId), observation = resolved.run.observation;
-    if (!observation) return;
+    const initialApproval = resolved.run.initialPlanApproval?.receipt;
+    if (!observation && !initialApproval) return;
     const stored = this.readable(viewer, projectId);
     let changed = false;
     for (const record of stored.feedback.filter(item => item.target?.runId === runId)) {
-      const before = canonicalMathJson(record), guidance = observation.guidance.find(item => item.id === record.id);
+      const before = canonicalMathJson(record), guidance = observation?.guidance.find(item => item.id === record.id);
       if (guidance && !['delivered', 'failed'].includes(record.delivery.status))
         record.delivery = { status: guidance.status, commandId: record.id, reason: guidance.reason };
       this.observeDecision(record, guidance);
-      this.observeExecution(record, observation);
+      this.observeExecution(record, observation, initialApproval);
       if (canonicalMathJson(record) !== before) {
         record.revision++; record.updatedAt = now(); changed = true;
         this.event(stored, resolved.runOwner, 'feedback-updated', '同步运行反馈证据', { feedbackId: record.id });

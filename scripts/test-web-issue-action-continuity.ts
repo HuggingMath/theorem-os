@@ -10,8 +10,9 @@ import { readWebConfig } from '../apps/web/config';
 import { loadWebSample } from '../apps/web/sample';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import type { WebRunner } from '../apps/web/runner';
-import type { WebObservation } from '../apps/web/collaboration';
+import type { ResearchIssue } from '../apps/web/researchCollaborationTypes';
 import type { ResearchFeedback, ResearchProjectDetail } from '../apps/web/researchProjectTypes';
+import { seedCooperativeRun } from './web-cooperative-fixture';
 import { freePort, startBrowser, preferFullCollaboration, settled } from './web-scenario';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -20,18 +21,21 @@ const staticRoot = process.env.THEOREMOS_FRONTEND_TEST_STATIC_ROOT ?? path.join(
 await fs.mkdir(output, { recursive: true });
 const dataRoot = await fs.mkdtemp(path.join(output, 'disposable-data-'));
 const source = 'theorem target : True := by sorry\n', commit = '1'.repeat(40), environmentDigest = mathDigest('controlled-candidate-environment');
-const controls = new Map<string, { observation: WebObservation; emit(): void }>();
-const commands: { id: string; type: string }[] = [], errors: string[] = [], external: string[] = [], checks: object[] = [];
-let delivery: 'unknown' | 'delivered' = 'delivered';
+const stateDigest = mathDigest('candidate-v1');
+const commands: string[] = [], executionWrites: string[] = [], errors: string[] = [], external: string[] = [], checks: object[] = [];
 let compileCalls = 0, prohibited = 0, phase = 'setup', active: Page | undefined, failure: unknown;
 const runner: WebRunner = {
   async readiness() { return { ready: true, message: 'Controlled candidate workflow' }; },
   async check(input) { compileCalls++; return { exitCode: 0, timedOut: false, output: '', checkedTarget: input.candidateTarget?.name }; },
   async run(input, send, signal) {
     const observation = structuredClone(loadWebSample()!.observations.at(-1)!);
-    observation.webRunId = input.id; observation.sequence = 1; observation.snapshot.stateDigest = mathDigest('candidate-v1');
+    observation.webRunId = input.id; observation.sequence = 1; observation.snapshot.stateDigest = stateDigest;
     observation.inspection.problem = { id: 'candidate-fixture', statement: 'Prove True', formalStatement: 'True', assumptions: [], targets: [{ theoremName: 'target', proofPath: 'Main.lean' }] };
-    observation.inspection.configuration.environmentDigest = environmentDigest;
+    const configuration = observation.inspection.configuration;
+    const { model, effort, workers, coordination } = input.input;
+    Object.assign(configuration, { model, effort, workers, coordination, environmentDigest });
+    delete configuration.researchMode;
+    delete configuration.researchDelegation;
     observation.inspection.tasks = [{ id: 'goal', kind: 'goal', objective: 'Prove True', theorem: 'target', type: 'True',
       group: 'main', status: 'working', control: 'active', version: 'goal-v1', premises: [], plannedDependencies: [],
       attempts: 0, proof: { status: 'open' }, parkedBy: [], parkedRoutes: {} }];
@@ -43,15 +47,14 @@ const runner: WebRunner = {
     observation.checks = []; observation.guidance = []; observation.history = []; observation.deliveries = [];
     observation.coverage = { sources: 'recorded', checks: 'recorded' };
     await new Promise<void>(resolve => {
-      controls.set(input.id, { observation, emit() { send({ type: 'observation', observation: structuredClone(this.observation) }); } });
-      controls.get(input.id)!.emit(); signal.addEventListener('abort', () => resolve(), { once: true });
+      signal.addEventListener('abort', () => resolve(), { once: true });
+      send({ type: 'observation', observation });
     });
   },
   async command(_id, command) {
     if (command.type === 'capture') return { id: 'capture', status: 'captured' };
-    if (command.type === 'guidance-withdraw') return { id: command.id, status: 'rejected', reason: 'fixture_guidance_withdraw_not_simulated' };
-    const id = command.type === 'guidance' ? command.guidance.id : command.type === 'plan-approval' ? command.approval.id : command.proposal.id;
-    commands.push({ id, type: command.type }); if(command.type==='edit-preview')return {id,status:'validated',baseVersion:'plan-v1',affectedTaskIds:['goal']}; return { id, status: delivery, reason: delivery === 'unknown' ? 'Controlled delivery acknowledgement unavailable' : 'Controlled delivered receipt' };
+    commands.push(command.type);
+    throw new Error('Historical issue execution must not dispatch a command');
   },
 };
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;
@@ -90,27 +93,22 @@ try {
   for(const p of [page,peer]){p.setDefaultTimeout(15000);p.on('pageerror',e=>errors.push(e.message));p.on('dialog',async dialog=>{dialogs.push({language,type:dialog.type(),message:dialog.message()});await dialog.accept();});await p.goto(origin+'/workspace.html');await p.locator('.workspace-tabs').waitFor();}
   const owner=`account:${accounts[offset].id}`,reviewer=`account:${accounts[offset+1].id}`,peerId=service.research.projects.identity(reviewer);
   for(const [p,name]of [[page,'Project Owner'],[peer,'Independent Reviewer']]as const)await http(p,'PUT','/api/research/profile',{requestId:crypto.randomUUID(),expectedRevision:0,displayName:name,visibility:'public'});
-  const {run}=await http<{run:{id:string}}>(page,'POST','/api/runs',{requestId:crypto.randomUUID(),providerId:'openai',apiKey:'sk-disposable-collaboration-fixture',model:'fixture',effort:'low',environment:'standard',source,task:'Prove True',maxTurns:2,maxRunSeconds:600,workers:2,coordination:'cooperative'});
+  const run=await seedCooperativeRun(service,page.context(),origin,{providerId:'openai',apiKey:'sk-disposable-collaboration-fixture',model:'fixture',effort:'low',environment:'standard',source,task:'Prove True',maxTurns:2,maxRunSeconds:600,workers:2,coordination:'cooperative'});
   await page.waitForFunction(async id=>(await(await fetch(`/api/runs/${id}`)).json()).run.observation,run.id);
   let project=(await http<{item:ResearchProjectDetail}>(page,'POST','/api/research/theorems',{requestId:crypto.randomUUID(),title:'Human decision and action continuity',visibility:'members',candidateDeliveryPolicy:'reviewed'})).item;
   const projectPath=`/api/research/theorems/${project.id}`;
   project=(await http<{item:ResearchProjectDetail}>(page,'PUT',`${projectPath}/members/${peerId}`,{requestId:crypto.randomUUID(),expectedRevision:project.revision,role:'collaborator'})).item;
   project=(await http<{item:ResearchProjectDetail}>(page,'POST',`${projectPath}/versions`,{requestId:crypto.randomUUID(),expectedRevision:project.revision,source,statement:'Prove True',environment:'standard'})).item;
   project=(await http<{item:ResearchProjectDetail}>(page,'POST',`${projectPath}/runs`,{requestId:crypto.randomUUID(),expectedRevision:project.revision,runId:run.id,statementVersionId:project.currentStatementVersionId,grants:{guidance:true,edit:true,approve:true,proof:true}})).item;
-  const target={runId:run.id,statementVersionId:project.currentStatementVersionId!,observationRef:{sequence:1,stateDigest:controls.get(run.id)!.observation.snapshot.stateDigest},taskRef:{id:'goal',version:'goal-v1'}};
+  const target={runId:run.id,statementVersionId:project.currentStatementVersionId!,observationRef:{sequence:1,stateDigest},taskRef:{id:'goal',version:'goal-v1'}};
   const issueUrl=(id:string)=>`${origin}/theorems.html?${new URLSearchParams({id:project.id,run:run.id,version:target.statementVersionId,task:'goal',taskVersion:'goal-v1'})}#issue-${id}`;
   const createIssue=async(title:string,resolution?:string)=>{
    project=service.research.projects.detail(owner,project.id);
-   let issue=(await http<{item:any}>(page,'POST',`${projectPath}/issues`,{requestId:crypto.randomUUID(),expectedRevision:project.revision,title,text:'Review the argument and agree on an explicit action.',target})).item;
-   if(resolution)issue=(await http<{item:any}>(page,'POST',`${projectPath}/issues/${issue.id}/resolution`,{requestId:crypto.randomUUID(),expectedRevision:issue.revision,action:'resolve',text:resolution})).item;
+   let issue=(await http<{item:ResearchIssue}>(page,'POST',`${projectPath}/issues`,{requestId:crypto.randomUUID(),expectedRevision:project.revision,title,text:'Review the argument and agree on an explicit action.',target})).item;
+   if(resolution)issue=(await http<{item:ResearchIssue}>(page,'POST',`${projectPath}/issues/${issue.id}/resolution`,{requestId:crypto.randomUUID(),expectedRevision:issue.revision,action:'resolve',text:resolution})).item;
    return issue;
   };
   const openIssue=async(p:Page,id:string)=>{active=p;await p.goto(issueUrl(id));const card=p.locator(`[data-collaboration-issue="${id}"]`);await card.waitFor();return card;};
-  const openExecution=async(p:Page,id:string)=>{const card=await openIssue(p,id),execution=card.locator('[data-issue-execution]');await openDetails(execution.locator(':scope>details'));await execution.locator('[data-prepare-issue-execution]').waitFor();await p.waitForFunction(()=>!document.querySelector('main[aria-busy="true"]'));return execution;};
-  const submitExecution=async(p:Page,execution:Locator)=>{
-   await execution.locator('[data-prepare-issue-execution]').click();await execution.locator('[data-issue-execution-preview]').waitFor();await execution.locator('[data-confirm-issue-execution]').check();
-   const response=p.waitForResponse(r=>r.request().method()==='POST'&&new URL(r.url()).pathname===`${projectPath}/feedback`);await execution.locator('[data-send-issue-execution]').click();const saved=await response;assert.equal(saved.status(),201);return(await saved.json()).item as ResearchFeedback;
-  };
 
   phase=`normal-contribution-draft-${language}`;
   const open=await createIssue('Control: issue contribution survives navigation');
@@ -126,63 +124,70 @@ try {
   await card.screenshot({path:path.join(output,`control-contribution-draft-${language}-${width}.png`)});
   checks.push({id:'normal-contribution-draft',language,width,localPickerAvailable:true,restoredText:await contribution.inputValue()});
 
-  phase=`execution-edit-refresh-${language}`;
-  const resolved=await createIssue('Decision: prepare the next exact step','Use the explicit constructor after checking all dependencies.');
-  let execution=await openExecution(page,resolved.id);
-  const edited='UNSAVED_ACTION: Check the current goal, explicitly construct True.intro, and record why no assumptions are needed.';
-  const instructions=execution.getByLabel(language==='zh'?'执行说明':'Execution instructions',{exact:true});await instructions.fill(edited);
-  await execution.locator('[data-issue-execution-kind]').selectOption('plan-edit');await execution.getByLabel(language==='zh'?'任务目标':'Task objective',{exact:true}).fill('HUMAN_PLAN_EDIT: Explain the construction and then close the exact goal.');await execution.getByLabel(language==='zh'?'前置任务，用逗号分隔':'Prerequisite task IDs, separated by commas',{exact:true}).fill('lemma-a, lemma-b');
-  await execution.locator('[data-prepare-issue-execution]').waitFor({state:'visible'});
-  await execution.screenshot({path:path.join(output,`execution-edit-before-refresh-${language}-${width}.png`)});
-  const localBefore=await page.evaluate(()=>Object.keys(localStorage).filter(key=>key.startsWith('theoremos:issue-execution-draft:v1:')).map(key=>localStorage.getItem(key)).filter(Boolean));
-  const dialogBefore=dialogs.length;await page.reload();execution=await openExecution(page,resolved.id);
-  const afterInstructions=await execution.getByLabel(language==='zh'?'执行说明':'Execution instructions',{exact:true}).inputValue(),afterMode=await execution.locator('[data-issue-execution-kind]').inputValue();
-  const restoredObjective=await execution.getByLabel(language==='zh'?'任务目标':'Task objective',{exact:true}).inputValue();
-  assert.equal(afterInstructions,edited);assert.equal(afterMode,'plan-edit');assert.equal(restoredObjective,'HUMAN_PLAN_EDIT: Explain the construction and then close the exact goal.');assert.equal(await execution.getByLabel(language==='zh'?'前置任务，用逗号分隔':'Prerequisite task IDs, separated by commas',{exact:true}).inputValue(),'lemma-a, lemma-b');assert.equal(dialogs.length,dialogBefore);assert.equal(localBefore.some(v=>v!.includes('UNSAVED_ACTION')&&v!.includes('HUMAN_PLAN_EDIT')),true);
-  await execution.locator('[data-issue-execution-restored]').waitFor();assert.equal(await execution.locator('[data-prepare-issue-execution]').isDisabled(),true);assert.equal(await execution.locator('[data-issue-execution-preview]').count(),0);
-  await execution.screenshot({path:path.join(output,`execution-edit-restored-${language}-${width}.png`)});
-  await execution.locator('[data-confirm-issue-task-version]:enabled').click();await execution.locator('[data-prepare-issue-execution]:enabled').waitFor();
-  checks.push({id:'A4-complete-action-draft-restores-and-requires-review',language,width,mode:afterMode,text:afterInstructions,objective:restoredObjective,restoredWithoutOldConfirmation:true});
+  phase=`historical-execution-${language}`;
+  const resolved = await createIssue('Decision: use the explicit constructor', 'Apply True.intro after checking the dependencies.');
+  const resolution = resolved.resolution!;
+  const issueSource = { issueId: resolved.id, issueRevision: resolved.revision, resolutionAt: resolution.createdAt };
+  const feedbackId = 'historical-action-' + language;
+  const savedText = 'Historical execution: the constructor closes the exact goal.';
+  const historicalFeedback: ResearchFeedback = {
+    id: feedbackId, requestId: crypto.randomUUID(), projectId: project.id,
+    author: resolution.author, kind: 'guidance', text: savedText, visibility: 'members',
+    issueSource: { ...issueSource, title: resolved.title, resolution: { text: resolution.text, author: resolution.author }, originalTarget: target },
+    target, payload: { recipient: { kind: 'task', id: target.taskRef.id } },
+    delivery: { status: 'delivered', commandId: feedbackId },
+    decision: { status: 'not-recorded', evidenceRefs: [] },
+    execution: { status: 'not-started', taskRefs: [], resultRefs: [] },
+    revision: 1, createdAt: resolution.createdAt, updatedAt: resolution.createdAt,
+  };
+  const projectRecord = ['research', 'projects', `${project.id}.json`];
+  const stored = seed.getRecord<{ feedback: ResearchFeedback[] }>(projectRecord)!;
+  stored.feedback.push(historicalFeedback);
+  seed.saveRecord(projectRecord, stored);
 
-  phase=`normal-execution-and-return-${language}`;
-  delivery='delivered';await execution.locator('[data-issue-execution-kind]').selectOption('guidance');const normal=await submitExecution(page,execution);assert.equal(normal.delivery.status,'delivered');await execution.getByRole('button',{name:language==='zh'?'查看后续采纳与执行':'View decisions and execution',exact:true}).click();
-  const feedback=page.locator(`#feedback-${normal.id}`);await feedback.waitFor();assert.ok((await feedback.innerText()).includes(edited));
-  await feedback.screenshot({path:path.join(output,`control-execution-feedback-${language}-${width}.png`)});
-  checks.push({id:'normal-resolution-execution-feedback',language,width,feedbackId:normal.id,delivery:normal.delivery.status,exactTaskVersion:new URL(page.url()).searchParams.get('taskVersion')});
+  page.on('request', request => {
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && [`${projectPath}/feedback`, `/api/runs/${run.id}/edits/preview`].includes(pathname)) {
+      executionWrites.push(pathname);
+    }
+  });
+  const draft = { kind: 'plan-edit', text: 'Unsent execution draft.', objective: 'Explain the proof step.', dependencies: 'lemma-a, lemma-b' };
+  const pendingText = 'Execution request with a missing acknowledgement.';
+  await page.evaluate(({ suffix, draft, input }) => {
+    localStorage.setItem(`theoremos:issue-execution-draft:v1:${suffix}`, JSON.stringify(draft));
+    localStorage.setItem(`theoremos:issue-execution-pending:v1:${suffix}`, JSON.stringify({ input }));
+  }, {
+    suffix: encodeURIComponent(JSON.stringify([service.research.projects.identity(owner), project.id, resolved.id])),
+    draft, input: { kind: 'guidance', requestId: crypto.randomUUID(), text: pendingText, issueSource, target },
+  });
+  const execution = (await openIssue(page, resolved.id)).locator('[data-issue-execution]');
+  const restored = execution.locator('[data-issue-execution-restored]');
+  await openDetails(restored);
+  for (const note of [draft.text, draft.objective, draft.dependencies, pendingText]) {
+    await restored.getByText(note, { exact: true }).waitFor();
+  }
+  assert.equal(await execution.locator('form, button, input, select, textarea').count(), 0);
+  await execution.screenshot({ path: path.join(output, `historical-execution-${language}-${width}.png`) });
 
-  phase=`unknown-execution-refresh-${language}`;
-  const uncertain=await createIssue('Decision: an acknowledgement may arrive late','Follow the resolved construction exactly once.');delivery='unknown';execution=await openExecution(peer,uncertain.id);await execution.locator('[data-prepare-issue-execution]:enabled').waitFor();
-  const first=await submitExecution(peer,execution);assert.equal(first.delivery.status,'unknown');await execution.locator('[data-issue-execution-pending]').waitFor();
-  const beforeCommands=commands.filter(command=>command.type==='guidance').length;
-  const checkResponse=peer.waitForResponse(r=>r.request().method()==='GET'&&new URL(r.url()).pathname===`${projectPath}/feedback`);await execution.locator('[data-query-issue-execution]').click();assert.equal((await checkResponse).status(),200);await settled(peer);
-  assert.equal(commands.filter(command=>command.type==='guidance').length,beforeCommands);
-  assert.equal(await execution.locator('[data-retry-issue-execution]').count(),0);
-  await execution.screenshot({path:path.join(output,`unknown-execution-before-refresh-${language}-${width}.png`)});
-  await peer.reload();execution=await openExecution(peer,uncertain.id);await execution.locator('[data-issue-execution-pending]').waitFor();assert.equal(await execution.locator('[data-issue-execution-pending]').getAttribute('data-issue-execution-request'),first.requestId);assert.equal(await execution.locator('[data-prepare-issue-execution]').isDisabled(),true);
-  await execution.locator('[data-issue-execution-notice]').waitFor();assert.equal(await execution.locator('[data-retry-issue-execution]').count(),0);
-  await execution.screenshot({path:path.join(output,`unknown-execution-restored-${language}-${width}.png`)});
-  await peer.goto(origin+'/workspace.html?tab=inbox');execution=await openExecution(peer,uncertain.id);await execution.locator('[data-issue-execution-pending]').waitFor();assert.equal(await execution.locator('[data-issue-execution-pending]').getAttribute('data-issue-execution-request'),first.requestId);
-  assert.equal(commands.filter(command=>command.id===first.id).length,1);assert.equal(service.research.projects.detail(owner,project.id).feedback.filter(f=>f.issueSource?.issueId===uncertain.id).length,1);
-  service.research.projects.recordCommand(owner,project.id,first.id,{id:first.id,status:'delivered'});await peer.reload();execution=await openExecution(peer,uncertain.id);await peer.waitForFunction(()=>!document.querySelector('[data-issue-execution-pending]'));
-  checks.push({id:'A3-unknown-original-survives-refresh-and-reopen',language,width,originalRequestId:first.requestId,controlledDeliveries:1,newActionBlockedWhileUnknown:true,confirmedReceiptClearsPending:true});
-
-  phase=`missing-original-retry-and-changed-target-${language}`;
-  const interrupted=await createIssue('Decision: a request was not received','Send the original action once.');execution=await openExecution(peer,interrupted.id);await execution.locator('[data-prepare-issue-execution]:enabled').waitFor();
-  let interruptedBody:any,interruptionDone!:()=>void;const interruption=new Promise<void>(resolve=>interruptionDone=resolve);const feedbackPath=origin+`${projectPath}/feedback`;
-  await peer.route(feedbackPath,async route=>{if(route.request().method()==='POST'){interruptedBody=route.request().postDataJSON();await route.abort('failed');interruptionDone();}else await route.continue();});
-  await execution.locator('[data-prepare-issue-execution]').click();await execution.locator('[data-confirm-issue-execution]').check();await execution.locator('[data-send-issue-execution]').click();await interruption;await execution.locator('[data-issue-execution-pending]').waitFor();await peer.unroute(feedbackPath);
-  assert.ok(interruptedBody.requestId);await peer.reload();execution=await openExecution(peer,interrupted.id);await execution.locator('[data-retry-issue-execution]:enabled').waitFor();assert.equal(await execution.locator('[data-issue-execution-pending]').getAttribute('data-issue-execution-request'),interruptedBody.requestId);
-  const control=controls.get(run.id)!,originalObservation=structuredClone(control.observation);control.observation.history=[structuredClone(control.observation.inspection.tasks[0])];control.observation.inspection.tasks[0].version='goal-v2';control.observation.sources[0].taskVersion='goal-v2';control.observation.sequence=2;control.observation.snapshot.stateDigest=mathDigest('version-changed');control.emit();
-  await peer.reload();execution=await openExecution(peer,interrupted.id);await execution.locator('[data-retry-issue-execution]').waitFor();assert.equal(await execution.locator('[data-retry-issue-execution]').isDisabled(),true);assert.equal(await execution.locator('[data-issue-execution-pending]').getAttribute('data-issue-execution-request'),interruptedBody.requestId);
-  await execution.screenshot({path:path.join(output,`original-retry-blocked-changed-task-${language}-${width}.png`)});
-  control.observation={...originalObservation,sequence:3,snapshot:{...originalObservation.snapshot,stateDigest:mathDigest('task-version-restored')}};control.emit();await peer.reload();execution=await openExecution(peer,interrupted.id);await execution.locator('[data-retry-issue-execution]:enabled').waitFor();
-  const retriedResponse=peer.waitForResponse(r=>r.request().method()==='POST'&&new URL(r.url()).pathname===`${projectPath}/feedback`);await execution.locator('[data-retry-issue-execution]').click();const retryResponse=await retriedResponse;assert.equal(retryResponse.status(),201);const retryRecord=(await retryResponse.json()).item;assert.equal(retryRecord.requestId,interruptedBody.requestId);assert.equal(retryRecord.text,interruptedBody.text);assert.deepEqual(retryRecord.target,interruptedBody.target);assert.equal(commands.filter(command=>command.id===retryRecord.id).length,1);
-  checks.push({id:'A3-missing-request-retry-keeps-original-id-and-frozen-target',language,width,originalId:interruptedBody.requestId,retriedId:retryRecord.requestId,targetChangesBlockRetry:true,controlledDeliveries:1});
+  await execution.getByRole('link', {
+    name: language === 'zh' ? '查看此议题的执行反馈' : 'View execution feedback from this issue', exact: true,
+  }).click();
+  await page.waitForURL(url => url.hash === `#feedback-${feedbackId}`);
+  const feedback = page.locator(`#feedback-${feedbackId}`);
+  await feedback.getByText(savedText, { exact: true }).waitFor();
+  const feedbackSource = feedback.locator('[data-feedback-issue-source]');
+  assert.ok((await feedbackSource.locator('summary').innerText()).includes(resolved.title));
+  await openDetails(feedbackSource);
+  await feedbackSource.getByText(resolution.text, { exact: true }).waitFor();
+  assert.equal(await feedbackSource.locator('a').getAttribute('href'), `#issue-${resolved.id}`);
+  assert.ok((await feedbackSource.locator('code').innerText()).includes(target.taskRef.version));
+  await feedback.screenshot({ path: path.join(output, `historical-execution-feedback-${language}-${width}.png`) });
+  checks.push({ id: 'historical-execution-is-read-only', language, width, feedbackId, restoredDraft: true, savedResolutionVisible: true });
 
   phase=`issue-contribution-late-success-${language}`;
   const late=await createIssue('Control: later contribution keeps its explicit reply target');
-  let thread=(await http<{item:any}>(peer,'POST',`${projectPath}/issues/${late.id}/replies`,{requestId:crypto.randomUUID(),expectedRevision:late.revision,kind:'proposal',text:'Proposal A: use a constructor.'})).item;
-  thread=(await http<{item:any}>(peer,'POST',`${projectPath}/issues/${late.id}/replies`,{requestId:crypto.randomUUID(),expectedRevision:thread.revision,kind:'proposal',text:'Proposal B: use the elimination rule.'})).item;
+  let thread=(await http<{item:ResearchIssue}>(peer,'POST',`${projectPath}/issues/${late.id}/replies`,{requestId:crypto.randomUUID(),expectedRevision:late.revision,kind:'proposal',text:'Proposal A: use a constructor.'})).item;
+  thread=(await http<{item:ResearchIssue}>(peer,'POST',`${projectPath}/issues/${late.id}/replies`,{requestId:crypto.randomUUID(),expectedRevision:thread.revision,kind:'proposal',text:'Proposal B: use the elimination rule.'})).item;
   card=await openIssue(page,late.id);await openDetails(card.locator(':scope>details').last());const input=card.locator('textarea[id^="issue-input-"]');
   await card.locator('.collaboration-replies>li').first().getByRole('button',{name:language==='zh'?'回复此条':'Reply',exact:true}).click();await input.fill('First reply sent to proposal A.');
   const replyPath=`${projectPath}/issues/${late.id}/replies`;let release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve);releases.push(release);
@@ -204,10 +209,11 @@ try {
   if(language==='zh'){await service.close();service=makeService();await new Promise<void>((resolve,reject)=>{service.server.once('error',reject);service.server.listen(port,'127.0.0.1',resolve);});}
  }
  assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.equal(prohibited,0);
+ assert.deepEqual(executionWrites, []);assert.deepEqual(commands, []);
 }catch(cause){failure=cause;if(active&&!active.isClosed())await active.screenshot({path:path.join(output,'probe-failure.png'),fullPage:true}).catch(()=>{});}
 finally{
  releases.forEach(release=>release());
- await fs.writeFile(path.join(output,'report.json'),JSON.stringify({status:failure?'failed':'passed',at:new Date().toISOString(),...provenance,phase,findings,checks,dialogs,commands,controlledCheckCalls:compileCalls,realModels:0,realLean:0,externalMail:prohibited,errors,external,...(failure?{error:failure instanceof Error?failure.stack:String(failure)}:{})},null,2));
+ await fs.writeFile(path.join(output,'report.json'),JSON.stringify({status:failure?'failed':'passed',at:new Date().toISOString(),...provenance,phase,findings,checks,dialogs,commands,executionWrites,controlledCheckCalls:compileCalls,realModels:0,realLean:0,externalMail:prohibited,errors,external,...(failure?{error:failure instanceof Error?failure.stack:String(failure)}:{})},null,2));
  await browser.close();await service.close();await fs.rm(dataRoot,{recursive:true,force:true});await fs.writeFile(path.join(output,'cleanup.json'),JSON.stringify({browserClosed:true,serviceClosed:true,disposableDataRemoved:true}));
 }
 if(failure)throw failure;console.log(`Passed ${checks.length} collaboration action continuity workflows`);

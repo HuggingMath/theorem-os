@@ -68,7 +68,7 @@ const provider = Bun.serve({ hostname: '127.0.0.1', port: 0, idleTimeout: 0, asy
 type Pending = { input: WorkerFormalizationInput; send(message: WorkerFormalizationMessage): void; resolve(): void };
 const formalizations: Pending[] = [], runs: WorkerInput[] = [];
 const runner: WebRunner = {
-  async readiness() { return { ready: true, message: 'Disposable chat browser fixture' }; },
+  async readiness() { return { ready: true, nativeTeam: true, message: 'Disposable chat browser fixture' }; },
   formalize(input, send, signal) {
     return new Promise<void>(resolve => { formalizations.push({ input: structuredClone(input), send, resolve });
       signal.addEventListener('abort', () => resolve(), { once: true }); });

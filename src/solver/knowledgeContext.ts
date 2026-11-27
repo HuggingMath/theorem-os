@@ -1,5 +1,5 @@
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
-import type { CooperationState } from './cooperation';
+import type { CooperationState } from './cooperationShared';
 import type { ContextSection } from './contextCompiler';
 import { originalGoalTaskFocus } from './modules/search';
 import type { SolverProblem } from './problem';

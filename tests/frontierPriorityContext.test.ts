@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import * as contextCompiler from '../src/solver/contextCompiler';
-import type { CooperationState } from '../src/solver/cooperation';
+import type { CooperationState } from '../src/solver/cooperationShared';
 import type { SolverRunState } from '../src/solver/archive';
 import type { SolverProblem } from '../src/solver/problem';
 import { buildResearchContext } from '../src/solver/modules/context';
@@ -60,8 +60,6 @@ it.each(['lemma', 'goal', 'research', 'sketch'] as const)(
     expect(context.manifest!.included).toContainEqual(expect.objectContaining({ id: 'assignment-policy', required: true }));
     expect(context.message).toContain('Current delivery log: ' + assignmentDeliveryFile(action.assignment));
     expect(context.instructions).toContain('"kind":"helpers","declarations":');
-    expect(context.instructions).toContain('Use research-observe from .scratch/theoremos-help.md');
-    expect(context.toolHelp?.text).toContain("--finding '.scratch/finding.json'");
     if (kind === 'lemma' || kind === 'goal') {
       expect(context.instructions).toContain('save the assigned declaration and return for host checking');
     } else {

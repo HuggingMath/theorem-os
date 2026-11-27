@@ -67,7 +67,7 @@ export type ChatThreadProps = {
   onCancelTask?(): void;
   onStartResearch?(): void;
   onConfirmStatement?(): void;
-  planDecision?: { approval?: PlanApprovalProps; connected: boolean; onReview(): void; onEdit(): void; onApprove(): void };
+  planDecision?: { approval?: PlanApprovalProps; connected: boolean; onReview(): void; onEdit?(): void; onApprove(): void };
   startingResearch?: boolean;
   onRetry?(): void;
   onRetryAnswer?(message: WebConversationMessage): void;
@@ -86,7 +86,7 @@ function StatementDecision(props: ChatThreadProps) {
     <header><Icon name="languages" /><h3 id="chat-statement-decision-heading">{item.status === 'review' ? t('先确认：这是不是你要证明的题目？') : t('题意已由你确认')}</h3></header>
     <div class="chat-decision-mathematics" translate={false}><ChatMessageContent text={report.backtranslation?.mathematics ?? report.original} /></div>
     {!!report.backtranslation?.assumptions.length && <ul class="chat-decision-assumptions">{report.backtranslation.assumptions.map((assumption, index) => <li key={index} translate={false}><Rich text={assumption} /></li>)}</ul>}
-    <p class="chat-decision-next">{t('确认后，2 个 Agent 会拟定研究计划，等你批准再展开证明。')}</p>
+    <p class="chat-decision-next">{t('确认题意后，团队会拟定路线，等你批准再开始证明。')}</p>
     <div class="chat-task-actions">
       <button type="button" class="button" data-research-artifact="original" onClick={() => props.onArtifact('original')}><Icon name="languages" />{t('核对原题与 Lean')}</button>
       {props.onEditProblem && <button type="button" class="text-button" disabled={props.startingResearch} onClick={props.onEditProblem}>{t('修改题目')}</button>}
@@ -105,13 +105,15 @@ function PlanDecision(props: ChatThreadProps & { simple: boolean }) {
   const plan = run.observation?.plan, approval = decision.approval;
   // 简洁 keeps this card for the decision itself; afterwards the plan and its editing live in the workspace's roadmap.
   if (props.simple && !approval && (plan || !run.planApproval)) return null;
-  const approved = run.observation?.inspection.planApproval?.status === 'approved';
+  const approved = Boolean(run.initialPlanApproval) || run.observation?.inspection.planApproval?.status === 'approved';
   return <section class="chat-decision" data-chat-plan-decision data-waiting={Boolean(approval)} aria-labelledby="chat-plan-decision-heading">
     <header><Icon name="git-branch" /><h3 id="chat-plan-decision-heading">{approval ? approval.revising ? t('正在按你的意见修改计划') : t('研究计划，等你决定')
-      : !plan && run.planApproval ? t('正在拟定研究计划') : t('你可以调整这次研究')}</h3></header>
+      : !plan && run.planApproval && !approved ? t('正在拟定研究计划') : t('你可以调整这次研究')}</h3></header>
     <p class="chat-decision-next">{approval ? approval.revising ? t('正在按你的指导修改计划，修改期间计入执行预算。完成后等你确认。')
-      : t('先核对任务与依赖。等待确认不计入证明预算，批准后继续本次研究。')
-      : approved ? t('初始计划已由你批准。后续仍可修改任务、依赖和研究方向。')
+      : run.nativeTeamCapacity ? tx('请核对 Lead 的初始路线，批准后团队开始证明。', 'Review the Lead’s initial route, then approve it to start proving.')
+        : t('先核对任务与依赖。等待确认不计入证明预算，批准后继续本次研究。')
+      : approved ? run.nativeTeamCapacity ? tx('初始路线已批准，团队将继续证明。', 'The initial route is approved. The team will continue proving.')
+        : t('初始计划已由你批准。后续仍可修改任务、依赖和研究方向。')
         : run.planApproval && !plan ? t('计划拟好后会停下来，等你确认。') : t('修改任务会更新研究计划；指导意见会发送给研究组。')}</p>
     {plan && <DecisionSummary plan={plan} previousPlan={previousPlan} expectedVersion={approval ? run.observation?.inspection.planApproval?.planVersion : undefined}
       onOpenTask={id => props.onArtifact('roadmap', { taskId: id })} />}
@@ -124,7 +126,7 @@ function PlanDecision(props: ChatThreadProps & { simple: boolean }) {
     <div class="chat-task-actions">
       {plan && <>
         <button type="button" class="button" data-chat-review-plan data-research-artifact="plan" onClick={decision.onReview}><Icon name="network" />{t('查看全部 {0} 项任务', plan.tasks.length)}</button>
-        <button type="button" class="button" data-chat-edit-plan disabled={!decision.connected || approval?.busy || approval?.revising} onClick={decision.onEdit}><Icon name="square-pen" />{t('修改任务与依赖')}</button>
+        {decision.onEdit && <button type="button" class="button" data-chat-edit-plan disabled={!decision.connected || approval?.busy || approval?.revising} onClick={decision.onEdit}><Icon name="square-pen" />{t('修改任务与依赖')}</button>}
       </>}
       {props.onGuidance && <button type="button" class="text-button" data-research-guidance onClick={() => props.onGuidance?.()}>{t('调整研究方向')}</button>}
       {approval && <button type="button" class="button button-primary" data-chat-approve-plan disabled={!decision.connected || approval.busy || approval.revising || approval.reviewable === false || !plan} onClick={decision.onApprove}>
@@ -407,7 +409,7 @@ export type ChatComposerProps = {
   keyManagement?: { busy: boolean; ending?: string; notice?: string; onSave(): void; onDelete(): void };
   tabKeyMemory?: { remembered: boolean; notice?: string; onChange(value: boolean): void };
   guidanceAction?: { ready: boolean; onOpen(): void };
-  participation: 'guided' | 'automatic'; onParticipation(value: 'guided' | 'automatic'): void; participationLocked: boolean;
+  participation: 'guided' | 'automatic'; onParticipation(value: 'guided' | 'automatic'): void; participationLocked: boolean; guidedAvailable: boolean;
   submissionRecovery?: { busy: boolean; onRecover(): void; onPrepareEdited(): void };
   guidanceRecovery?(): void;
   guidance?: { target: string; targets: { id: string; label: string }[]; onTarget(id: string): void; onCancel(): void; onConfirmTarget?(): void };
@@ -623,13 +625,14 @@ function ChatComposer(props: ChatComposerProps) {
               disabled={props.checkingConnection || !props.model.trim() || props.keyRequired && !props.apiKey.trim()}>{props.checkingConnection ? t('正在检查连接…') : t('检查 Key 与模型')}</button></div>
             {props.connection && <p class="field-note" id="chat-connection-result" role="status" data-status={props.connection.status}>{props.connection.message}</p>}
             </div>
-            {props.newProblem && <fieldset class="chat-participation" data-chat-participation disabled={props.submitting || props.participationLocked}>
-              <legend>{t('研究方式')}</legend>
-              <label><input type="radio" name="chat-participation" value="guided" checked={props.participation === 'guided'} onChange={() => props.onParticipation('guided')} />
-                <span><strong>{t('共同推进')}</strong><span>{t('题意和初始计划由你确认 · 2 个 Agent')}</span></span></label>
-              <label><input type="radio" name="chat-participation" value="automatic" checked={props.participation === 'automatic'} onChange={() => props.onParticipation('automatic')} />
-                <span><strong>{t('自动推进')}</strong><span>{t('自动核对并开始证明 · 1 个 Agent')}</span></span></label>
-            </fieldset>}
+            {props.newProblem && (props.guidedAvailable || props.participationLocked && props.participation === 'guided') &&
+              <fieldset class="chat-participation" data-chat-participation disabled={props.submitting || props.participationLocked}>
+                <legend>{t('研究方式')}</legend>
+                <label><input type="radio" name="chat-participation" value="automatic" checked={props.participation === 'automatic'} onChange={() => props.onParticipation('automatic')} />
+                  <span><strong>{t('自动推进')}</strong><span>{tx('核对题意后，原生团队自动开始证明', 'The native team starts proving after checking the statement')}</span></span></label>
+                <label><input type="radio" name="chat-participation" value="guided" checked={props.participation === 'guided'} onChange={() => props.onParticipation('guided')} />
+                  <span><strong>{t('先审路线再开工')}</strong><span>{tx('你确认题意和初始路线后，原生团队开始证明', 'The native team starts proving after you approve the statement and initial route')}</span></span></label>
+              </fieldset>}
             <details class="chat-advanced-settings" data-chat-advanced-settings><summary>{tx('环境与预算', 'Environment and limits')}</summary>
               <div class="chat-advanced-settings-fields">
               <div class="chat-settings-options"><label for="formalize-environment">{t("证明环境")}<select id="formalize-environment" value={props.environment} onChange={event => props.onEnvironment(event.currentTarget.value as ChatComposerProps['environment'])} disabled={props.hasConversation}><option value="mathlib">{t('TheoremOS 数学环境')}</option><option value="standard" hidden>{t('Lean 标准库')}</option></select></label></div>

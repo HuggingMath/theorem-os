@@ -20,7 +20,7 @@ const output = path.join(root, 'out/web-formalize'); await fs.mkdir(output, { re
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;
 const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin,
   THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web') }), {
-  async readiness() { return { ready: true, message: 'Fixture only' }; },
+  async readiness() { return { ready: true, nativeTeam: true, message: 'Fixture only' }; },
   async run() { throw new Error('This UI test must never call a model'); },
 });
 const original = '  For every natural number n, prove $n + 0 = n$.\n\nKeep this exact text.  ';

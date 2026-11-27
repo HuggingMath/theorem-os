@@ -84,23 +84,36 @@ export function initializeRequestUsageAccounting(record: UsageRecord): void {
       (!record.usageAccounting && record.turns > 0)) };
 }
 
+// Keep the checkpoint array in append order and index it only while it is live.
+const requestReceiptIndexes = new WeakMap<RequestUsageObservation[], Map<string, RequestUsageObservation>>();
+
 /** Each lease represents exactly one attempted upstream request, independent of native thread counters. */
 export function beginRequestUsage(record: UsageRecord, identity: Partial<ModelRequestIdentity> & {
   runId?: string; sessionId?: string; taskId?: string; startedAt?: number;
-} = {}): (receipt: ModelRequestReceipt) => void {
+} = {}): (receipt: ModelRequestReceipt) => Exclude<RequestUsageObservation['status'], 'pending'> {
   const accounting = record.requestUsageAccounting!;
   const requestId = identity.requestId ?? randomUUID();
   const receipts = accounting.receipts ??= [];
-  let observation = receipts.find(item => item.requestId === requestId);
+  let byId = requestReceiptIndexes.get(receipts);
+  if (!byId) {
+    byId = new Map();
+    for (const receipt of receipts) {
+      // Historical checkpoints use the first receipt if an ID is repeated.
+      if (!byId.has(receipt.requestId)) byId.set(receipt.requestId, receipt);
+    }
+    requestReceiptIndexes.set(receipts, byId);
+  }
+  let observation = byId.get(requestId);
   if (!observation) {
     observation = { ...identity, requestId, startedAt: identity.startedAt ?? Date.now(), status: 'pending' };
     receipts.push(observation);
+    byId.set(requestId, observation);
     accounting.startedRequests++;
     accounting.pendingRequests++;
   }
   return receipt => {
     // The persisted identity also deduplicates settlement after checkpoint serialization/replay.
-    if (observation.status !== 'pending') return;
+    if (observation.status !== 'pending') return observation.status;
     accounting.pendingRequests--;
     const usage = normalizeModelRequestUsage(receipt.usage);
     let valid = usage !== undefined;
@@ -120,6 +133,7 @@ export function beginRequestUsage(record: UsageRecord, identity: Partial<ModelRe
       observation.missingReason = receipt.missingReason ?? (receipt.usage === undefined ? 'provider-usage-missing' :
         !valid ? 'provider-usage-invalid' : 'unknown');
     }
+    return observation.status;
   };
 }
 

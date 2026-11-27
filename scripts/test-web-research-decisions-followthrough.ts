@@ -7,6 +7,7 @@ import path from 'node:path';
 import type { Page } from 'playwright';
 import { createWebService } from '../apps/web/server';
 import { readWebConfig } from '../apps/web/config';
+import { webAgentTeamPreset } from '../apps/web/researchMode';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebObservation } from '../apps/web/collaboration';
 import type { ResearchFeedback } from '../apps/web/researchProjectTypes';
@@ -31,6 +32,11 @@ const runner: WebRunner = {
     observation.plan!.baseVersion = 'decision-plan-1'; observation.guidance = []; observation.inspection.edits = [];
     observation.inspection.planApproval = input.input.model === 'fixture-approval'
       ? { required: true, status: 'pending', planVersion: 'decision-plan-1', rejections: [], leadRevising: false } : undefined;
+    if (input.input.nativeTeamCapacity) Object.assign(observation.inspection.configuration, {
+      workers: 1, coordination: 'independent', researchMode: 'skill',
+      researchSkill: { name: 'theoremos-research', digest: mathDigest('fixture skill'), loading: 'native' },
+      researchDelegation: { mode: 'team', maxAgents: input.input.nativeTeamCapacity },
+    });
     for (const check of observation.checks) check.record = { passed: true };
     originals.set(input.id, structuredClone(observation)); send({ type: 'observation', observation: structuredClone(observation) });
     if (input.input.model === 'fixture-history') {
@@ -79,7 +85,8 @@ try {
     service.research.projects.saveProfile(owner, { requestId: 'owner-profile', expectedRevision: 0, displayName: 'Project Owner', visibility: 'public' });
     service.research.projects.saveProfile(peerOwner, { requestId: 'private-peer-profile', expectedRevision: 0, displayName: 'Private Teammate', visibility: 'private', bio: 'PRIVATE_PROFILE_BIO' });
     const create = (model: string) => service.jobs.create(owner, { providerId: provider.id, apiKey: 'sk-disposable-not-sent', model, effort: 'high', source,
-      task: 'Trace the saved mathematical route', environment: 'standard', maxTurns: 2, maxRunSeconds: 600, workers: 1, coordination: 'cooperative' }, provider);
+      task: 'Trace the saved mathematical route', environment: 'standard', maxTurns: 2, maxRunSeconds: 600, ...(model === 'fixture-approval' ? { ...webAgentTeamPreset(), planApproval: true }
+        : { workers: 1, coordination: 'cooperative' }) }, provider);
     const history = create('fixture-history'); await page.waitForFunction(async id => (await (await fetch(`/api/runs/${id}`)).json()).run.status === 'completed', history.id);
     let project = service.research.projects.create(owner, { requestId: 'project', title: 'Decision continuity', visibility: 'members' });
     project = service.research.projects.setMember(owner, project.id, peerId, { requestId: 'private-peer', expectedRevision: project.revision, role: 'collaborator' });

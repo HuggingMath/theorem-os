@@ -9,7 +9,6 @@ import { mathDigest } from '../src/math/mathRuntimeIo';
 import { runInspectionSnapshot } from '../src/solver/inspection';
 import { buildResearchContext } from '../src/solver/modules/context';
 import { assignmentDeliveryFile, taskVersion, type CooperativeAction } from '../src/solver/tasks';
-import { cooperativeResearch } from './helpers/cooperation';
 import { webWorkerFixture } from './helpers/webWorkerBridge';
 
 const roots: string[] = [];
@@ -104,76 +103,6 @@ describe('independent host guidance input', () => {
     await deliverHumanGuidance(checkpoint); await deliverHumanGuidance(checkpoint);
     expect(notify).toHaveBeenCalledTimes(2);
     expect(readHumanGuidance(f.stateFile, f.state.runId)[0]).toMatchObject({ status: 'failed', reason: 'fixture_transport_failed' });
-  });
-
-  it('uses the cooperative host checkpoint and preserves role/task ownership', async () => {
-    const f = fixture(), input = guidanceFor(f); await queueHumanGuidance(f.output, input);
-    const workerWorktree = path.join(path.dirname(f.stateFile), 'engineer');
-    execFileSync('git', ['-C', f.worktree, 'worktree', 'add', '--detach', '--quiet', workerWorktree, f.currentCommit]);
-    const worker = { id: 'engineer', role: 'engineer' as const, worktree: workerWorktree, ownedFiles: f.state.problem.ownedFiles };
-    const lead = { ...worker, id: 'solver', role: 'lead' as const, worktree: f.worktree };
-    const node = f.state.cooperation!.tasks[1];
-    const assignment = { taskId: 'goal', taskDigest: taskVersion(f.goal), workerId: worker.id, seedCommit: f.currentCommit };
-    node.assignment = assignment; node.status = 'running';
-    const host = cooperativeResearch({ state: f.state, workers: [lead, worker], retrievalRoot: f.directory });
-    const notify = vi.fn(async (_message: string) => {});
-    const action: CooperativeAction = { kind: 'task', task: node.task, assignment };
-    host.activate(worker, action, async () => {}, notify);
-    await host.pulse(worker.id);
-    expect(notify).toHaveBeenCalledOnce();
-    expect(readHumanGuidance(f.stateFile, f.state.runId)[0]).toMatchObject({ status: 'delivered', deliveredTo: ['engineer'] });
-    host.deactivate(worker);
-    expect(node.assignment).toBe(assignment); expect(node.task).toEqual(f.goal);
-
-    const scoped = host.contextState(action, worker);
-    const problem = { ...f.state.problem, declarations: { 'Submission.lean': [{ name: 'goal', header: 'goal : True' }] } };
-    const context = buildResearchContext(problem, { ...f.state, problem, cooperation: scoped }, { root: f.directory,
-      worktree: workerWorktree, retrievalRoot: f.directory, environment: {}, taskText: 'Prove the original goal.', assignment: action });
-    for (const message of [context.message, context.continuationMessage]) {
-      expect(message).toContain('COOPERATION.json.humanGuidance');
-      expect(message).toContain(input.id);
-      expect(message).toContain('guidanceDecisions');
-      expect(message).not.toContain(input.text);
-    }
-    host.activate(worker, action, async () => {}, notify);
-    const readView = (worktree: string) => JSON.parse(fs.readFileSync(path.join(worktree, 'COOPERATION.json'), 'utf8'));
-    expect(readView(workerWorktree).humanGuidance).toEqual([expect.objectContaining({ id: input.id, text: input.text, taskRef: input.taskRef })]);
-    expect(readView(f.worktree).humanGuidance).toBeUndefined();
-    host.deactivate(worker);
-  });
-
-  it('delivers a complete 128 KiB advisory candidate to the actual assigned agent without executing or writing it', async () => {
-    const f = fixture(), sentinel = path.join(f.directory, 'candidate-must-never-execute');
-    const prefix = f.source.replace('by sorry', 'by trivial') + '\n/-';
-    const suffix = `-/\n-- $(touch ${sentinel})\n-- COMPLETE-CANDIDATE-END\n`;
-    const source = prefix + 'x'.repeat(128 * 1024 - Buffer.byteLength(prefix + suffix)) + suffix;
-    const input: HumanGuidanceInput = { ...guidanceFor(f), candidate: candidateFor(f, source) };
-    expect(Buffer.byteLength(source)).toBe(128 * 1024);
-    expect(webGuidanceSchema.parse(input).candidate?.source).toBe(source);
-    const before = fs.readFileSync(path.join(f.project, 'Submission.lean')), checkpoint = fs.readFileSync(f.stateFile);
-    expect((await queueHumanGuidance(f.output, input)).candidate).toEqual(input.candidate);
-    expect((await queueHumanGuidance(f.output, input)).candidate).toEqual(input.candidate);
-    const worker = { id: 'engineer', role: 'engineer' as const, worktree: f.worktree, ownedFiles: f.state.problem.ownedFiles };
-    const lead = { ...worker, id: 'solver', role: 'lead' as const }, node = f.state.cooperation!.tasks[1];
-    const assignment = { taskId: 'goal', taskDigest: taskVersion(f.goal), workerId: worker.id, seedCommit: f.currentCommit };
-    node.assignment = assignment; node.status = 'running';
-    const host = cooperativeResearch({ state: f.state, workers: [lead, worker], retrievalRoot: f.directory });
-    const notify = vi.fn(async (_message: string) => {});
-    host.activate(worker, { kind: 'task', task: node.task, assignment }, async () => {}, notify);
-    await host.pulse(worker.id); await host.pulse(worker.id);
-    expect(notify).toHaveBeenCalledOnce();
-    const message = notify.mock.calls[0][0];
-    expect(message).toContain(source); expect(message).toContain(input.candidate!.sourceDigest);
-    expect(message).toContain(input.candidate!.baseSourceDigest);
-    expect(message).toContain('ordinary task delivery and declaration integration');
-    expect(message).toContain('independent S3 acceptance');
-    expect(readHumanGuidance(f.stateFile, f.state.runId)[0]).toMatchObject({ status: 'delivered', deliveredTo: ['engineer'], candidate: input.candidate });
-    expect(fs.readFileSync(path.join(f.project, 'Submission.lean'))).toEqual(before);
-    expect(fs.readFileSync(f.stateFile)).toEqual(checkpoint);
-    expect(fs.existsSync(sentinel)).toBe(false);
-    expect(fs.existsSync(path.join(path.dirname(f.stateFile), 'edits.jsonl'))).toBe(false);
-    expect(node.status).toBe('running'); expect(node.proof).toBeUndefined();
-    host.deactivate(worker);
   });
 
   it('rejects malformed candidate bytes, paths, digests, task bindings and executable fields in both entry schemas', () => {
@@ -314,64 +243,4 @@ describe('independent host guidance input', () => {
     expect(readHumanGuidance(f.stateFile, f.state.runId)[0].decision).toBeUndefined();
   });
 
-  it('accepts structured decisions from the actual worker delivery log and scopes recovery context to that worker', async () => {
-    const f = fixture(), input = guidanceFor(f); await queueHumanGuidance(f.output, input);
-    const worker = { id: 'engineer', role: 'engineer' as const, worktree: f.worktree, ownedFiles: f.state.problem.ownedFiles };
-    const lead = { ...worker, id: 'solver', role: 'lead' as const }, node = f.state.cooperation!.tasks[1];
-    const assignment = { taskId: 'goal', taskDigest: taskVersion(f.goal), workerId: worker.id, seedCommit: f.currentCommit };
-    const action: CooperativeAction = { kind: 'task', task: node.task, assignment };
-    node.assignment = assignment; node.status = 'running';
-    const emit = vi.fn();
-    const host = cooperativeResearch({ state: f.state, workers: [lead, worker], retrievalRoot: f.directory, emit });
-    host.activate(worker, action, async () => {}, async () => {});
-    await host.pulse(worker.id);
-    fs.appendFileSync(path.join(f.worktree, assignmentDeliveryFile(assignment)), JSON.stringify({
-      summary: 'I accepted this guidance in prose.',
-    }) + '\n');
-    await host.pulse(worker.id);
-    expect(readHumanGuidance(f.stateFile, f.state.runId)[0].decision).toBeUndefined();
-    fs.appendFileSync(path.join(f.worktree, assignmentDeliveryFile(assignment)), JSON.stringify({
-      summary: 'I have read the exact human premise.', guidanceDecisions: [decisionFor(input)],
-    }) + '\n');
-    await host.pulse(worker.id); await host.pulse(worker.id);
-    const record = readHumanGuidance(f.stateFile, f.state.runId)[0];
-    expect(record.decision).toMatchObject({ status: 'accepted', workerId: worker.id, sourceTaskRef: input.taskRef });
-    expect(emit.mock.calls.filter(call => call[0] === 'human_guidance_decided')).toHaveLength(1);
-    fs.appendFileSync(path.join(f.worktree, assignmentDeliveryFile(assignment)), JSON.stringify({
-      summary: 'The relevant task reference is now recorded.',
-      guidanceDecisions: [{ ...decisionFor(input), evidenceRefs: [{ kind: 'task', ...input.taskRef! }] }],
-    }) + '\n');
-    await host.pulse(worker.id);
-    const supplemented = readHumanGuidance(f.stateFile, f.state.runId)[0];
-    expect(supplemented.decision?.evidenceRefs).toEqual([{ kind: 'task', ...input.taskRef! }]);
-    expect(supplemented.decision?.decidedAt).toBe(record.decision?.decidedAt);
-    expect(emit.mock.calls.filter(call => call[0] === 'human_guidance_decided')).toHaveLength(2);
-    expect(host.contextState(action, worker).humanGuidance?.[0].decision).toEqual(supplemented.decision);
-    expect(host.contextState(undefined, lead).humanGuidance).toEqual([]);
-    expect(node.status).toBe('running'); expect(node.proof).toBeUndefined();
-    expect(f.state.cooperation!.deliveries!.filter(item => item.producer === worker.id).every(item => item.kind === 'progress')).toBe(true);
-    host.deactivate(worker);
-  });
-
-  it('reads a Lead handling decision from the real final role response after delivery', async () => {
-    const f = fixture(), input = { ...guidanceFor(f), recipient: { kind: 'lead' as const }, taskRef: undefined };
-    await queueHumanGuidance(f.output, input);
-    const lead = { id: 'solver', role: 'lead' as const, worktree: f.worktree, ownedFiles: f.state.problem.ownedFiles };
-    const worker = { ...lead, id: 'engineer', role: 'engineer' as const };
-    const host = cooperativeResearch({ state: f.state, workers: [lead, worker], retrievalRoot: f.directory });
-    const action: CooperativeAction = { kind: 'lead', seedCommit: f.currentCommit, planVersion: 'plan-v1' };
-    host.activate(lead, action, async () => {}, async () => {}); await host.pulse(lead.id);
-    expect(readHumanGuidance(f.stateFile, f.state.runId)[0].decision).toBeUndefined();
-    fs.writeFileSync(path.join(f.worktree, 'RESEARCH.md'), JSON.stringify({
-      tasks: f.state.cooperation!.tasks.map(node => node.task), summary: 'I accepted the human direction in prose.',
-      guidanceDecisions: [{ ...decisionFor(input), status: 'declined', reason: 'This premise does not apply to the fixed target.' }],
-    }));
-    const commit = f.commit();
-    await host.deliver(lead, action, commit);
-    expect(readHumanGuidance(f.stateFile, f.state.runId)[0].decision).toMatchObject({
-      status: 'declined', workerId: lead.id, sourcePlanVersion: 'plan-v1', evidenceRefs: [],
-    });
-    expect(f.state.cooperation!.tasks.find(node => node.task.id === 'goal')?.proof).toBeUndefined();
-    host.deactivate(lead);
-  });
 });

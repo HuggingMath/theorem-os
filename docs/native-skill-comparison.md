@@ -6,7 +6,7 @@
 
 | 臂 | 执行方式 | 本轮边界 |
 | --- | --- | --- |
-| `native-skill` | 直接 `createCodexMathSession`，一次 `session.run` | 绕过 `runSolver`、`runResearchWorkers` 和 M1–M5；任务内由原生 Codex 自主调用工具，返回后做验收 |
+| `native-skill` | 直接 `createCodexMathSession`，一次 `session.run` | 直接启动单个 Codex 会话，由它自主调用工具，返回后做验收 |
 | `runtime-skill` | 普通 `bin/math.ts run --research-mode skill` | 现有 Skill 研究循环、停止写入、反馈与后续 dispatch |
 
 原生基线复用现有 app-server adapter，以对齐权限、Lean diagnostics、原生 Skill 和上游请求计费。它不是默认的 `codex exec`。共享的静态数学指导和工具帮助由 `buildCommonResearchGuide` 产生；两臂自己的交付协议仍然不同。native 侧不会处理任务内 helper 提交或发出纠正 turn，runtime 侧保留当前循环的行为。

@@ -16,8 +16,6 @@ import { startFormalizationRelay } from './formalizationRelay';
 import { mathDigest, readMathText } from '../math/mathRuntimeIo';
 import { scheduleMathTimeout } from '../math/mathTimers';
 import { assertMathAgentSkillsCurrent, assertMathAgentSkillsDiscovered } from './codexSkills';
-import { INVESTIGATION_TOOL, INVESTIGATOR_PERMISSION_PROFILE, NativeInvestigations,
-  nativeInvestigationTool, validateNativeDelegation } from './nativeDelegation';
 import { planMathAgentSession } from './agentSessionPlan';
 import { MathAgentToolDispatcher } from './agentTeamTools';
 import { confirmHarnessProcessStopped, prepareHarnessProcess, readHarnessProcessIdentity, type HarnessProcessIdentity } from './harnessProcess';
@@ -42,6 +40,37 @@ const completedAssistantText = (value: unknown): string | undefined => {
   if (item.type === 'agentMessage' && typeof item.text === 'string' && item.text.trim() &&
       (item.phase === undefined || item.phase === null || item.phase === 'final_answer')) return item.text;
 };
+
+function acceptedTeamHandoff(item: Json, readOnlyWorkspace: boolean | undefined): boolean {
+  if (item.type !== 'dynamicToolCall' || item.tool !== 'theoremos_team' || item.namespace != null ||
+      item.success !== true || !Array.isArray(item.contentItems)) return false;
+  const args = item.arguments;
+  if (!args || typeof args !== 'object' || !('operation' in args)) return false;
+  const output = item.contentItems[0];
+  if (output?.type !== 'inputText' || typeof output.text !== 'string') return false;
+  let result: Json;
+  try { result = object(JSON.parse(output.text)); }
+  catch { return false; }
+  if (result.ok !== true) return false;
+  switch (args.operation) {
+    case 'publish_plan':
+      return Boolean(readOnlyWorkspace) && result.status === 'pending';
+    case 'finish':
+    case 'submit':
+    case 'submit_helpers':
+    case 'yield':
+      return result.status === 'pending-writer-stop';
+    case 'adopt': {
+      const adoption = result.adoption;
+      if (!adoption || typeof adoption !== 'object') return false;
+      const { targetId, status } = adoption as Json;
+      return targetId === 'lead' && (status === 'queued' || status === 'integrating');
+    }
+    default:
+      return false;
+  }
+}
+
 const RELAY_CAPABILITY_ENV = 'THEOREM_OS_MODEL_RELAY_CAPABILITY';
 // Responses may remain silent between completed reasoning and their next tool/output event.
 // Restore Codex's default idle tolerance per session, preserving frozen provider profiles.
@@ -66,13 +95,6 @@ export function mathWorkerPermissionConfig(workspace: string, hiddenRoots: reado
     [`permissions.${MATH_WORKER_PERMISSION_PROFILE}.network.enabled`]: true,
     'features.network_proxy': { enabled: true, domains: {}, dangerously_allow_all_unix_sockets: true },
   };
-}
-
-function investigatorPermissionConfig(workspace: string, hiddenRoots: readonly string[] = []): Json {
-  const hidden = ['/run', '/tmp', ...hiddenRoots].filter(root => workspace !== root && !workspace.startsWith(`${root}/`));
-  return { [`permissions.${INVESTIGATOR_PERMISSION_PROFILE}.filesystem`]: {
-    '/': 'read', [workspace]: 'read', ...Object.fromEntries(hidden.map(root => [root, 'none'])),
-  }, [`permissions.${INVESTIGATOR_PERMISSION_PROFILE}.network.enabled`]: false };
 }
 
 const object = (value: unknown): Json => {
@@ -295,11 +317,12 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   if (skills.length && options.readIsolation) throw new Error('math_codex_skill_read_isolation_unsupported');
   if (options.tools && options.readIsolation) throw new Error('math_codex_tools_read_isolation_unsupported');
   if (options.isolateProcess && options.readIsolation) throw new Error('math_codex_process_isolation_role_conflict');
-  if (options.nativeAgentControl && (options.readIsolation || options.delegation))
+  if (options.readOnlyWorkspace && !options.isolateProcess) throw new Error('math_codex_read_only_workspace_requires_process_isolation');
+  if (options.nativeAgentControl && options.readIsolation)
     throw new Error('math_native_agent_control_role_conflict');
   const tools = options.tools ? new MathAgentToolDispatcher(options.tools,
     (calledThread, calledTurn) => calledThread === threadId && activeTurn === calledTurn &&
-      !turnSettled && !turnStopping && !closing, options.delegation ? [INVESTIGATION_TOOL] : []) : undefined;
+      !turnSettled && !turnStopping && !closing) : undefined;
   const configFile = path.join(options.profile, 'config.toml');
   const frozenConfig = fs.existsSync(configFile) ? fs.readFileSync(configFile, 'utf8') : undefined;
   const profileConfig = frozenConfig === undefined ? {} : parseToml(frozenConfig);
@@ -314,9 +337,6 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   const webNativeTeam = providerId === 'web_provider' && Boolean(options.nativeAgentControl);
   const useResponsesRelay = (providerId === SUB2API_PROVIDER.id || webNativeTeam) &&
     !options.readIsolation && Boolean(options.requestGate);
-  if (options.delegation && (!skills.length || !useResponsesRelay))
-    throw new Error('math_native_delegation_requires_skill_and_metered_relay');
-  if (options.delegation) validateNativeDelegation(options.delegation);
   const executionPlan = planMathAgentSession('codex', options.nativeAgentControl?.initialInput
     ? { ...options, skills: skills.map(skill => ({ ...skill, loading: 'file' as const })) } : options);
   const activeRequests = new Set<object>();
@@ -336,7 +356,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   });
   let checkCompletedOutput: (() => void) | undefined;
   let completedOutputWatch: { id: string; file: string; changed(): void } | undefined;
-  let checkTurnCheckpoint: (() => boolean) | undefined;
+  let checkTurnCheckpoint: ((atRequestBoundary?: boolean) => boolean) | undefined;
   const requestGate: ModelRequestGate = identity => {
     // A tool can submit and immediately request more model work before fs/changed arrives.
     // Inspect that file synchronously before admitting another paid request.
@@ -506,21 +526,15 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       } as const : {}) },
   };
   let closing: Promise<void> | undefined;
-  let investigations: NativeInvestigations | undefined;
   let boundTurn: Promise<string | undefined> = Promise.resolve(undefined);
   let bindTurn: ((turnId?: string) => void) | undefined;
   const closeSession = () => closing ??= (async () => {
     options.signal?.removeEventListener('abort', aborted);
     compacting?.reject(new Error('math_codex_compaction_closed'));
     turnStopping = true; cancelNotifications(); publicItems.clear();
-    bindTurn?.(); investigations?.stop(); tools?.stop(); nativeControl?.stop();
+    bindTurn?.(); tools?.stop(); nativeControl?.stop();
     try { await rpc.close(); } finally {
       try { await responsesRelay?.close(); } finally { try { await bridge?.close(); } finally { await isolated?.close(); } }
-      if (investigations) {
-        await investigations.settled();
-        const receipt = await rpc.confirmStopped();
-        investigations.confirmStopped(receipt.status === 'stopped');
-      }
       await tools?.settled();
       await nativeControl?.settled();
     }
@@ -555,7 +569,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     notices.clear(); releaseFence();
   };
   const flushNotifications = (atRequest = false): NotificationFence | undefined => {
-    if (!notices.size || activeRequests.size || investigations?.busy || tools?.busy || notificationFence || !activeTurn || turnSettled || turnStopping || turnCheckpointReached || closing) return;
+    if (!notices.size || activeRequests.size || tools?.busy || notificationFence || !activeTurn || turnSettled || turnStopping || turnCheckpointReached || closing) return;
     if (![...notices].some(notice => !notice.waitForRequest || atRequest)) return;
     const turnId = activeTurn, turn = requestTurn;
     let release!: () => void;
@@ -707,23 +721,20 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     cancelNotifications(); publicItems.clear();
     transportFailure = error; lastError = error.message; lastFailureDiagnostic = undefined;
     completion?.reject(error); compacting?.reject(error);
-    investigations?.stop(); tools?.stop(); nativeControl?.stop(); bindTurn?.();
+    tools?.stop(); nativeControl?.stop(); bindTurn?.();
     if (!closing) {
       void closeSession().catch(() => {});
     }
   };
   rpc.onRequest = async (method, params) => {
     if (method === NATIVE_AGENT_CONTROL_REQUEST && nativeControl) return nativeControl.call(params);
-    if (method !== 'item/tool/call' || !investigations && !tools) return;
+    if (method !== 'item/tool/call' || !tools) return;
     const turnId = await boundTurn;
     if (!turnId || params.turnId !== turnId) return { contentItems: [{ type: 'inputText',
       text: 'math_agent_tool_turn_mismatch' }], success: false };
-    if (investigations && params.tool === INVESTIGATION_TOOL) return investigations.call(params);
-    if (tools) {
-      const result = await tools.call(params);
-      flushNotifications();
-      return result;
-    }
+    const result = await tools.call(params);
+    flushNotifications();
+    return result;
   };
   rpc.onNotification = (method, params) => {
     if (method === 'fs/changed') {
@@ -734,7 +745,6 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         completedOutputWatch.changed();
       return;
     }
-    investigations?.observe(method, params);
     if (threadId !== undefined && params.threadId !== undefined && params.threadId !== threadId) return;
     if (compacting && method === 'turn/started') {
       const { id } = object(params.turn);
@@ -742,6 +752,11 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     }
     if (method === 'item/started' || method === 'item/completed') {
       const item = object(params.item);
+      // Direct providers have no request relay. The completed tool item confirms
+      // that Codex received the accepted handoff before we check whether to stop.
+      if (!usesRequestReceipts && method === 'item/completed' && activeTurn &&
+          params.threadId === threadId && params.turnId === activeTurn && acceptedTeamHandoff(item, options.readOnlyWorkspace))
+        checkTurnCheckpoint?.(false);
       if (compacting?.turnId && method === 'item/completed' && params.turnId === compacting.turnId
         && item.type === 'contextCompaction') compacting.installed = true;
       if (isTurnOutputItem(item)) recordTurnOutput(params.turnId);
@@ -810,7 +825,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   try {
     options.signal?.throwIfAborted();
     const processIdentity = await rpc.processIdentity;
-    await rpc.initialize(Boolean(options.delegation || options.tools || nativeControl));
+    await rpc.initialize(Boolean(options.tools || nativeControl));
     await nativeControl?.initialize();
     const inherited = profileConfig.mcp_servers;
     const disabled = Object.fromEntries(Object.keys(inherited ?? {}).map(name => [name, { enabled: false }]));
@@ -857,7 +872,6 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         model_reasoning_effort: options.effort,
         // The formalization sandbox is the OS boundary for isolated roles; every other shell runs the worker profile.
         ...(!isolated ? { ...mathWorkerPermissionConfig(options.workspace, options.hiddenRoots),
-          ...(options.delegation ? investigatorPermissionConfig(options.workspace, options.hiddenRoots) : {}),
           ...shellCredentialPolicy, ...shellTemporaryPolicy } : {}),
         ...providerSettings,
       },
@@ -873,9 +887,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     const threadSettings = {
       ...settings,
       ...(options.threadId ? { threadId: options.threadId, ...(metadataOnlyResume ? { excludeTurns: true } : {}) } : {}),
-      ...(!options.threadId && (options.delegation || tools?.definitions.length) ? { dynamicTools: [
-        ...(options.delegation ? [nativeInvestigationTool(options.delegation.maxAgents)] : []), ...(tools?.definitions ?? []),
-      ] } : {}),
+      ...(!options.threadId && tools?.definitions.length ? { dynamicTools: tools.definitions } : {}),
     };
     const result = await rpc.request(bootstrap ? 'theoremos/agentControl/start' : options.threadId ? 'thread/resume' : 'thread/start',
       bootstrap ? { version: 1, bootstrap, [options.threadId ? 'resume' : 'thread']: threadSettings } : threadSettings);
@@ -899,17 +911,6 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     // Ordinary new threads must still confirm the requested named sandbox profile.
     if (!bootstrap && !isolated && !options.threadId && object(result.activePermissionProfile ?? {}).id !== MATH_WORKER_PERMISSION_PROFILE)
       throw new Error('math_codex_sandbox_profile_mismatch');
-    if (options.delegation) {
-      if (object(result.activePermissionProfile ?? {}).id !== MATH_WORKER_PERMISSION_PROFILE)
-        throw new Error('math_codex_sandbox_profile_mismatch');
-      investigations = new NativeInvestigations({ parentThreadId: threadId, maxAgents: options.delegation.maxAgents,
-        workspace: options.workspace, model: options.model, effort: options.effort, settings,
-        request: (method, params) => rpc.request(method, params),
-        active: turnId => activeTurn === turnId && !turnSettled && !turnStopping && !closing,
-        changed: agent => { try { options.onNativeAgent?.(agent); } catch { /* Observation cannot grant permissions. */ } },
-        activity: (event, itemType) => activity(event, itemType, true, activeTurn),
-        fail: error => { completion?.reject(error); void closeSession().catch(() => {}); } });
-    }
     if (skills.some(skill => skill.loading === 'native')) {
       const discovered = await rpc.request('skills/list', { cwds: [options.workspace], forceReload: true });
       assertMathAgentSkillsDiscovered(discovered, options.workspace, skills);
@@ -964,7 +965,6 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           'Completed tool results remain valid. Explicitly backgrounded commands may still be running. ' +
           'Continue from the saved work and the current host observations below.\n\n' + message;
         priorBoundaryCheckpoint = false; externallyInterrupted = false;
-        investigations?.beginTurn();
         tools?.beginTurn();
         assertMathAgentSkillsCurrent(skills);
         if (temporaryDirectory) prepareWorkerTemporaryDirectory(options.workspace);
@@ -1063,16 +1063,15 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
               if (activeTurn === turnId && !turnSettled && !closing) requestInterruption();
             });
           };
-          checkTurnCheckpoint = () => {
+          checkTurnCheckpoint = (atRequestBoundary = true) => {
             if (checkpoint || turnSettled || turnStopping || closing ||
                 !(turnCheckpointReached || options.requestGate?.checkpoint?.())) return false;
-            // A settled response may still have tools to run. The next request is
-            // the unpaid boundary proving those tools finished; prefer a valid
-            // output they just saved before requesting a checkpoint.
+            // For relayed turns the unpaid request boundary confirms tools had a
+            // chance to finish and save a valid output.
             checkCompletedOutput?.();
             if (submitted || turnSettled || turnStopping || closing) return false;
             checkpoint = true;
-            boundaryCheckpoint = true;
+            boundaryCheckpoint = atRequestBoundary;
             stopAfterRequests();
             return true;
           };
@@ -1159,11 +1158,6 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           // Native watches are debounced and can be a noop on unsupported
           // hosts. Completion remains a deterministic final discovery boundary.
           if (finished.status !== 'failed') checkOutput?.(false, true);
-          if (investigations?.busy) {
-            await closeSession();
-            if (finished.status === 'completed' && !submitted)
-              throw new Error('math_codex_transport_closed:investigations_unsettled');
-          }
           options.signal?.throwIfAborted();
           if (typeof finished.status !== 'string') throw new Error('math_codex_turn_status_missing');
           if (finished.status === 'completed' && !submitted && !turnHasOutput &&
@@ -1210,15 +1204,13 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       interrupt: async () => {
         externallyInterrupted = true;
         turnStopping = true; tools?.cancel(); cancelNotifications(); publicItems.clear();
-        // Native turn/interrupt does not reap investigator background commands.
-        if (investigations?.busy) { await closeSession(); return; }
         if (activeTurn && !turnSettled && !closing) await rpc.request('turn/interrupt', { threadId, turnId: activeTurn });
       },
       notify,
       close: closeSession,
       stopForFreeze: async () => {
         // An interrupt RPC acknowledgement does not settle the active turn.
-        if (completion || activeTurn || compacting || investigations?.busy || tools?.busy || nativeControl?.busy)
+        if (completion || activeTurn || compacting || tools?.busy || nativeControl?.busy)
           return { status: 'unconfirmed', reason: 'turn-not-settled' };
         try {
           await closeSession();

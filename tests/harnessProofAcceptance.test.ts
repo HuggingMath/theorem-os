@@ -9,8 +9,8 @@ import { readMathAgentSkill } from '../src/runtime/agentSkills';
 import { researchHarness } from '../src/runtime/researchHarness';
 import { directSolverModules } from '../src/solver/modules';
 import { prepareResearchSkill, researchSkillIdentity } from '../src/solver/researchSkill';
-import { runResearchWorkers } from '../src/solver/research';
-import { leadWorker, localExample, solverState } from './helpers/solver';
+import { runResearchLead } from '../src/solver/research';
+import { localExample, solverState } from './helpers/solver';
 
 // Only the unrelated build receipt is a double. Native processes, filesystem isolation,
 // writer shutdown, source freezing, helper checks and all original-target checks are real.
@@ -57,9 +57,9 @@ describe('portable native research retains independent real Lean acceptance', ()
         LEAN_PATH: '', LEAN_SYSROOT: '', DEEPSCIENTIST_MATH_SANDBOX_BACKEND: 'bwrap',
         DEEPSCIENTIST_MATH_ENV_FILE: path.join(directory, 'absent.env') };
       const events: string[] = [];
-      const winner = await runResearchWorkers({ state, workers: [leadWorker(problem, workspace)],
-        access: new Map([['solver', { environment, researchSkill: skill, retrievalRoot: workspace,
-          ...(harnessId === 'cli' ? { nativeContinuity: false } : {}) }]]),
+      const winner = await runResearchLead({ state,
+        access: { environment, researchSkill: skill, retrievalRoot: workspace,
+          ...(harnessId === 'cli' ? { nativeContinuity: false } : {}) },
         modules: { ...directSolverModules, M1: { ...directSolverModules.M1, open: researchHarness(harnessId).open } },
         root: repository, buildFile: path.join(directory, 'unused-build.json'), taskText: 'Check the frozen tutorial statements.',
         executable, profile, signal: new AbortController().signal, deadline: Infinity,

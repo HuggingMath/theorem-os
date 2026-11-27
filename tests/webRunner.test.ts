@@ -11,7 +11,7 @@ import { standaloneObservationFrame } from '../apps/web/observationSources';
 import { loadWebSample } from '../apps/web/sample';
 import { createWebHostDisconnectWatchdog, webWorkerHeartbeatMs } from '../apps/web/workerDisconnect';
 import { writeMathJsonDurable } from '../src/math/mathRuntimeIo';
-import type { WorkerExplanationInput, WorkerExplanationMessage, WorkerInput, WorkerMessage } from '../apps/web/shared';
+import { retiredResearchCoordinationCode, type WorkerExplanationInput, type WorkerExplanationMessage, type WorkerInput, type WorkerMessage } from '../apps/web/shared';
 
 function candidateCheckDocker(reply: { severity?: string; wrongMarker?: boolean; plain?: boolean; exitCode: number }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-target-query-'));
@@ -51,6 +51,47 @@ main().catch(error => { if (error?.fixtureExit) process.exitCode = error.code; e
 }
 
 describe('Docker web runner', () => {
+  it('requires the current native workflow capability and launches the image it checked', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-docker-native-workflow-'));
+    const metadata = path.join(root, 'metadata'), created = path.join(root, 'created');
+    const imageId = 'sha256:' + 'a'.repeat(64);
+    fs.writeFileSync(path.join(root, 'docker'), `#!${process.execPath}
+const fs = require('node:fs'), path = require('node:path'), args = process.argv.slice(2);
+if (args[0] === 'image') process.stdout.write(fs.readFileSync(path.join(__dirname, 'metadata')));
+else if (args[0] === 'create') {
+  fs.writeFileSync(path.join(__dirname, 'created'), args.at(-2));
+  process.exitCode = 1;
+} else if (args[0] !== 'rm') process.exitCode = 1;
+`, { mode: 0o700 });
+    vi.stubEnv('PATH', root);
+    try {
+      const config = readWebConfig({}), request: WorkerInput = { id: 'native-workflow', provider: config.providers[0], input: {
+        ...webDefaults, providerId: config.providers[0].id, apiKey: 'sk-offline-fixture', source: 'theorem goal : True := by sorry',
+        task: 'Offline native approval fixture', workers: 1, coordination: 'independent', nativeTeamCapacity: 3, planApproval: true,
+      } };
+      const signal = new AbortController().signal;
+      fs.writeFileSync(metadata, `v1|v1|v1|v1|<no value>|${imageId}\n`);
+      const old = new DockerWebRunner(config);
+      await expect(old.run({ ...request, input: { ...request.input, workers: 2, coordination: 'cooperative' } },
+        () => {}, signal)).rejects.toThrow(retiredResearchCoordinationCode);
+      await expect(old.command(request.id, { type: 'guidance-withdraw', id: 'withdraw', guidanceId: 'old-direction' }))
+        .rejects.toThrow(retiredResearchCoordinationCode);
+      expect(await old.readiness()).toMatchObject({ ready: true, nativeTeam: false, nativeTeamPreferences: false, nativeTeamExpertCards: false });
+      await expect(old.run(request, () => {}, signal)).rejects.toThrow('路线审批');
+      expect(fs.existsSync(created)).toBe(false);
+
+      fs.writeFileSync(metadata, `v1|v1|v1|v1|v1|${imageId}\n`);
+      const current = new DockerWebRunner(config);
+      expect(await current.readiness()).toMatchObject({ nativeTeam: true, nativeTeamPreferences: true, nativeTeamExpertCards: true });
+      fs.writeFileSync(metadata, `v1|v1|v1|v1|<no value>|sha256:${'b'.repeat(64)}\n`);
+      await expect(current.run(request, () => {}, signal)).rejects.toThrow('无法创建隔离运行环境');
+      expect(fs.readFileSync(created, 'utf8')).toBe(imageId);
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('reads the candidate and terminal receipt after Docker attach exits while the worker is still alive', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-docker-detached-proof-'));
     const journal = path.join(root, 'journal'), callsPath = path.join(root, 'calls.jsonl');
@@ -310,7 +351,8 @@ const fs = require('node:fs'), path = require('node:path');
 const args = process.argv.slice(2), root = __dirname;
 fs.appendFileSync(path.join(root, 'calls.jsonl'), JSON.stringify(args) + '\\n');
 async function main() {
-  if (args[0] === 'create') fs.writeFileSync(path.join(root, 'container'), 'waiting');
+  if (args[0] === 'image') process.stdout.write('v1|v1|v1|<no value>|v1|sha256:' + 'a'.repeat(64) + '\\n');
+  else if (args[0] === 'create') fs.writeFileSync(path.join(root, 'container'), 'waiting');
   else if (args[0] === 'start') {
     for await (const _chunk of process.stdin) {}
     process.stdout.write(JSON.stringify({ type: 'progress', event: 'plan_approval_wait_started', message: 'Waiting' }) + '\\n');
@@ -334,7 +376,7 @@ main().catch(() => process.exit(1));
       const config = readWebConfig({}), request: WorkerInput = {
         id: 'approval-wait-fixture', provider: config.providers[0], input: { ...webDefaults,
           providerId: config.providers[0].id, apiKey: 'sk-offline-fixture', source: 'theorem goal : True := by sorry',
-          task: 'Offline human review fixture', maxRunSeconds, workers: 2, planApproval },
+          task: 'Offline human review fixture', maxRunSeconds, workers: 1, coordination: 'independent', nativeTeamCapacity: 3, planApproval },
       };
       const observation = { ...loadWebSample()!.observations[0]!, webRunId: request.id };
       const libraryRestart = { previousSolverRunId: 'solver-first', solverRunId: observation.solverRunId, round: 1 };
@@ -363,7 +405,7 @@ main().catch(() => process.exit(1));
         ? ['plan_approval_wait_started', 'plan_approval_wait_ended', 'result'] : ['plan_approval_wait_started', 'library_restart', 'observation']);
       if (decision === 'cancel') {
         expect(messages.slice(-2)).toEqual([{ type: 'library_restart', ...libraryRestart }, { type: 'observation', observation }]);
-        expect(calls.map(args => args[0])).toEqual(['create', 'start', 'exec', 'rm']);
+        expect(calls.map(args => args[0])).toEqual(['image', 'create', 'start', 'exec', 'rm']);
       }
       expect(vi.getTimerCount()).toBe(0);
     } finally {

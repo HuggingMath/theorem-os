@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { compileTaskContext, frozenSourceContext, type TaskContextInput } from '../src/solver/contextCompiler';
-import type { CooperationState } from '../src/solver/cooperation';
+import type { CooperationState } from '../src/solver/cooperationShared';
 import { buildResearchContext } from '../src/solver/modules/context';
 import { cooperativeWorkContract } from '../src/solver/modules/contracts';
 import type { ResearchWorker } from '../src/solver/modules/organization';
@@ -9,7 +9,6 @@ import type { SolverProblem } from '../src/solver/problem';
 import type { ProofRoute } from '../src/solver/proofRoutes';
 import { contextTaskConsumers, taskConsumerInterfaces, taskConsumerProjection } from '../src/solver/taskConsumers';
 import { taskVersion, type CooperativeAction, type CooperativeTask, type TaskRecord } from '../src/solver/tasks';
-import { cooperativeResearch } from './helpers/cooperation';
 
 const seedCommit = 'a'.repeat(40);
 const formal = 'namespace Original\nvariable (n : Nat)\ntheorem target (h : n > 0) : n > 0 := by sorry\nend Original';
@@ -47,8 +46,6 @@ const researchContext = (cooperation: CooperationState, assignment: CooperativeA
     retrievalRoot: '/library', assignment, frozenContexts: frozenContexts() });
 const lead: ResearchWorker = { id: 'solver', role: 'lead', worktree: '/proof', ownedFiles: ['Submission.lean'] };
 const researcher: ResearchWorker = { ...lead, id: 'researcher', role: 'researcher' };
-const scopedFor = (cooperation: CooperationState, action: CooperativeAction) => cooperativeResearch({ state: stateFor(cooperation),
-  workers: [lead, researcher], retrievalRoot: '', access: new Map() }).contextState(action, researcher);
 const consumerRows = (message: string): Array<Record<string, any>> => {
   for (const line of message.split('\n')) {
     try {
@@ -196,39 +193,6 @@ it('uses the same global-only route consumer for the work contract and mathemati
   expect(context.workContract?.plannedConsumers).toEqual([target.task.id]);
   expect(focus.plannedConsumers).toEqual([target.task.id]);
   expect(consumerRows(context.message)[0].id).toBe(target.task.id);
-});
-
-it('exposes public pending consumer contracts through a context-only bypass without expanding visible tasks', () => {
-  const active = node('helper', [], { groupId: 'main', sharing: 'problem' });
-  const shared = node('public_consumer', ['helper', 'private_sibling'], { groupId: 'other', sharing: 'problem' });
-  const privateSibling = node('private_sibling', [], { groupId: 'other', sharing: 'group', objective: 'PRIVATE_SIBLING_MATHEMATICS' });
-  const privateConsumer = node('private_consumer', ['helper'], { groupId: 'other', sharing: 'group', objective: 'PRIVATE_CONSUMER_MATHEMATICS' });
-  const cooperation: CooperationState = { canonicalCommit: seedCommit, tasks: [active, shared, privateSibling, privateConsumer] };
-  const scoped = scopedFor(cooperation, actionFor(active));
-
-  expect(scoped.tasks.map(item => item.task.id)).toEqual([active.task.id]);
-  expect(scoped.consumerInterfaces).toMatchObject({ taskId: active.task.id, taskDigest: taskVersion(active.task) });
-  expect(scoped.consumerInterfaces?.interfaces.map(item => item.task.id)).toEqual([shared.task.id]);
-  expect(cooperation).not.toHaveProperty('consumerInterfaces');
-  expect(JSON.stringify(scoped)).not.toContain('PRIVATE_SIBLING_MATHEMATICS');
-  expect(JSON.stringify(scoped)).not.toContain('PRIVATE_CONSUMER_MATHEMATICS');
-  const context = compileTaskContext(inputFor(active, scoped));
-  expect(consumerRows(context.message)[0].id).toBe(shared.task.id);
-  expect(context.manifest.requiredTaskIds).toEqual([active.task.id]);
-});
-
-it('shows public in-flight questions across groups without expanding executable task visibility', () => {
-  const active = node('active', [], { groupId: 'main' });
-  const shared = node('shared', [], { kind: 'research', groupId: 'other', sharing: 'problem', objective: 'PUBLIC_QUESTION' });
-  const secret = node('secret', [], { kind: 'research', groupId: 'other', sharing: 'group', objective: 'PRIVATE_QUESTION' });
-  shared.status = secret.status = 'running';
-  const action = actionFor(active), scoped = scopedFor({ canonicalCommit: seedCommit, tasks: [active, shared, secret] }, action);
-  expect(scoped.tasks.map(item => item.task.id)).toEqual(['active']);
-  expect(scoped.parallelQuestions?.map(item => item.taskId)).toEqual(['shared']);
-  const context = researchContext(scoped, action);
-  expect(context.message).toContain('PUBLIC_QUESTION');
-  expect(context.message).not.toContain('PRIVATE_QUESTION');
-  expect(context.manifest?.requiredTaskIds).toEqual(['active']);
 });
 
 it('rejects a valid consumer projection reused for another same-group assignment', () => {

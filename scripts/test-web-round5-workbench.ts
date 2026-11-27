@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 // Real local HTTP and Chromium, with delayed responses and controlled observations; no model, Lean or mail.
+import { seedCooperativeRun } from './web-cooperative-fixture';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -11,7 +12,7 @@ import { readWebConfig } from '../apps/web/config';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebObservation, WebInspection } from '../apps/web/collaboration';
 import type { WorkerMessage } from '../apps/web/shared';
-import { freePort, startBrowser, postRun, settled } from './web-scenario';
+import { freePort, startBrowser, settled } from './web-scenario';
 import { openTab, refresh } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -78,7 +79,7 @@ try {
     let control: Control | undefined;
     try {
       await page.goto(origin); await page.locator('#formalize-original').waitFor();
-      const run = await postRun({ page }, { providerId: 'openai', apiKey: 'sk-disposable-round5-fixture', model: 'fixture', effort: 'low', environment: 'standard',
+      const run = await seedCooperativeRun(service, page.context(), origin, { providerId: 'openai', apiKey: 'sk-disposable-round5-fixture', model: 'fixture', effort: 'low', environment: 'standard',
         source, task: 'Observe plan state synchronization', maxTurns: 2, maxRunSeconds: 300, workers: 2, coordination: 'cooperative', planApproval: true });
       await page.goto(origin + '/?run=' + run.id);
       await page.waitForURL(url => url.searchParams.has('chat'));

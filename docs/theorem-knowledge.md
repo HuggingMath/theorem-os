@@ -366,7 +366,7 @@ bun bin/math.ts run \
   --workspace /PATH/problem-workspace \
   --task-file /PATH/task.md \
   --knowledge-base /PATH/knowledge/catalog-v2.json \
-  --workers 4 \
+  --agent-team 4 \
   --max-run-seconds 0 --max-turns 0 --max-turn-seconds 0 \
   --evaluator-timeout-seconds 0 \
   --output /PATH/new-run-with-knowledge/result.json \
@@ -387,7 +387,7 @@ by the context budget. The checkpoint retains 128 retrieval observations and a
 dropped count; full observations are emitted as events. Old checkpoints without
 these observations have unknown coverage, rather than zero inferred lookups.
 
-`compare --phase prepare` and `sample-putnam --phase prepare` also accept
+In the pinned historical experiment revision, `compare --phase prepare` and `sample-putnam --phase prepare` also accept
 `--knowledge-base FILE`. They freeze the catalog, its source objects, digest and
 `--knowledge-mode transfer|recovery` in the experiment plan and pass the frozen
 snapshot to every launch. The default `transfer` mode rejects recorded target

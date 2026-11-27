@@ -294,7 +294,7 @@ export class ModuleView {
     activity.querySelector<HTMLElement>('.module-live-event')!.title = latest ? readableMessage(latest.event, names) : '';
     const configuredWorkers = Number.isSafeInteger(input.workers) && input.workers > 0 ? input.workers : t('未设置');
     text(root.querySelector('[data-module-configuration]')!, t('5 个研究模块 · {0} 个 Agent · {1}', configuredWorkers, input.coordination === 'cooperative' ? t('任务协作') : t('独立并行')));
-    root.querySelector<HTMLButtonElement>('[data-module-configure]')!.hidden = Boolean(run);
+    root.querySelector<HTMLButtonElement>('[data-module-configure]')!.hidden = !input.editable;
     root.dataset.stale = String(!input.connected);
     text(root.querySelector('.module-observation')!, !input.connected ? t('连接中断 · 最近状态') : !run ? t('草稿')
       : `${runProgress(run).phaseLabel} · ${timestamp(run.updatedAt)}`);

@@ -3,14 +3,19 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bootstrapLeanTask } from '../src/math/leanTask';
+import { LIBRARY_PACK_SCHEMA } from '../src/math/libraryPacks';
 import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 import { readMathAgentSkill } from '../src/runtime/agentSkills';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/agentSession';
+import type { NativeAgentControlConnection } from '../src/runtime/nativeAgentControl';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from '../src/solver/archive';
 import { AgentResearchTeam } from '../src/solver/agentTeam';
 import { readAgentTeamProofDelivery } from '../src/solver/agentTeamProof';
 import { directSolverModules } from '../src/solver/modules';
+import { agentLibrary, LIBRARY_ACCESS_FILE, LIBRARY_REQUEST_FILE, type LibraryAccess, writeLibraryAccess } from '../src/solver/libraryAccess';
+import { writeLibraryCatalog } from '../src/solver/libraryCatalog';
 import { git, readSolverProblem } from '../src/solver/problem';
+import { RESEARCH_TOOL_HELP_FILE } from '../src/solver/researchToolHelp';
 import { prepareResearchSkill, researchSkillIdentity } from '../src/solver/researchSkill';
 import type { SoftSliceSettings } from '../src/solver/softSlice';
 import { deferred } from './helpers/async';
@@ -25,16 +30,43 @@ const original = 'namespace Recovery\ntheorem goal : True := by sorry\nend Recov
 const helper = 'theorem helper : True := by trivial\n';
 const declarations = [{ file: 'Submission.lean', name: 'Recovery.helper', type: 'True' }];
 const fixtures: ReturnType<typeof fixture>[] = [];
+const rootThreadId = '00000000-0000-4000-8000-000000000001';
 
-function fixture(maxAgents = 2, softSlice?: SoftSliceSettings, stallInterrupt = false) {
+function nativeConnection(threadId: string, agentPath: string, cwd: string, notices: string[] = []): NativeAgentControlConnection {
+  return { info: { sessionId: rootThreadId,
+    agent: { threadId, metadata: { agentPath, agentId: threadId }, status: 'running' }, configSnapshot: { cwd } },
+    request: vi.fn(async () => ({})),
+    input: vi.fn(async () => ({ accepted: true, threadId, submissionId: crypto.randomUUID() })),
+    update: vi.fn(async value => {
+      notices.push(...((value as { mailbox?: { message?: { text?: string } }[] }).mailbox ?? []).flatMap(item => item.message?.text ?? []));
+      return { acceptedSequence: value.sequence };
+    }),
+  };
+}
+
+function fixture({ maxAgents = 2, softSlice, stallInterrupt = false, librarySource, maxTotalTokens = 0 }: {
+  maxAgents?: number; softSlice?: SoftSliceSettings; stallInterrupt?: boolean; librarySource?: string; maxTotalTokens?: number;
+} = {}) {
   const directory = temporaryDirectory('agent-team-source-recovery-');
   const receipt = bootstrapLeanTask(path.join(directory, 'primary'), { source: original, task: 'Prove True.' });
   const problem = readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath), root = path.resolve('.');
   const identity = researchSkillIdentity(readMathAgentSkill(path.join(root, 'skills/theoremos-research/SKILL.md')));
   const state = solverState(problem, receipt.workspaceRoot, { runId: 'agent-team-source-recovery', phase: 'running',
     environmentDigest: mathDigest('real Lean True recovery fixture'), researchMode: 'skill', researchSkillWorkflow: 'full',
-    researchSkill: identity, researchDelegation: { mode: 'team', maxAgents }, workerCount: 1, coordination: 'independent' });
+    researchSkill: identity, researchDelegation: { mode: 'team', maxAgents }, workerCount: 1, coordination: 'independent',
+    requestUsageAccounting: { startedRequests: 0, reportedRequests: 0, pendingRequests: 0, incomplete: false },
+    agentTeam: { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control',
+      workers: [], events: [], deliveries: [], adoptions: [], operations: [] } });
   const skill = prepareResearchSkill(root, state.worktree, identity, problem);
+  let libraryCatalog: LibraryAccess | undefined;
+  if (librarySource) {
+    const file = 'Submission/Library/TeamFixture.lean';
+    const release = writeLibraryCatalog(path.join(directory, 'release'), { id: 'fixture/native-team-library', revision: 'v1',
+      environment: 'standard', packs: [{ schema: LIBRARY_PACK_SCHEMA, modules: [{ file, source: librarySource,
+        origin: { kind: 'upstream', repository: 'offline-native-fixture', commit: 'a'.repeat(40), file } }] }] });
+    libraryCatalog = { file: release.file, digest: release.digest };
+    writeLibraryAccess(problem, state.worktree, libraryCatalog);
+  }
   const toolchain = path.join(os.homedir(), '.elan/toolchains/leanprover--lean4---v4.33.0');
   if (!fs.existsSync(path.join(toolchain, 'bin/lean'))) throw new Error('Real Lean 4.33.0 is required.');
   const environment = { PATH: `${toolchain}/bin:${path.dirname(process.execPath)}:/usr/bin:/bin`,
@@ -46,11 +78,17 @@ function fixture(maxAgents = 2, softSlice?: SoftSliceSettings, stallInterrupt = 
   const stateFile = path.join(directory, 'run-state.json');
   const makeTeam = (current: SolverRunState) => {
     const team = new AgentResearchTeam({ state: current, root, taskText: 'Prove True.',
-      leadAccess: { environment, retrievalRoot: path.join(current.worktree, problem.projectRelative), researchSkill: skill },
+      leadAccess: { environment, retrievalRoot: path.join(current.worktree, problem.projectRelative), researchSkill: skill, libraryCatalog },
       modules: { ...directSolverModules, M1: { ...directSolverModules.M1, open: async options => {
         const outcome = deferred<string>(), record = { options, message: '', notices: [] as string[], complete: () => outcome.resolve('completed') };
         sessions.push(record);
-        const session: MathAgentSession = { threadId: options.threadId ?? 'source-recovery-member',
+        const config = options.nativeAgentControl!;
+        const threadId = options.threadId ?? String(config.bootstrap!.threadId);
+        const connection = nativeConnection(threadId, '/root/' + options.environment!.DEEPSCIENTIST_MATH_WORKER_ID, options.workspace, record.notices);
+        await config.request({ version: 1, sessionId: rootThreadId, threadId, operation: 'attach', operationId: crypto.randomUUID(),
+          payload: { threadId, sessionId: rootThreadId } }, connection, { signal: controller.signal });
+        await config.bound?.(connection);
+        const session: MathAgentSession = { threadId, nativeAgentControl: connection,
           usageSource: 'upstream-requests',
           run: async (message, _id, _workspace, started) => {
             record.message = message; started('source-recovery-turn-' + sessions.length); return outcome.promise;
@@ -58,12 +96,15 @@ function fixture(maxAgents = 2, softSlice?: SoftSliceSettings, stallInterrupt = 
           notify: async message => { record.notices.push(message); },
           interrupt: async () => { if (!stallInterrupt) outcome.resolve('interrupted'); },
           stopForFreeze: async () => ({ status: 'stopped' }),
-          close: async () => { if (stallInterrupt) outcome.resolve('interrupted'); },
+          close: async () => {
+            if (stallInterrupt) outcome.resolve('interrupted');
+            await config.disconnected?.(connection);
+          },
         };
         return session;
       } } },
       executable: 'offline-no-model', profile: 'offline-no-credentials', signal: controller.signal,
-      maxAgents, maxTurns: Infinity, maxTurnMs: Infinity, maxTotalTokens: 0, remainingMs: () => Infinity,
+      maxAgents, maxTurns: Infinity, maxTurnMs: Infinity, maxTotalTokens, remainingMs: () => Infinity,
       softSlice,
       save: () => writeSolverRunState(stateFile, current), emit: (event, details) => { events.push({ event, details }); },
       exclusiveCheck: operation => operation(),
@@ -73,7 +114,26 @@ function fixture(maxAgents = 2, softSlice?: SoftSliceSettings, stallInterrupt = 
   const team = makeTeam(state); let calls = 0;
   const call = (operation: Record<string, unknown>, actor = 'lead', target = team) => target.tools(actor).call('theoremos_team', operation,
     { callId: 'source-recovery-call-' + ++calls, turnId: 'source-recovery-turn', threadId: 'source-recovery-thread', signal: controller.signal }) as Promise<any>;
-  const current = { directory, state, stateFile, controller, sessions, teams, team, makeTeam, call, events, problem,
+  const native = async (operation: string, payload: Record<string, unknown>, target = team) => {
+    const options = target.nativeAgentControlOptions();
+    const connection = nativeConnection(rootThreadId, '/root', state.worktree);
+    const request = (method: string, args: Record<string, unknown>) => options.request({
+      version: 1, threadId: rootThreadId, sessionId: rootThreadId, operation: method, operationId: crypto.randomUUID(), payload: args,
+    }, connection, { signal: controller.signal });
+    await request('attach', { threadId: rootThreadId, sessionId: rootThreadId });
+    await options.bound?.(connection);
+    return request(operation, { caller: rootThreadId, ...payload });
+  };
+  const input = (text: string) => ({ kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text } });
+  const spawn = (name: string, message: string) => {
+    const source = { subagent: { thread_spawn: { parent_thread_id: rootThreadId, agent_path: '/root/' + name, depth: 1 } } };
+    return native('spawn', { source, bootstrap: { source, config: { cwd: state.worktree, model: state.model, reasoningEffort: state.effort } },
+      input: input(message), startOptions: { parentTurnId: 'root-turn' } });
+  };
+  const followup = (agentId: string, message: string, target = team) => native('send', {
+    target: { kind: 'path', reference: '/root/' + agentId }, input: input(message),
+  }, target);
+  const current = { directory, state, stateFile, controller, sessions, teams, team, makeTeam, call, spawn, followup, events, problem,
     source: (worktree: string) => path.join(worktree, problem.projectRelative, 'Submission.lean'),
     session: async (index: number) => {
       await expect.poll(() => sessions[index]?.message, { timeout: 10_000 }).toBeTruthy(); return sessions[index]!;
@@ -94,10 +154,93 @@ async function idle(team: AgentResearchTeam) {
   await expect.poll(() => team.hasActiveWorkers, { timeout: 30_000 }).toBe(false);
 }
 
-describe('recoverable team source rejections', () => {
+describe('native team source handling', () => {
+  it('exposes the pinned math library to a member and reserves installation requests for Lead', async () => {
+    const source = 'namespace TeamFixture\ntheorem library_helper : True := by trivial\nend TeamFixture\n';
+    const f = fixture({ librarySource: source });
+    await f.spawn('member', 'Find the exact declaration in the published library.');
+    const child = await f.session(0), worktree = child.options.workspace;
+    const name = 'TeamFixture.library_helper', library = agentLibrary(worktree);
+    expect(library.search(name).hits[0]).toMatchObject({ name, installation: 'not-installed' });
+    expect(library.get(name).source).toMatchObject({ complete: true, text: source });
+    expect(fs.readFileSync(path.join(worktree, RESEARCH_TOOL_HELP_FILE), 'utf8')).toContain('Lead requests installation for the team');
+    expect(() => library.request([name], 'Apply the checked helper.')).toThrow('math_library_request_lead_required');
+    expect(fs.existsSync(path.join(worktree, LIBRARY_REQUEST_FILE))).toBe(false);
+    expect(agentLibrary(f.state.worktree).request([name], 'Apply the checked helper.')).toMatchObject({ status: 'queued' });
+    expect(fs.existsSync(path.join(f.state.worktree, LIBRARY_REQUEST_FILE))).toBe(true);
+  });
+
+  it('prepares the math library on demand when an idle member resumes its saved thread', async () => {
+    const name = 'TeamFixture.library_helper';
+    const f = fixture({ librarySource: `theorem ${name} : True := by trivial\n` });
+    await f.spawn('member', 'Check the local identity.');
+    const first = await f.session(0), worktree = first.options.workspace;
+    const threadId = f.team.archive.workers[0]!.native!.threadId;
+    first.complete(); await idle(f.team); await f.team.close();
+    const catalog = path.join(worktree, LIBRARY_ACCESS_FILE);
+    fs.unlinkSync(catalog);
+
+    const restored = f.makeTeam(readSolverRunState(f.stateFile));
+    await restored.restore();
+    expect(fs.existsSync(catalog)).toBe(false);
+    expect(f.sessions).toHaveLength(1);
+
+    await f.followup('member', 'Look up the exact lemma for the next step.', restored);
+    const next = await f.session(1);
+    expect(next.options.threadId).toBe(threadId);
+    expect(next.options.workspace).toBe(worktree);
+    expect(agentLibrary(worktree).get(name).source.complete).toBe(true);
+    next.complete(); await idle(restored);
+  });
+
+  it('charges member receipts to the same run budget and blocks a subsequent request when exhausted', async () => {
+    const f = fixture({ maxAgents: 3, maxTotalTokens: 50 });
+    await f.spawn('first', 'Check the local identity.');
+    await f.spawn('second', 'Read the hypotheses.');
+    const first = await f.session(0), second = await f.session(1);
+    for (const [index, session] of [first, second].entries()) {
+      const admission = session.options.requestGate!({ requestId: 'budget-' + index });
+      if (admission.allowed === false) throw new Error(admission.reason);
+      const totalTokens = index === 0 ? 20 : 30;
+      const receipt = { usage: { inputTokens: totalTokens - 2, outputTokens: 2, totalTokens }, complete: true,
+        outcome: 'completed' as const };
+      admission.settle(receipt);
+      admission.settle(receipt);
+    }
+    expect(f.state.teamUsage).toMatchObject({ totalTokens: 50, inputTokens: 46, outputTokens: 4 });
+    expect(f.state.tokenBudget).toMatchObject({ status: 'exhausted', usageComplete: true });
+    expect(first.options.requestGate!({ requestId: 'blocked' })).toEqual({ allowed: false, reason: 'math_total_token_limit' });
+    first.complete(); second.complete(); await idle(f.team);
+    expect(f.team.archive.workers.map(worker => worker.requestUsageAccounting!.reportedRequests)).toEqual([1, 1]);
+  });
+
+  it('restores lost member receipts before admitting more work under a finite shared budget', async () => {
+    const f = fixture({ maxTotalTokens: 50 });
+    await f.spawn('member', 'Check the local identity.');
+    const child = await f.session(0);
+    const reported = child.options.requestGate!({ requestId: 'reported' });
+    if (!reported.allowed) throw new Error(reported.reason);
+    reported.settle({ complete: true, usage: { inputTokens: 18, outputTokens: 2, totalTokens: 20 } });
+    expect(child.options.requestGate!({ requestId: 'lost' }).allowed).toBe(true);
+    const saved = readSolverRunState(f.stateFile);
+    expect(saved.tokenBudget).toMatchObject({ status: 'available', reportedTotalTokens: 20, usageComplete: false });
+    child.complete(); await idle(f.team); await f.team.close();
+
+    const restored = f.makeTeam(saved); await restored.restore();
+    const recovered = readSolverRunState(f.stateFile);
+    expect(recovered.tokenBudget).toMatchObject({ status: 'usage-unavailable', reportedTotalTokens: 20, usageComplete: false });
+    expect(recovered.teamUsage).toMatchObject({ totalTokens: 20 });
+    expect(recovered.agentTeam!.workers[0]!.requestUsageAccounting).toMatchObject({
+      pendingRequests: 0, incomplete: true, receipts: [expect.objectContaining({ status: 'reported' }),
+        expect.objectContaining({ requestId: 'lost', status: 'missing', missingReason: 'resumed-without-receipt' })],
+    });
+    await expect(f.followup('member', 'Continue the investigation.', restored)).rejects.toThrow();
+    expect(f.sessions).toHaveLength(1);
+  });
+
   it('preserves an unfinished child assignment that returns after a two-compaction milestone notice', async () => {
-    const f = fixture(2, { softSliceMs: 0, maxCompactionsPerSlice: 2 });
-    await f.call({ operation: 'spawn', agentId: 'member', message: 'Investigate a partial proof.' });
+    const f = fixture({ softSlice: { softSliceMs: 0, maxCompactionsPerSlice: 2 } });
+    await f.spawn('member', 'Investigate a partial proof.');
     const session = await f.session(0), worker = f.team.archive.workers[0]!;
     const activity = session.options.onActivity!;
     activity({ event: 'item_started', itemType: 'contextCompaction' });
@@ -117,8 +260,8 @@ describe('recoverable team source rejections', () => {
   });
 
   it('closes an unsettled writer after the milestone checkpoint and preserves its draft', async () => {
-    const f = fixture(2, { softSliceMs: 0, maxCompactionsPerSlice: 1, softSliceGraceMs: 1 }, true);
-    await f.call({ operation: 'spawn', agentId: 'member', message: 'Investigate a partial proof.' });
+    const f = fixture({ softSlice: { softSliceMs: 0, maxCompactionsPerSlice: 1, softSliceGraceMs: 1 }, stallInterrupt: true });
+    await f.spawn('member', 'Investigate a partial proof.');
     const session = await f.session(0), worker = f.team.archive.workers[0]!;
     fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), 'This draft belongs to the same task.\n');
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -139,10 +282,10 @@ describe('recoverable team source rejections', () => {
   });
 
   it('lands standalone helpers with the producer task open and installs them in a peer with unpublished work', async () => {
-    const f = fixture(3);
-    await f.call({ operation: 'spawn', agentId: 'member', message: 'Prove the goal and its helper lemmas.' });
+    const f = fixture({ maxAgents: 3 });
+    await f.spawn('member', 'Prove the goal and its helper lemmas.');
     const a = await f.session(0), producer = f.team.archive.workers[0]!;
-    await f.call({ operation: 'spawn', agentId: 'peer', message: 'Draft another proof step.' });
+    await f.spawn('peer', 'Draft another proof step.');
     const b = await f.session(1), consumer = f.team.archive.workers[1]!;
     const helperProofs = helper + 'theorem second : True := helper\n';
     const draft = 'theorem draft : True := by sorry\n';
@@ -168,24 +311,26 @@ describe('recoverable team source rejections', () => {
     expect(fs.readFileSync(f.source(consumer.worktree), 'utf8')).not.toContain('theorem second');
     b.complete(); await idle(f.team);
 
-    await f.team.flushAdoptions();
+    await f.team.close();
+    const saved = readSolverRunState(f.stateFile), restored = f.makeTeam(saved);
+    await restored.restore();
     expect(fs.readFileSync(f.source(f.state.worktree), 'utf8')).toContain('theorem goal : True := by sorry');
-    await f.call({ operation: 'assign', agentId: 'peer', message: 'Use the landed helpers to finish both proofs.' });
-    const next = await f.session(2);
-    expect(next.message).toContain('landedHelpers');
-    expect(next.message).toContain('Recovery.second');
     const seeded = fs.readFileSync(f.source(consumer.worktree), 'utf8');
     expect(seeded).toContain(helperProofs);
     expect(seeded).toContain(draft);
+    await f.followup('peer', 'Use the landed helpers to finish both proofs.', restored);
+    const next = await f.session(2);
+    expect(next.message).toContain('landedHelpers');
+    expect(next.message).toContain('Recovery.second');
     fs.writeFileSync(f.source(consumer.worktree), seeded.replaceAll('by sorry', 'by exact second'));
     await f.call({ operation: 'submit', summary: 'Reused the verified helpers.', declarations: [
       { ...declarations[0]!, name: 'Recovery.goal' }, { ...declarations[0]!, name: 'Recovery.draft' },
-    ] }, 'peer');
-    next.complete(); await idle(f.team);
-    const delivery = f.team.archive.deliveries.find(item => item.agentId === 'peer')!;
-    expect(readAgentTeamProofDelivery(delivery.path, f.state).artifacts.map(item => item.declaration.name))
+    ] }, 'peer', restored);
+    next.complete(); await idle(restored);
+    const delivery = restored.archive.deliveries.find(item => item.agentId === 'peer')!;
+    expect(readAgentTeamProofDelivery(delivery.path, saved).artifacts.map(item => item.declaration.name))
       .toEqual(['Recovery.helper', 'Recovery.second', 'Recovery.goal', 'Recovery.draft']);
-    expect(f.state.check).toBeUndefined();
+    expect(saved.check).toBeUndefined();
   }, 60_000);
 
   it('replays a recorded submit_helpers call from an older member thread', async () => {
@@ -193,17 +338,23 @@ describe('recoverable team source rejections', () => {
     const originalCall = { operation: 'submit_helpers', summary: 'Verified standalone facts.', declarations };
     const context = { threadId: 'old-member-thread', turnId: 'old-turn', callId: 'old-submit', signal: f.controller.signal };
     const result = { ok: true, status: 'pending-writer-stop', taskId: 'old-task' };
-    f.team.archive.operations.push({
-      key: canonicalMathJson(['member', context.threadId, context.turnId, context.callId]),
-      digest: mathDigest(canonicalMathJson(originalCall)), result,
-    });
-    const tools = f.team.tools('member');
+    const saved = structuredClone(f.state);
+    const key = canonicalMathJson(['member', context.threadId, context.turnId, context.callId]);
+    const changedCall = { ...originalCall, summary: 'Changed replay.' };
+    saved.agentTeam!.operations.push(
+      { key, digest: mathDigest(canonicalMathJson(originalCall)), result },
+      { key, digest: mathDigest(canonicalMathJson(changedCall)), result: { ok: false } },
+    );
+    writeSolverRunState(f.stateFile, saved);
+    const restored = f.makeTeam(readSolverRunState(f.stateFile));
+    const tools = restored.tools('member');
     await expect(tools.call('theoremos_team', originalCall, context)).resolves.toEqual(result);
-    expect(f.team.archive.operations).toHaveLength(1);
+    await expect(tools.call('theoremos_team', changedCall, context)).rejects.toThrow('math_team_call_changed');
+    expect(restored.archive.operations).toEqual(saved.agentTeam!.operations);
   });
 
   it('preserves the rejected Lean interface and check receipt for the producer, a repair peer and restored history', async () => {
-    const f = fixture(3); await f.call({ operation: 'spawn', agentId: 'member', message: 'Prove the helper.' });
+    const f = fixture({ maxAgents: 3 }); await f.spawn('member', 'Prove the helper.');
     const first = await f.session(0), worker = f.team.archive.workers[0]!;
     fs.writeFileSync(f.source(worker.worktree), original.replace('end Recovery', helper + 'end Recovery'));
     const wrong = [{ ...declarations[0]!, type: 'False' }];
@@ -220,18 +371,18 @@ describe('recoverable team source rejections', () => {
     expect(f.team.archive.events.find(event => event.kind === 'failed')?.text).toContain(JSON.stringify(locator));
     expect(f.team.archive.deliveries).toHaveLength(0);
     expect(readSolverRunState(f.stateFile).agentTeam!.workers[0]!.tasks[0]!.failedCheck).toEqual(failure);
-    await f.call({ operation: 'assign', agentId: 'member', message: 'Repair the rejected declaration.' });
+    await f.followup('member', 'Repair the rejected declaration.');
     const next = await f.session(1);
     expect(next.message).toContain('failedCheck');
     expect((await f.call(locator, 'member')).tasks[0]?.failedCheck).toEqual(failure);
-    await f.call({ operation: 'spawn', agentId: 'repair', message: 'Read the earlier failed interface: ' + JSON.stringify(locator) });
+    await f.spawn('repair', 'Read the earlier failed interface: ' + JSON.stringify(locator));
     await f.session(2);
     expect((await f.call(locator, 'repair')).tasks[0]?.failedCheck).toEqual(failure);
     expect(f.state.check).toBeUndefined();
   }, 60_000);
 
   it('rejects a non-owned declaration file before nomination, and accepts a corrected submission on the same turn', async () => {
-    const f = fixture(); await f.call({ operation: 'spawn', agentId: 'member', message: 'Prove the helper.' });
+    const f = fixture(); await f.spawn('member', 'Prove the helper.');
     const session = await f.session(0), worker = f.team.archive.workers[0]!;
     expect(await f.call({ operation: 'submit', summary: 'Helper ready.', declarations: [
       { ...declarations[0], file: `${f.problem.projectRelative}/Submission.lean` }] }, 'member')).toMatchObject({
@@ -251,7 +402,7 @@ describe('recoverable team source rejections', () => {
 
   it.each(['outside-ownership', 'original-declaration'] as const)(
     'preserves a %s draft and notes, then permits an explicit same-member correction', async kind => {
-      const f = fixture(); await f.call({ operation: 'spawn', agentId: 'member', message: 'Prove the helper.' });
+      const f = fixture(); await f.spawn('member', 'Prove the helper.');
       const first = await f.session(0), worker = f.team.archive.workers[0]!, file = f.source(worker.worktree);
       const valid = original.replace('end Recovery', helper + 'end Recovery');
       const invalid = kind === 'original-declaration' ? valid.replace('goal : True', 'goal : False') : valid;
@@ -273,9 +424,9 @@ describe('recoverable team source rejections', () => {
       expect(git(worker.worktree, ['rev-parse', 'HEAD'])).toBe(f.problem.baseCommit);
       if (kind === 'outside-ownership') expect(git(worker.worktree, ['diff', '--cached', '--name-only'])).toBe('Sketch.lean');
       expect(f.team.archive.events.some(event => event.kind === 'failed' && event.text.includes('Lead can assign a correction'))).toBe(true);
-      await f.call({ operation: 'assign', agentId: 'member', message: 'Correct the rejected source and resubmit the helper.' });
+      await f.followup('member', 'Correct the rejected source and resubmit the helper.');
       const correction = await f.session(1);
-      expect(correction.options.threadId).toBe('source-recovery-member');
+      expect(correction.options.threadId).toBe(worker.native!.threadId);
       expect(correction.message).toContain('Host rejected the edited source');
       expect(correction.message).toContain(kind === 'outside-ownership' ? 'Sketch.lean' : 'math_original_declaration_changed');
       expect(fs.readFileSync(file, 'utf8')).toBe(invalid);
@@ -292,7 +443,7 @@ describe('recoverable team source rejections', () => {
     }, 60_000);
 
   it('clears a restored stopped-writer nomination without rewriting its invalid source or fabricating an artifact', async () => {
-    const f = fixture(); await f.call({ operation: 'spawn', agentId: 'member', message: 'Prove the helper.' });
+    const f = fixture(); await f.spawn('member', 'Prove the helper.');
     const first = await f.session(0), worker = f.team.archive.workers[0]!;
     first.complete(); await idle(f.team); await f.team.close();
     fs.writeFileSync(f.source(worker.worktree), original.replace('goal : True', 'goal : False'));
@@ -308,7 +459,7 @@ describe('recoverable team source rejections', () => {
     expect(saved.agentTeam!.researchArtifacts ?? []).toHaveLength(artifactCount); expect(saved.agentTeam!.deliveries).toHaveLength(0);
     expect(fs.readFileSync(f.source(recoveredWorker.worktree), 'utf8')).toContain('goal : False');
     expect(fs.readFileSync(path.join(recoveredWorker.worktree, 'RESEARCH.md'), 'utf8')).toContain('previous process stopped');
-    await f.call({ operation: 'assign', agentId: 'member', message: 'Repair the statement and prove the helper.' }, 'lead', restored);
+    await f.followup('member', 'Repair the statement and prove the helper.', restored);
     const correction = await f.session(1); expect(correction.message).toContain('math_original_declaration_changed');
     fs.writeFileSync(f.source(recoveredWorker.worktree), original.replace('end Recovery', helper + 'end Recovery'));
     expect(await f.call({ operation: 'submit', summary: 'Recovered and repaired.', declarations }, 'member', restored)).toMatchObject({ ok: true });
@@ -317,7 +468,7 @@ describe('recoverable team source rejections', () => {
   }, 60_000);
 
   it('retains a nomination on an unrelated infrastructure failure', async () => {
-    const f = fixture(); await f.call({ operation: 'spawn', agentId: 'member', message: 'Prove the helper.' });
+    const f = fixture(); await f.spawn('member', 'Prove the helper.');
     const first = await f.session(0), worker = f.team.archive.workers[0]!;
     fs.writeFileSync(f.source(worker.worktree), original.replace('end Recovery', helper + 'end Recovery'));
     expect(await f.call({ operation: 'submit', summary: 'Helper ready.', declarations }, 'member')).toMatchObject({ ok: true });
@@ -332,17 +483,17 @@ describe('recoverable team source rejections', () => {
   });
 
   it('resumes the exact acknowledged nomination after writer loss but honors an explicit cancellation', async () => {
-    const f = fixture(); await f.call({ operation: 'spawn', agentId: 'member', message: 'Investigate.' });
+    const f = fixture(); await f.spawn('member', 'Route: test-route\nInvestigate.');
     await f.session(0);
     const worker = f.team.archive.workers[0]!, task = worker.tasks[0]!;
     const message = 'Prove the helper.';
-    expect(await f.call({ operation: 'amend', agentId: worker.id, taskId: task.id, message,
-      workKind: 'proof', reason: 'The interface is ready.' })).toMatchObject({ ok: true });
+    await f.followup(worker.id, message);
     fs.writeFileSync(f.source(worker.worktree), original.replace('end Recovery', helper + 'end Recovery'));
     const reply = await f.call({ operation: 'submit', summary: 'Ready to check.', objectiveRevision: 2, declarations }, 'member');
     expect(reply).toMatchObject({ status: 'pending-writer-stop' });
     const beforeCancel = readSolverRunState(f.stateFile);
-    expect(await f.call({ operation: 'cancel', agentId: worker.id, taskId: task.id })).toMatchObject({ ok: true });
+    expect(await f.call({ operation: 'retire_route', routeId: 'test-route', reason: 'This route is ruled out.',
+      evidenceRefs: ['RESEARCH.md'] })).toMatchObject({ ok: true, cancelledTaskIds: [task.id] });
     await idle(f.team);
     expect(f.team.archive.deliveries).toHaveLength(0);
     const cancelled = f.makeTeam(readSolverRunState(f.stateFile));
@@ -363,10 +514,11 @@ describe('recoverable team source rejections', () => {
     expect(readAgentTeamProofDelivery(exact.archive.deliveries[0]!.path, legacy).provenance).not.toHaveProperty('objectiveRevision');
     const recovered = f.makeTeam(beforeCancel);
     await recovered.restore();
-    expect(recovered.archive.workers[0]!.tasks[0]!.status).toBe('interrupted');
+    const recoveredTask = recovered.archive.workers[0]!.tasks[0]!;
+    expect(recoveredTask.status, recoveredTask.error).toBe('interrupted');
     expect(recovered.archive.deliveries).toHaveLength(1);
     expect(readAgentTeamProofDelivery(recovered.archive.deliveries[0]!.path, beforeCancel).provenance)
-      .toMatchObject({ taskId: task.id, objectiveRevision: 2, objectiveDigest: mathDigest(message), workKind: 'proof' });
+      .toMatchObject({ taskId: task.id, objectiveRevision: 2, objectiveDigest: mathDigest(message) });
     expect(f.sessions).toHaveLength(1);
   }, 60_000);
 });

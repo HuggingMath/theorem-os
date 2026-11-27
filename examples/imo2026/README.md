@@ -19,8 +19,9 @@ these formalizations. The underlying Olympiad problems belong to the
 International Mathematical Olympiad. This notice grants no new rights in
 the original problem texts.
 
-The case uses `gpt-6.1-sol`, `xhigh`, four agents, the direct method, a shared
-30-minute solving limit and 20 total turns. A completed run is accepted only if
+The case uses `gpt-6.1-sol`, `xhigh`, a Codex native team of up to four members
+including Lead, a shared 30-minute solving limit and 20 total turns.
+A completed run is accepted only if
 all original targets pass host Lean verification after integration. This is a
 local evaluation (`official: false`). A demonstration run can remain incomplete
 within its budget; the example does not promise a solved task.
@@ -40,7 +41,8 @@ zstd-capable `squashfuse`/`snapfuse` and complete the actual startup preflight.
 Install dependencies with `bun install --frozen-lockfile` from the project root.
 Authenticate your existing Codex profile separately. The default profile is
 `~/.config/deepscientist/math-sol-codex`; `CODEX_HOME` can select another existing
-profile with access to the configured model.
+profile with access to the configured model. Use the
+[native team backend](../../scripts/codex-backend/README.md) for this example.
 
 The [environment template](math.env.example) describes tool and cache settings.
 Copy it to a local file, replace the paths, and set
@@ -92,8 +94,10 @@ For an existing pinned benchmark checkout, set `MATH_EXAMPLE_REPO` before
 `MATH_EXAMPLE_SKIP_CACHE=1` and configure its trusted root in your math environment
 file. These options reuse local resources; the task and target identities stay
 pinned. Preserve the original build and environment to resume a run.
+Use the original TheoremOS revision and build for a saved historical case.
+To try the native team, prepare a separate case directory.
 
-## Inspect and intervene
+## Inspect the run
 
 ```bash
 bun run math inspect --run /absolute/new/imo-q1-case/result.json
@@ -105,20 +109,5 @@ The report separates recorded proof checks, open conditions, review, and final
 evaluation. It can inspect a running checkpoint before `result.json` exists.
 It reads stored evidence and does not rerun Lean.
 
-Once the Lead has created a plan, edit the exported task objectives, helper
-types, dependencies or route settings. Retain `baseVersion`, all original goals,
-and an acyclic dependency graph. Then validate and queue the edit:
-
-```bash
-bun run math edit --run /absolute/new/imo-q1-case/result.json \
-  --plan /absolute/new/imo-q1-case/plan.json --dry-run
-bun run math edit --run /absolute/new/imo-q1-case/result.json \
-  --plan /absolute/new/imo-q1-case/plan.json
-```
-
-`queued` means the request was appended to the existing edit protocol. The live
-or resumed solver checks the plan version, applies the edit and separately
-rechecks affected proofs. Inspect again to distinguish `received`, `applied`,
-`rejected` and the proof recheck outcome. Stale plans must be re-exported against
-the current plan version. Fully accepted terminal runs are not new experiments;
-prepare a fresh case to measure a different method.
+The native Lead owns the route and member assignments. Start a separate case
+if you want to measure a different configuration.

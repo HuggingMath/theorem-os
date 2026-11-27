@@ -11,7 +11,7 @@ const sourceSchema = z.object({
   root: z.string(), commit: z.string().regex(/^[a-f0-9]{40,64}$/u), submodules: z.array(z.object({ path: z.string(), commit: z.string() }).strict()),
   inputs: z.array(fileSchema),
 }).strict();
-export const MATH_RUNTIME_BUNDLES = ['math-solver.js', 'search-lean.js', 'check-lean.js', 'proof-search.js'] as const;
+export const MATH_RUNTIME_BUNDLES = ['math-solver.js', 'search-lean.js', 'check-lean.js'] as const;
 const schema = z.object({
   schema: z.literal('deepscientist.math.build-manifest.v1'), buildId: z.string().uuid(),
   startedAt: z.string().datetime(), finishedAt: z.string().datetime(), source: sourceSchema,

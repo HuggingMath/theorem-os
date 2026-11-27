@@ -30,13 +30,13 @@ afterEach(() => {
 });
 
 describe('CLI worker capacity', () => {
-  it.each([1, 4, 8])('accepts %i workers at both CLI and module-plan boundaries', async workers => {
+  it.each([1, 4, 8])('reads historical module plans for %i workers and rejects multi-worker launches', async workers => {
     expect(() => configurableSolverModules(defaultResearchModulePlan(), 'cooperative', workers)).not.toThrow();
-    await expect(runSolver(['--workers', String(workers)], root)).rejects.toThrow('--workspace is required');
+    await expect(runSolver(['--workers', String(workers)], root)).rejects.toThrow(workers === 1 ? '--workspace is required' : 'math_legacy_collaboration_retired');
   });
 
   it.each(['0', '-1', '9', '1.5', 'NaN', '9007199254740992'])('rejects invalid worker count %s before accessing a workspace', async workers => {
-    await expect(runSolver([`--workers=${workers}`], root)).rejects.toThrow('invalid --workers');
+    await expect(runSolver([`--workers=${workers}`], root)).rejects.toThrow(/invalid --workers|math_legacy_collaboration_retired/u);
     expect(() => configurableSolverModules(defaultResearchModulePlan(), 'cooperative', Number(workers)))
       .toThrow('math_module_invalid_workers');
   });
@@ -49,14 +49,14 @@ describe('CLI worker capacity', () => {
     expect(() => describeModuleExperiment(experiment, MAX_RESEARCH_WORKERS + 1)).toThrow('math_module_invalid_workers');
   });
 
-  it('documents the shared capacity in the CLI and example help', async () => {
+  it('documents native team capacity and historical examples', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     expect(await runSolver(['--help'], root)).toBe(0);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('--workers 1..8'));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('--agent-team N'));
     const help = spawnSync('bun', ['scripts/mathematics/runExample.ts', '--help'],
       { cwd: root, encoding: 'utf8', timeout: 10_000 });
     expect(help.status, help.stderr).toBe(0);
-    expect(help.stdout).toContain('--workers 1..8');
+    expect(help.stdout).toContain('pinned historical revision');
   });
 
   it.each([8, 9])('validates the example argument and saved configuration for %i workers', workers => {
@@ -68,7 +68,7 @@ describe('CLI worker capacity', () => {
       { cwd: root, encoding: 'utf8', timeout: 10_000 });
     expect(result.status).toBe(1);
     if (workers === 8) {
-      expect(result.stderr).toContain(path.join(directory, 'workspace'));
+      expect(result.stderr).toContain('pinned historical TheoremOS revision');
       expect(result.stderr).not.toContain('Invalid example case');
     } else expect(result.stderr).toContain('--workers must be an integer from 1 to 8');
     expect(fs.readdirSync(directory)).toEqual(['case.json']);

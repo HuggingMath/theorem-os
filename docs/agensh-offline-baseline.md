@@ -48,7 +48,7 @@
 
 **模拟与后续验证口径**
 
-[solverDispatchWait.test.ts](../tests/solverDispatchWait.test.ts) 使用可丢弃 fixture 验证等待观察合同，属于模拟证据。忙碌 owner 场景记录 owner 原因，完整计划显式改为共享后空闲 peer 可以领取；保存过的 assignment 仍然独占。用例还覆盖自定义策略拒选、越权建议、预检竞争、预算门控、停止结束及私有范围投影。它们不能补写旧运行的等待原因，也不能证明实际等待减少或解题提速。
+[solverDispatchWait.test.ts](https://github.com/HuggingMath/theorem-os/blob/ef08987d6f686856c6fe9ecf86676ebbaa632546/tests/solverDispatchWait.test.ts) 使用可丢弃 fixture 验证等待观察合同，属于模拟证据。忙碌 owner 场景记录 owner 原因，完整计划显式改为共享后空闲 peer 可以领取；保存过的 assignment 仍然独占。用例还覆盖自定义策略拒选、越权建议、预检竞争、预算门控、停止结束及私有范围投影。它们不能补写旧运行的等待原因，也不能证明实际等待减少或解题提速。
 
 新观察保存在 worker.scheduling.wait，经现有 inspect 展示，并产生去重的 dispatch_wait / dispatch_wait_ended 事件。observedAt 是观察时间，endedAt 是结束时间；两者都不证明该原因在首次观察前已持续多久。旧记录显示 unknown，已记录计划或任务身份失效显示 stale；每次最多列出 16 个候选，其余及 scope 隐藏项计入 omittedCandidates。
 
@@ -76,7 +76,7 @@
 
 2026-10-24 按用户要求修复上述失败。三个 frontier 用例的超限来自固定证明角色说明增长；[context.ts](../src/solver/modules/context.ts) 压缩与基础指示重复的文字，保留精确任务类型、数学推理、原声明保护、原始 def 只填写 body、条件前提约束及独立检查要求。20 KiB 上限和必需数学接口保持原有断言，M4 追加版本 `compact-proof-role-context-v1`。
 
-另两项修正过时夹具：[solverContinuationCapacity.test.ts](../tests/solverContinuationCapacity.test.ts) 先确认续跑保留精确研究 advisory，再显式清空 live deliveries，继续验证完整笔记从不可变附件恢复；[solver.test.ts](../tests/solver.test.ts) 先确认仅修改已采纳目标的 revision 仍保留采纳，再改变真实前置引理合同，验证相同 handoff id 在新 context 下重新待决，以及失败请求恢复和重复交付幂等性。研究交付保留和 handoff 生产逻辑均未为迁就断言而改变。
+另两项修正过时夹具：[solverContinuationCapacity.test.ts](https://github.com/HuggingMath/theorem-os/blob/ef08987d6f686856c6fe9ecf86676ebbaa632546/tests/solverContinuationCapacity.test.ts) 先确认续跑保留精确研究 advisory，再显式清空 live deliveries，继续验证完整笔记从不可变附件恢复；[solver.test.ts](../tests/solver.test.ts) 先确认仅修改已采纳目标的 revision 仍保留采纳，再改变真实前置引理合同，验证相同 handoff id 在新 context 下重新待决，以及失败请求恢复和重复交付幂等性。研究交付保留和 handoff 生产逻辑均未为迁就断言而改变。
 
 修复后的聚焦验证通过：上下文 111 项，continuation 98 项，handoff 154 项，solver 局部 handoff 6 项，原始 definition 目标的独立验收 2 项。各组存在交集，不能相加作为独立用例总数。`bun run typecheck` 和 `bun run build` 通过。最终构建 ID 为 `aebc62ea-7886-4be9-a723-da551878424c`，[冻结 manifest](/home/lzh/.deepscientist-math-standalone-state/builds/aebc62ea-7886-4be9-a723-da551878424c/manifest.json) 的 SHA256 为 `13bb0218ccca14f439996463906c4847a9b8469c7d798c02da80bed96d521236`。与首次构建一样，它包含工作树中其他修改，不构成真实模型效果比较。
 

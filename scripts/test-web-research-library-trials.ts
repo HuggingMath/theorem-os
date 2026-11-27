@@ -29,7 +29,7 @@ const workerInputs: Parameters<WebRunner['run']>[0][] = [];
 let compiler: (value: Parameters<WebPrecheckRunner>[0]) => Promise<WebPrecheckOutput> = async value =>
   ({ output: '', exitCode: 0, timedOut: false, checkedTarget: value.candidateTarget?.name });
 const runner: WebRunner = {
-  async readiness() { return { ready: true, message: 'Disposable trial fixture' }; },
+  async readiness() { return { ready: true, nativeTeam: true, message: 'Disposable trial fixture' }; },
   async run(value, send) {
     workerCalls++; workerInputs.push(structuredClone(value));
     const observed = structuredClone(loadWebSample()!.observations.at(-1)!);
@@ -258,7 +258,12 @@ try {
     await frozenEvidence.getByText('namespace Shared', { exact: false }).waitFor();
     assert.equal(await peer.evaluate(async id => (await fetch(`/api/research/library-trials/${id}`)).status, new URL(libraryReturn).searchParams.get('trial')), 404,
       'A project member reviews the shared snapshot without access to the author’s private trial');
-    await peerFeedback.locator('[data-candidate-approve]').click(); await peerFeedback.locator('[data-candidate-delivery-status="approved"]').waitFor();
+    const decision = peerFeedback.locator('[data-feedback-decision]');
+    await decision.locator('summary').click();
+    await decision.locator('[data-decision-status]').selectOption('accepted');
+    await decision.getByLabel(language === 'zh' ? '理由' : 'Reason', { exact: true }).fill('The reviewed trial supports a new attempt with this fixed library.');
+    await decision.locator('[data-save-decision]').click();
+    await peerFeedback.locator('[data-candidate-delivery-status="approved"]').waitFor();
     assert.equal(commandCalls, beforeCommands, 'Human approval for a new attempt never dispatches to the completed run');
     await page.reload(); await ownerFeedback.locator('[data-prepare-library-attempt]').waitFor();
     const workersAtPreparation = workerCalls;

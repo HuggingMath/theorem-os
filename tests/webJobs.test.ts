@@ -7,6 +7,7 @@ import { webLimits, type WebProvider, type WebResult, type WebRunInput, type Wor
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { buildTheoremKnowledge, type KnowledgeCandidate } from '../src/solver/theoremKnowledge';
 import { mailsCompletion } from '../apps/web/completionMail';
+import { webAgentTeamPreset } from '../apps/web/researchMode';
 
 const provider: WebProvider = { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1' };
 const input = (apiKey = 'sk-test-job-secret'): WebRunInput => ({ providerId: provider.id, apiKey,
@@ -158,6 +159,33 @@ describe('web job ownership, scheduling and secret lifetime without provider cal
     send({ type: 'observation', observation: observation(run.id, 'solver-third', 2) });
     expect(run.solverAttempt).toEqual({ solverRunId: 'solver-third', round: 2, sequence: 2 });
     expect(run.status).toBe('running'); expect(run.result).toBeUndefined();
+    runner.calls[0].finish({ status: 'incomplete', proof: '', report: {} }); await tick();
+  });
+
+  it('keeps the original native route approval and its receipt after installing a library', async () => {
+    const { jobs, runner } = setup(), run = jobs.create('owner', { ...input(), ...webAgentTeamPreset(), planApproval: true }, provider);
+    await tick();
+    const send = runner.calls[0].send;
+    const nativeObservation = (solverRunId: string, sequence: number) => {
+      const snapshot = observation(run.id, solverRunId, sequence);
+      snapshot.inspection.configuration = { researchMode: 'skill', researchSkill: { name: 'fixture', digest: mathDigest('fixture'), loading: 'native' },
+        researchDelegation: { mode: 'team', maxAgents: 3 } } as WebObservation['inspection']['configuration'];
+      return snapshot;
+    };
+    const initial = nativeObservation('solver-first', 1), planVersion = 'original-plan', id = 'approved-plan';
+    initial.inspection.planApproval = { required: true, status: 'approved', approvedId: id, planVersion,
+      approvedVersion: planVersion, approvedAt: 1_800_000_000_000, rejections: [], leadRevising: false };
+    jobs.storage.saveCommand('owner', run.id, id, { id, status: 'queued', planVersion });
+    send({ type: 'observation', observation: initial });
+    send({ type: 'library_restart', previousSolverRunId: 'solver-first', solverRunId: 'solver-next', round: 1 });
+    const next = nativeObservation('solver-next', 2);
+    next.inspection.planApproval = { required: false, status: 'not-required', rejections: [], leadRevising: false };
+    send({ type: 'observation', observation: next });
+    const persisted = jobs.storage.getRun('owner', run.id)!;
+    expect(persisted.initialPlanApproval).toEqual({ solverRunId: 'solver-first', receipt: initial.inspection.planApproval });
+    expect(persisted.observation?.solverRunId).toBe('solver-next');
+    expect(jobs.commandReceipt('owner', run.id, id)).toMatchObject({ id, status: 'approved', planVersion });
+    expect(run.result).toBeUndefined();
     runner.calls[0].finish({ status: 'incomplete', proof: '', report: {} }); await tick();
   });
 

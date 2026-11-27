@@ -32,11 +32,7 @@ const runner: WebRunner = { async readiness() { return { ready: true, message: '
     send({ type: 'observation', observation }); await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true })); },
   async check() { prohibited++; throw new Error('No Lean calls in input draft verification'); },
   async formalize() { prohibited++; throw new Error('No model calls in input draft verification'); },
-  async command(_id, command) {
-    if (command.type !== 'guidance' || command.guidance.candidate) { prohibited++; throw new Error('Only controlled guidance records are allowed'); }
-    const at = new Date().toISOString(), guidance = { ...command.guidance, status: 'queued' as const, createdAt: at, updatedAt: at };
-    return { id: guidance.id, status: 'queued', guidance };
-  },
+  async command() { prohibited++; throw new Error('No solver commands in input draft verification'); },
 };
 const service = createWebService(config, runner, { sample: null, mailer: async () => { prohibited++; throw new Error('No mail in this fixture'); } });
 const owner = `account:${accounts[0].id}`, reviewerOwner = `account:${accounts[1].id}`, provider = config.providers[0];
@@ -77,33 +73,41 @@ try {
     const alicePage = await actor(0, width, language), reviewerPage = await actor(1, width, language); active = alicePage;
     const problemHref = (task = firstTask, extra: Record<string, string> = {}) => `${origin}/problem.html?${new URLSearchParams({ project: project.id, run: run.id, tab: 'route', task: task.id, taskVersion: task.version, ...extra })}`;
     const openDrawer = async (page: Page) => { const drawer = page.locator('[data-inline-drawer]'); await page.locator('[data-inline-open]').waitFor(); if (!(await drawer.evaluate(element => (element as HTMLDialogElement).open))) await page.locator('[data-inline-open]').click(); return drawer; };
-    const guidanceText = 'Retain the cancellation reasoning before trying induction.';
-    phase = `${width}-${language}-guidance-preservation-and-completion`;
-    await alicePage.goto(problemHref()); let drawer = await openDrawer(alicePage), guidance = drawer.locator('[data-inline-guidance]'); await openDetails(guidance);
-    await guidance.locator('textarea').fill(guidanceText); await drawer.locator('[data-inline-close]').click(); await openDrawer(alicePage);
-    assert.equal(await guidance.locator('textarea').inputValue(), guidanceText);
-    await alicePage.goto(problemHref(secondTask)); await openDrawer(alicePage); const otherGuidance = alicePage.locator('[data-inline-guidance]'); await openDetails(otherGuidance);
-    assert.equal(await otherGuidance.locator('textarea').inputValue(), '');
-    await alicePage.goto(problemHref()); await openDrawer(alicePage); guidance = alicePage.locator('[data-inline-guidance]');
-    assert.equal(await guidance.locator('textarea').inputValue(), guidanceText); await saveAccount(guidance);
-    let release: (() => void) | undefined;
-    await alicePage.route(`**/api/research/theorems/${project.id}/feedback`, async route => {
-      if (route.request().method() !== 'POST' || route.request().postDataJSON().kind !== 'guidance') return route.continue();
-      const response = await route.fetch(); await new Promise<void>(resolve => { release = resolve; }); await route.fulfill({ response });
-    });
-    await guidance.locator('[data-inline-confirm-guidance]').check(); await guidance.locator('[data-inline-send-guidance]').click();
-    await guidance.locator('textarea').fill('New reasoning entered while the first submission finishes.');
-    for (let attempt = 0; attempt < 100 && !release; attempt++) await new Promise(resolve => setTimeout(resolve, 20)); assert.ok(release); release();
-    await archived(alicePage, 'guidance', project.id); assert.equal(await guidance.locator('textarea').inputValue(), 'New reasoning entered while the first submission finishes.');
-    await alicePage.unroute(`**/api/research/theorems/${project.id}/feedback`);
-    checks.push({ phase, drawerRetainsText: true, tasksIsolated: true, newerTextRetained: true, cloudArchived: true });
-
     phase = `${width}-${language}-annotation-and-thread-reply`;
-    let annotations = alicePage.locator('[data-research-annotations]'); await openDetails(annotations.locator(':scope>details').last());
-    await annotations.locator('[data-annotation-whole-field]').click(); await annotations.locator('form').last().getByRole('textbox').last().fill('Explain how the displayed premise gives this result.');
-    await alicePage.reload(); await openDrawer(alicePage); annotations = alicePage.locator('[data-research-annotations]');
-    assert.equal(await annotations.locator('form').last().getByRole('textbox').last().inputValue(), 'Explain how the displayed premise gives this result.');
-    await annotations.locator('[data-annotation-selection]').waitFor(); await saveAccount(annotations); await annotations.locator('[data-save-annotation]').click(); await archived(alicePage, 'annotation', project.id);
+    const annotationText = 'Explain how the displayed premise gives this result.';
+    const newerText = 'Add the derivation after checking the intermediate expression.';
+    await alicePage.goto(problemHref()); const drawer = await openDrawer(alicePage);
+    const annotations = alicePage.locator('[data-research-annotations]');
+    const annotationForm = () => annotations.locator('form').filter({ has: alicePage.locator('[data-save-annotation]') });
+    const annotationInput = () => annotationForm().getByRole('textbox').last();
+    await openDetails(annotations.locator(':scope>details').last());
+    await annotations.locator('[data-annotation-whole-field]').click();
+    await annotationInput().fill(annotationText);
+    await drawer.locator('[data-inline-close]').click(); await openDrawer(alicePage);
+    assert.equal(await annotationInput().inputValue(), annotationText);
+    await alicePage.goto(problemHref(secondTask)); await openDrawer(alicePage);
+    await openDetails(annotations.locator(':scope>details').last());
+    assert.equal(await annotationInput().inputValue(), '');
+    await alicePage.goto(problemHref()); await openDrawer(alicePage);
+    assert.equal(await annotationInput().inputValue(), annotationText);
+    await annotations.locator('[data-annotation-selection]').waitFor();
+    await saveAccount(annotations);
+
+    const annotationRoute = `**/api/research/theorems/${project.id}/runs/${run.id}/annotations*`;
+    let release: (() => void) | undefined;
+    await alicePage.route(annotationRoute, async route => {
+      if (route.request().method() !== 'POST') return route.continue();
+      const response = await route.fetch();
+      await new Promise<void>(resolve => { release = resolve; });
+      await route.fulfill({ response });
+    });
+    await annotations.locator('[data-save-annotation]').click();
+    await annotationInput().fill(newerText);
+    for (let attempt = 0; attempt < 100 && !release; attempt++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(release); release();
+    await archived(alicePage, 'annotation', project.id);
+    assert.equal(await annotationInput().inputValue(), newerText);
+    await alicePage.unroute(annotationRoute);
     const thread = annotations.locator('[data-annotation-thread]').first(); await thread.waitFor(); const annotationId = (await thread.getAttribute('data-annotation-thread'))!;
     await thread.getByRole('textbox').fill('Use the original equality to rewrite the target.'); await alicePage.reload(); await openDrawer(alicePage);
     const restoredThread = alicePage.locator(`[data-annotation-thread="${annotationId}"]`); assert.equal(await restoredThread.getByRole('textbox').inputValue(), 'Use the original equality to rewrite the target.');
@@ -134,13 +138,15 @@ try {
 
     phase = `${width}-${language}-archive-management-and-restore`;
     await alicePage.goto(`${origin}/workspace.html?tab=drafts`); const panel = alicePage.locator('[data-personal-drafts-panel]'); await panel.locator('[data-personal-show-archived-drafts]').check();
-    const savedGuidance = await alicePage.evaluate(async projectId => (await (await fetch(`/api/research/personal/drafts?${new URLSearchParams({ kind: 'guidance', projectId, status: 'archived' })}`)).json()).items[0], project.id);
-    const row = panel.locator(`[data-personal-draft="${savedGuidance.id}"]`); await openDetails(row);
+    const savedAnnotation = await alicePage.evaluate(async projectId => (await (await fetch(`/api/research/personal/drafts?${new URLSearchParams({ kind: 'annotation', projectId, status: 'archived' })}`)).json()).items[0], project.id);
+    const row = panel.locator(`[data-personal-draft="${savedAnnotation.id}"]`); await openDetails(row);
     const restoreHref = (await row.getByRole('link').filter({ hasText: /回到编辑器恢复|Open the editor to restore/u }).first().getAttribute('href'))!;
     assert.ok(restoreHref.startsWith('problem.html?')); await alicePage.goto(`${origin}/${restoreHref}`);
-    const requested = alicePage.locator(`[data-account-draft-version="${savedGuidance.versions[0].id}"]`); await requested.locator('[data-restore-account-draft]').click();
-    await alicePage.waitForFunction(text => [...document.querySelectorAll<HTMLTextAreaElement>('[data-inline-guidance] textarea')].some(input => input.value === text), guidanceText);
-    assert.ok(await alicePage.evaluate(() => Object.keys(localStorage).some(key => key.startsWith('theoremos:human-draft') && (localStorage.getItem(key) ?? '').includes('New reasoning entered while'))));
+    const requested = alicePage.locator(`[data-account-draft-version="${savedAnnotation.versions[0].id}"]`); await requested.locator('[data-restore-account-draft]').click();
+    await alicePage.waitForFunction(text => Array.from(document.querySelectorAll<HTMLTextAreaElement>('[data-research-annotations] textarea'))
+      .some(input => input.value === text), annotationText);
+    assert.equal(await annotationInput().inputValue(), annotationText);
+    assert.ok(await alicePage.evaluate(text => Object.keys(localStorage).some(key => key.startsWith('theoremos:human-draft') && (localStorage.getItem(key) ?? '').includes(text)), newerText));
     assert.ok(await alicePage.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await alicePage.screenshot({ path: path.join(output, `drafts-${language}-${width}.png`), fullPage: true });
     checks.push({ phase, archivedRestorable: true, localAlternativePreserved: true, fitsViewport: true });

@@ -221,11 +221,10 @@ describe.each([{ common: false, mode: 'standalone skill' }, { common: true, mode
       const context = buildResearchContext(f.problem, f.state, { ...f.access, teamRole: { id: 'lead', role: 'lead' } });
       for (const continuation of [false, true]) {
         const dispatch = finalizeResearchDispatch(context, { continuation });
-        expect(dispatch.instructions).toContain('the Lead of an Agent-organized research team');
+        expect(dispatch.instructions).toContain('the Lead of a flat mathematical research team');
         expect(dispatch.instructions).toContain('theoremos_team');
         expect(dispatch.instructions).not.toContain('native child agents are not enabled');
         expect(dispatch.message).toContain('A durable question sent between native turns.');
-        expect(dispatch.message).toContain('latestSequence is not an acknowledgment');
         if (!continuation) expect(dispatch.manifest?.included.map(item => item.id)).toContain('agent-team');
       }
     });

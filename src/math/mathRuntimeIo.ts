@@ -37,14 +37,20 @@ function checkpointJson(item: unknown, previous: unknown): unknown {
   if (previous !== undefined && item === previous) return previous;
   if (Array.isArray(item)) {
     const prior = Array.isArray(previous) ? previous : undefined;
-    let unchanged = prior?.length === item.length;
-    const values = item.map((entry, index) => {
-      const current = checkpointJson(entry, prior?.[index]);
-      if (current !== prior?.[index]) unchanged = false;
-      return current;
-    });
-    // For a sparse array, a removed value is not visited by map.
-    return unchanged && prior!.every((_, index) => index in values) ? prior : values;
+    if (!prior) return item.map(entry => checkpointJson(entry, undefined));
+    // Keep the matching prefix detached without copying it until a slot changes.
+    let values: unknown[] | undefined;
+    for (let index = 0; index < item.length; index++) {
+      const present = index in item;
+      const saved = prior[index];
+      const current = present ? checkpointJson(item[index], saved) : undefined;
+      if (!values && current !== saved) values = prior.slice(0, index);
+      if (values && present) values[index] = current;
+    }
+    if (!values && item.length === prior.length) return prior;
+    values ??= prior.slice(0, item.length);
+    values.length = item.length;
+    return values;
   }
   if (item && typeof item === 'object') {
     const prototype = Object.getPrototypeOf(item);

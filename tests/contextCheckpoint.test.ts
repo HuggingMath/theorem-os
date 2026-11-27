@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from '../src/solver/archive';
-import { CooperativeResearch } from '../src/solver/cooperation';
+
 import { acceptContextCheckpoint, readCheckpointNotesDigest, savedContextCheckpoint } from '../src/solver/contextCheckpoint';
 import { MAX_RESEARCH_NOTES_BYTES } from '../src/solver/deliveries';
 import { git } from '../src/solver/problem';
@@ -91,67 +91,4 @@ describe('explicit context checkpoint publication', () => {
       expect(readSolverRunState(file).contextCheckpoint).toEqual(state.contextCheckpoint);
     } finally { fs.rmSync(example.directory, { recursive: true, force: true }); }
   });
-});
-
-describe('task checkpoint event intake', () => {
-  const reader = (commit = 'a'.repeat(40)) => {
-    const task: CooperativeTask = { id: 'a', kind: 'lemma', objective: 'Prove a.', dependsOn: [], revision: 0,
-      theoremName: 'a', proofPath: 'Submission.lean', type: 'True' };
-    const action: Extract<CooperativeAction, { kind: 'task' }> = { kind: 'task', task, assignment: {
-      taskId: task.id, taskDigest: taskVersion(task), workerId: 'peer', seedCommit: commit, assignmentId: 'dispatch',
-    } };
-    const worker = { id: 'peer', role: 'prover' as const, worktree: directory, ownedFiles: [] };
-    const session = { id: worker.id, ...research };
-    const main = { threadId: 'other-thread', workers: [session], problem: { baseCommit: commit }, environmentDigest: 'environment' };
-    const sequence: string[] = [], save = vi.fn();
-    const cooperative = Object.create(CooperativeResearch.prototype);
-    Object.assign(cooperative, {
-      archive: { tasks: [{ task, status: 'running', attempts: 1, assignment: action.assignment }], deliveries: [] },
-      input: { state: main, signal: new AbortController().signal, save,
-        emit: (name: string) => { sequence.push(name); } },
-      current: () => true, record: vi.fn(),
-    });
-    return { cooperative, action, worker, session, main, sequence, save };
-  };
-
-  it('publishes the checkpoint only after the preceding research event finishes intake', async () => {
-    git(directory, ['init', '--quiet']);
-    git(directory, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@localhost', 'commit', '--quiet', '--allow-empty', '-m', 'Fixture']);
-    const commit = git(directory, ['rev-parse', 'HEAD']);
-    const { cooperative, action, worker, session, main, sequence, save } = reader(commit);
-    const entered = deferred(), release = deferred();
-    cooperative.publishResearchFinding = vi.fn(async () => {
-      entered.resolve(); await release.promise; sequence.push('research-recorded');
-    });
-    const file = path.join(directory, assignmentDeliveryFile(action.assignment));
-    fs.writeFileSync(file, JSON.stringify({ kind: 'research', finding: { summary: 'The exact unresolved gap.' } }) + '\n' +
-      JSON.stringify(event) + '\n');
-    const cursors = {};
-    const pending = cooperative.readWorkerDeliveries(worker, action, cursors);
-    await entered.promise;
-    expect(savedContextCheckpoint(session, directory)).toBeUndefined();
-    expect(sequence).toEqual([]);
-    release.resolve(); await pending;
-    expect(sequence).toEqual(['research-recorded', 'context_checkpoint_published']);
-    expect(savedContextCheckpoint(session, directory)).toBe(digest);
-    expect(main).not.toHaveProperty('contextCheckpoint');
-    expect(cooperative.record).not.toHaveBeenCalled();
-    expect(cooperative.archive.deliveries).toEqual([]);
-    expect(cooperative.archive.tasks[0].status).toBe('running');
-    expect(cursors).toHaveProperty(`peer/${assignmentDeliveryFile(action.assignment)}`, fs.statSync(file).size);
-    expect(save).toHaveBeenCalled();
-  });
-
-  it.each(['legacy-log', 'wrong-task', 'wrong-digest', 'superseded', 'wrong-worker'] as const)(
-    'rejects checkpoint intake from %s', async scope => {
-      const { cooperative, action, worker, session } = reader();
-      const value = { ...event, id: 'checkpoint', taskId: action.task.id, taskDigest: action.assignment.taskDigest };
-      if (scope === 'wrong-task') value.taskId = 'other';
-      if (scope === 'wrong-digest') value.taskDigest = 'other';
-      if (scope === 'superseded') cooperative.current = () => false;
-      if (scope === 'wrong-worker') action.assignment.workerId = 'other';
-      await expect(cooperative.receive(worker, action, value, scope !== 'legacy-log')).rejects.toThrow('math_delivery_invalid');
-      expect(savedContextCheckpoint(session, directory)).toBeUndefined();
-      expect(cooperative.record).not.toHaveBeenCalled();
-    });
 });

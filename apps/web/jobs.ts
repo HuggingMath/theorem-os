@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import type { WebConfig } from './config';
 import type { WebRunner } from './runner';
 import type { WebEvent, WebEventDetails, WebProvider, WebResult, WebWorkerProvider, WebRun, WebRunInput, WorkerInput, WorkerMessage } from './shared';
-import { webResearchModeError, webSkillWithoutCooperation, webDefaultSkillLoading } from './researchMode';
+import { webResearchModeError, webDefaultSkillLoading } from './researchMode';
 import { normalizeWebTeamPreferences } from './nativeTeamProfiles';
 import { personalExpertCardsDigest } from '../../src/solver/personalExperts';
 import { isProgressEvent, parseWebFailure, webAgentActionLimits, webLimits, webRunEventLimit } from './shared';
@@ -111,7 +111,6 @@ export class WebJobs {
     };
   }
   private creation(input: WebRunInput, provider: WebWorkerProvider, requestId: string): WebCreation {
-    if (!/^[A-Za-z0-9_-]{1,128}$/u.test(requestId)) throw new WebStorageError(400, '提交请求标识无效。');
     const normalized = webProviderHarness(provider) === 'codex' ? input : { ...input, researchMode: input.researchMode ?? 'skill',
       skillLoading: input.skillLoading ?? 'file' };
     const { apiKey: _key, ...visible } = normalized;
@@ -122,11 +121,13 @@ export class WebJobs {
   }
   replay(owner: string, input: WebRunInput, provider: WebWorkerProvider, requestId?: string, legacyEnvironmentOmitted = false): WebRun | undefined {
     if (!requestId) return;
-    input = normalizeWebTeamPreferences(input);
-    const expected = this.creation(input, provider, requestId);
+    if (!/^[A-Za-z0-9_-]{1,128}$/u.test(requestId)) throw new WebStorageError(400, '提交请求标识无效。');
     const stored = this.creations.get(JSON.stringify([owner, requestId]));
     const previous = stored ?? this.storage.deletedCreation(owner, requestId);
     if (!previous) return;
+    // New submissions have nothing to compare. Hash the full source only for a saved identity.
+    input = normalizeWebTeamPreferences(input);
+    const expected = this.creation(input, provider, requestId);
     // Older HTTP clients could omit the environment when its default was standard.
     // Match that frozen identity only on a replay; new submissions keep the current default.
     if (previous.digest !== expected.digest && (!legacyEnvironmentOmitted ||
@@ -139,7 +140,7 @@ export class WebJobs {
   /** The source goes only to the worker; its exact host-resolved identity stays with the visible run. */
   create(owner: string, input: WebRunInput, provider: WebWorkerProvider, continuation?: WorkerInput['continuation'], requestId?: string,
     formalization?: { evidence?: unknown; compiled?: unknown; provenance: NonNullable<WebRun['formalization']> },
-    researchConfiguration?: WorkerInput['researchConfiguration']): WebRun {
+    researchConfiguration?: WorkerInput['researchConfiguration'], creationInput: WebRunInput = input): WebRun {
     input = normalizeWebTeamPreferences(input);
     if (webProviderHarness(provider) !== 'codex') input = { ...input, researchMode: input.researchMode ?? 'skill',
       skillLoading: input.skillLoading ?? 'file' };
@@ -147,7 +148,7 @@ export class WebJobs {
     const harnessError = webHarnessResearchError(provider, input);
     if (harnessError) throw new WebStorageError(400, harnessError);
     if (modeError) throw new WebStorageError(400, modeError);
-    const previous = this.replay(owner, input, provider, requestId);
+    const previous = this.replay(owner, creationInput, provider, requestId);
     if (previous) return previous;
     if (this.closing) throw new Error('服务正在停止，请稍后重试。');
     const count = (status: string) => [...this.jobs.values()].filter(job => job.run.status === status).length;
@@ -183,7 +184,7 @@ export class WebJobs {
     run.title = (formalization?.provenance.original.trim() || run.task).split('\n')[0].slice(0, 60) || 'Lean 研究';
     if (provider.harness || provider.execution) { run.harness = webProviderHarness(provider); run.harnessConfigurationDigest = webProviderExecutionDigest(provider); }
     if (input.researchMode !== 'skill' || input.workers > 1 || input.modulePlan) run.moduleConfiguration = freezeModuleConfiguration(run.modulePlan, run.coordination, run.workers, provider.harness);
-    const creation = requestId ? this.creation(input, provider, requestId) : undefined;
+    const creation = requestId ? this.creation(normalizeWebTeamPreferences(creationInput), provider, requestId) : undefined;
     this.event(run, 'queued', '任务已进入队列');
     // Persist the identity and initial run atomically before a worker can be queued.
     this.storage.saveRun(owner, run, creation);
@@ -344,6 +345,10 @@ export class WebJobs {
       run.researchSkill = { ...skill };
     }
     if (actualHarness) run.agentHarness = { ...actualHarness };
+    const approval = observation.inspection.planApproval;
+    if (run.nativeTeamCapacity && run.planApproval && !run.initialPlanApproval && (current?.round ?? 0) === 0 &&
+        approval?.status === 'approved' && approval.approvedId && approval.approvedVersion && approval.approvedAt !== undefined)
+      run.initialPlanApproval = { solverRunId: observation.solverRunId, receipt: approval };
     run.solverAttempt = { solverRunId: observation.solverRunId, round: current?.round ?? 0, sequence: observation.sequence };
     run.observation = projectStoredObservationChecks(observation);
     run.updatedAt = observation.observedAt;
@@ -368,21 +373,22 @@ export class WebJobs {
       affectedTaskIds: edit.affectedTasks ?? saved.affectedTaskIds, edit };
     // An approval is settled once the running solver records it as the approval, or rejects it.
     const approval = run.observation?.inspection.planApproval;
-    if (approval?.approvedId === id) return { ...saved, status: 'approved', reason: undefined, planVersion: approval.approvedVersion };
+    const approved = [run.initialPlanApproval?.receipt, approval].find(item => item?.approvedId === id);
+    if (approved) return { ...saved, status: 'approved', reason: undefined, planVersion: approved.approvedVersion };
     const rejected = approval?.rejections.find(item => item.id === id);
     if (rejected) return { ...saved, status: 'rejected', reason: rejected.reason, planVersion: rejected.planVersion ?? saved.planVersion };
     return saved;
   }
-  async command(owner: string, runId: string, command: Exclude<WebCommand, { type: 'capture' }>): Promise<WebCommandResult> {
+  async command(owner: string, runId: string, command: Extract<WebCommand, { type: 'plan-approval' }>): Promise<WebCommandResult> {
     const job = this.jobs.get(runId);
     if (!job || job.owner !== owner) throw new Error('运行不存在或不属于当前会话。');
-    if (webSkillWithoutCooperation(job.run)) throw new WebStorageError(409, '此研究安排不支持协作计划、逐题指导或计划审批。');
-    const id = command.type === 'guidance' ? command.guidance.id : command.type === 'guidance-withdraw' ? command.id
-      : command.type === 'plan-approval' ? command.approval.id : command.proposal.id;
-    const key = `${runId}/${command.type === 'edit-preview' ? 'preview/' : ''}${id}`;
+    if (command.type !== 'plan-approval' || !job.run.nativeTeamCapacity || !job.run.planApproval)
+      throw new WebStorageError(409, '此研究安排不支持计划审批。');
+    const { id } = command.approval;
+    const key = `${runId}/${id}`;
     const digest = crypto.createHash('sha256').update(canonicalMathJson(command)).digest('hex');
     const previous = this.commandReceipt(owner, runId, id);
-    if (command.type !== 'edit-preview' && previous) {
+    if (previous) {
       if (previous.commandDigest !== digest) throw new Error('命令 ID 已用于另一份内容，请使用新的 ID。');
       return previous;
     }
@@ -400,27 +406,19 @@ export class WebJobs {
         const receipt = clean(await this.runner.command!(runId, command), apiKey);
         if (this.jobs.get(runId) !== job) throw new WebStorageError(404, '运行不存在或不属于当前会话。');
         if (receipt.id !== id) throw new Error('命令回执身份不匹配。');
-        if (command.type === 'edit-preview') receipt.commandDigest = crypto.createHash('sha256')
-          .update(canonicalMathJson({ type: 'edit', proposal: command.proposal })).digest('hex');
         if (receipt.observation) this.observe(job, receipt.observation);
         if (job.run.observation) receipt.observation = job.run.observation;
-        if (command.type !== 'edit-preview') {
-          this.storage.saveCommand(owner, runId, id, { ...receipt, commandDigest: digest });
+        this.storage.saveCommand(owner, runId, id, { ...receipt, commandDigest: digest });
+        if (receipt.status === 'queued') {
           try {
-            if (command.type === 'plan-approval') {
-              if (receipt.status === 'queued') this.event(job.run, 'plan_approval_queued', '计划批准已提交；运行确认后 Agent 才开始工作，未生效会另行记录。');
-            } else if (command.type === 'guidance-withdraw') {
-              if (receipt.status === 'withdrawn') this.event(job.run, 'guidance_withdrawn', '一条尚未送达的数学指导已撤回，Agent 不会收到它。');
-            } else this.event(job.run, command.type === 'guidance' ? 'guidance_queued' : 'human_edit_queued',
-              command.type === 'guidance' ? '数学指导已提交；投递和采纳结果另行记录。' : '计划修改已提交；应用与证明重查结果另行记录。');
+            this.event(job.run, 'plan_approval_queued', '计划批准已提交；运行确认后 Agent 才开始工作，未生效会另行记录。');
           } catch { job.run.error = '运行状态未能保存；服务恢复后请重新查看。'; this.changed(owner); }
         }
-        return command.type === 'edit-preview' ? receipt : this.commandReceipt(owner, runId, id) ?? receipt;
+        return this.commandReceipt(owner, runId, id) ?? receipt;
       } catch (error) {
         // Deleted runs/accounts must stay deleted even when a transport fails after removal.
         if (this.jobs.get(runId) !== job) throw new WebStorageError(404, '运行不存在或不属于当前会话。');
         const reason = clean(error instanceof Error ? error.message : '命令回执暂不可用。', apiKey);
-        if (command.type === 'edit-preview') throw new Error(reason);
         const receipt = { id, status: 'unknown', reason, commandDigest: digest,
           ...(job.run.observation ? { observation: job.run.observation } : {}) };
         this.storage.saveCommand(owner, runId, id, receipt);

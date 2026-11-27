@@ -99,7 +99,7 @@ export class ChatSession {
   private researchEffort: 'low' | 'high' | 'max' = 'high';
   private autoExplain: ChatDraftSettings['autoExplain'] = true;
   private explanationLanguage: ChatDraftSettings['explanationLanguage'] = locale;
-  private participation: 'guided' | 'automatic' = 'guided';
+  private participation: 'guided' | 'automatic' = 'automatic';
   private apiKey = '';
   private keyBusy = false;
   private keyNotice = '';
@@ -224,7 +224,7 @@ export class ChatSession {
     this.summaries = []; this.historyLoaded = false; this.historyFailed = false;
     this.capabilities = undefined; this.formalizations = []; this.providerId = ''; this.model = '';
     this.environment = 'mathlib'; this.effort = 'high'; this.researchEffort = 'high'; this.autoExplain = true; this.explanationLanguage = locale;
-    this.participation = 'guided'; this.budgets = structuredClone(webFormalizationDefaults); this.hasDraftSettings = false;
+    this.participation = 'automatic'; this.budgets = structuredClone(webFormalizationDefaults); this.hasDraftSettings = false;
     this.keyBusy = false;
     this.lastTaskRefresh = 0; this.lastListRefresh = 0; this.lastActionPoll = 0;
     this.liveShown.clear(); this.liveSelected.clear(); this.solveCache = undefined;
@@ -420,6 +420,14 @@ export class ChatSession {
     } finally { if (ownerRevision === this.ownerRevision) { this.keyBusy = false; this.draw(); } }
   }
   private activeProviderId() { return this.run?.providerId ?? this.formalization?.providerId ?? this.providerId; }
+  private guidedAvailable() {
+    const session = this.options.session();
+    const provider = session?.providers.find(item => item.id === this.activeProviderId());
+    return Boolean(session?.runtime.nativeTeam && provider && (provider.harness ?? 'codex') === 'codex');
+  }
+  private requestedParticipation() {
+    return this.seed || this.submissionIdentity.unresolved || this.guidedAvailable() ? this.participation : 'automatic';
+  }
   private activeModel() { return this.run?.model ?? this.formalization?.model ?? this.model; }
   private get tabKeyProvider() {
     const session = this.options.session();
@@ -858,7 +866,7 @@ export class ChatSession {
         const settings = { providerId: this.providerId, model: this.model.trim(), environment: this.environment, effort: this.effort,
           autoExplain: this.autoExplain, explanationLanguage: this.explanationLanguage,
           ...(this.researchEffort !== this.effort ? { researchEffort: this.researchEffort } : {}), ...this.budgets,
-          ...(this.participation === 'guided' ? { humanReview: true } : {}) };
+          ...(this.requestedParticipation() === 'guided' ? { humanReview: true } : {}) };
         const input = { original: text, ...settings, apiKey: key, solve: true };
         let formalization = seed;
         if (!formalization) {
@@ -1222,9 +1230,10 @@ export class ChatSession {
   private draw() {
     this.refreshGuidanceFeedback();
     const pending = Boolean(this.conversation?.messages.some(message => message.kind === 'text' && message.status === 'pending'));
-    const canDecide = !!this.run && ['queued', 'running'].includes(this.run.status) && this.run.coordination === 'cooperative'
-      && this.run.workers > 1 && !this.options.isSample(this.run);
-    const showGuidance = canDecide && !!this.conversation;
+    const activeRun = !!this.run && ['queued', 'running'].includes(this.run.status) && !this.options.isSample(this.run);
+    const canEditPlan = activeRun && this.run?.coordination === 'cooperative' && this.run.workers > 1;
+    const canDecide = canEditPlan || activeRun && Boolean(this.run?.nativeTeamCapacity && this.run.planApproval);
+    const showGuidance = canEditPlan && !!this.conversation;
     const canGuide = showGuidance && this.run?.status === 'running' && !!this.run.observation?.plan;
     const guidance = this.activeGuidance, taskRef = guidance?.taskRef;
     const task = this.run?.observation?.inspection.tasks.find(item => item.id === taskRef?.id);
@@ -1239,7 +1248,8 @@ export class ChatSession {
     if (newProblem && !this.seed && !pendingSubmission) this.environment = webTaskEnvironment;
     const busyFormalization = newProblem && !this.seed && !pendingSubmission && !!this.capabilities
       && this.formalizations.filter(item => running(item)).length >= this.capabilities.limits.perOwner;
-    const unavailable = newProblem && !pendingSubmission && this.capabilities?.available === false;
+    const solveAvailable = this.capabilities?.solveAvailable ?? this.capabilities?.available;
+    const unavailable = newProblem && !pendingSubmission && solveAvailable === false;
     document.body.dataset.chatEmpty = String(newProblem && !this.loading && !this.seed);
     const solve = this.solve();
     const formalization = this.formalization ?? this.seed;
@@ -1297,7 +1307,8 @@ export class ChatSession {
       } : {}),
       ...(canGuide ? { onGuidance: (text?: string, taskId?: string) => this.beginGuidance(text, taskId) } : {}),
       ...(canDecide ? { planDecision: { approval: this.options.planApproval(this.run!), connected: this.options.connected(),
-        onReview: () => this.options.onPlan(this.run!, false), onEdit: () => this.options.onPlan(this.run!, true),
+        onReview: () => this.options.onPlan(this.run!, false),
+        ...(canEditPlan ? { onEdit: () => this.options.onPlan(this.run!, true) } : {}),
         onApprove: () => this.options.onApprovePlan(this.run!) } } : {}),
       ...(this.conversation && !this.loading && !this.submitting && !guidance && !(this.run && this.options.isSample(this.run))
         ? { onQuestion: (entry: ThinkingStep) => this.questionStep(entry) } : {}),
@@ -1364,20 +1375,26 @@ export class ChatSession {
         || this.awaitingDiscussionModel
         || editedSubmission
         || !guidance && !pendingSubmission && !this.pendingMessage && Boolean(this.options.session()?.maintenance)
-        || newProblem && ((!this.capabilities?.available && !pendingSubmission) || busyFormalization)
+        || newProblem && ((!solveAvailable && !pendingSubmission) || busyFormalization)
         || !!guidance && (!canGuide || !this.run?.observation || guidanceRunChanged || staleTarget || !!unresolvedGuidance),
       hasConversation: Boolean(this.currentId || this.conversation), newProblem, environment: this.environment,
       effort: this.run?.effort ?? this.formalization?.effort ?? this.effort, apiKey: this.apiKey,
       ...(editedSubmission ? { submissionRecovery: { busy: this.submitting,
         onRecover: () => void this.submit(this.seed!.original),
         onPrepareEdited: () => void this.submit(this.seed!.original, true) } } : {}),
-      participation: this.participation, participationLocked: Boolean(this.seed || this.submissionIdentity.unresolved || this.run),
+      participation: this.requestedParticipation(), guidedAvailable: this.guidedAvailable(),
+      participationLocked: Boolean(this.seed || this.submissionIdentity.unresolved || this.run),
       onParticipation: value => { this.participation = value; this.rememberDraft(); this.draw(); },
       keyRequired: guidance || pendingSubmission || this.pendingMessage || this.tabKey ? false : this.options.keyRequired(this.activeProviderId()),
       ...(this.tabKeyProvider ? { tabKeyMemory: { remembered: Boolean(this.tabKey), notice: this.keyNotice,
         onChange: (remember: boolean) => { this.keyNotice = ''; this.setRememberedKey(remember); this.clearConnection(); this.draw(); } } } : {}),
       providers: this.providers(), providerId: this.activeProviderId(), model: this.activeModel(),
-      onProvider: value => { this.providerId = value; this.model = this.providers().find(item => item.id === value)?.defaultModel ?? ''; this.apiKey = ''; this.keyNotice = ''; this.clearConnection(); this.rememberDraft(); this.draw(); },
+      onProvider: value => {
+        this.providerId = value;
+        this.model = this.providers().find(item => item.id === value)?.defaultModel ?? '';
+        this.participation = this.requestedParticipation();
+        this.apiKey = ''; this.keyNotice = ''; this.clearConnection(); this.rememberDraft(); this.draw();
+      },
       onModel: value => { this.model = value; this.clearConnection(); this.rememberDraft(); this.draw(); },
       quota: this.options.session()?.quota,
       cost: { owner: this.options.session()?.draftOwner ?? 'anonymous', account: Boolean(this.options.session()?.account), request: this.options.request },
@@ -1412,7 +1429,9 @@ export class ChatSession {
         : busyFormalization ? t("当前账号的形式化队列已满，输入内容会保留。")
         : unavailable ? this.capabilities?.reason === 'provider'
           ? t('当前服务未配置自然语言解题的模型，请联系管理员；也可切换到 Lean 输入。')
-          : this.options.session()?.runtime.ready
+          : this.capabilities?.available && this.capabilities.solveAvailable === false
+            ? t('当前运行镜像未安装原生团队后端。')
+            : this.options.session()?.runtime.ready
             ? t('当前服务暂不支持自然语言解题，可切换到 Lean 输入。')
             : t('运行环境暂未就绪，原题会保留；恢复后可继续发送。')
         : newProblem && !this.capabilities ? t("正在连接…")
@@ -1436,7 +1455,7 @@ export class ChatSession {
     }
     this.reading.rendered();
     this.drawHistory(); this.drawOriginal(); this.drawLive(solve, { guide: canGuide && !unresolvedGuidance,
-      edit: canDecide && !!this.run?.observation?.plan && this.options.connected() && !this.options.planApproval(this.run!)?.busy && !this.options.planApproval(this.run!)?.revising });
+      edit: canEditPlan && !!this.run?.observation?.plan && this.options.connected() && !this.options.planApproval(this.run!)?.busy && !this.options.planApproval(this.run!)?.revising });
   }
   private drawOriginal() { renderChatOriginal(this.originalPanel, { formalization: this.formalization, run: this.run }); }
   /** The panel beside the conversation; it keeps the process it was last drawn with while the task did not change. */

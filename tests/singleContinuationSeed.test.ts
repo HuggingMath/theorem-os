@@ -7,7 +7,7 @@ import type { MathematicsVerifierBatchRequest } from '../src/math/verifier';
 import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
 import { saveAgentTeamResearchArtifact } from '../src/solver/agentTeamResearch';
 import { searchContinuation } from '../src/solver/continuationSearch';
-import { seedSingleSolverContinuation } from '../src/solver/continuationSeed';
+import { seedSingleSolverContinuation } from '../src/solver/singleContinuationSeed';
 import { freezeContinuationInput, readContinuationContents, readContinuationPage, type ContinuationManifest } from '../src/solver/continuationInput';
 import { readDeclarationArtifacts } from '../src/solver/declarationArtifacts';
 import { committedSource, commitSolverSources, git } from '../src/solver/problem';

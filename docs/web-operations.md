@@ -12,7 +12,7 @@
 
 推送 `v*` 标签或运行 `gh workflow run images.yml --ref main` 会触发 `Publish workbench images`。发布流程在同一提交上调用上述验证，通过后分别构建和推送 web、worker、tex。三个镜像都使用完整源码 SHA 作为 GHCR 标签，并写入 OCI revision。Web 和 worker 还设置 `THEOREMOS_SOURCE_COMMIT`，Web 前端的 `build-info.json` 也记录这个 SHA。三张镜像均推送成功后，流程才上传 `image-release-<SHA>`，其中 `image-release.json` 记录提交及三个 registry digest。
 
-本地可执行同一组无模型求解器回归，包含协作回放脚本的研究决策协议检查。Linux CI 与 Worker 构建使用 `scripts/install-elan.sh` 安装固定的 elan 4.2.4，校验官方发布包 SHA-256，并通过 Lean 的发布 JSON 获取工具链，避免旧版 elan 抓取 GitHub 发布页面失败。先安装相应 elan 工具链，再显式选择版本，避免机器上较新的 Lean 候选版替代实际支持的版本：
+本地可执行同一组无模型求解器回归。Linux CI 与 Worker 构建使用 `scripts/install-elan.sh` 安装固定的 elan 4.2.4，校验官方发布包 SHA-256，并通过 Lean 的发布 JSON 获取工具链。先安装相应工具链，再显式选择版本。
 
 ```bash
 THEOREMOS_TEST_LEAN_VERSION=4.33.0 bun run test:solver-reliability
@@ -172,11 +172,12 @@ bun scripts/web-operations.ts capacity --research-concurrency 1
 
 默认同时开启一个研究、一个形式化生成、一个后台形式化审核、一个讲解与两个预检查时，容器内存上限合计 **56 GiB**、CPU 上限合计 **12 核**，建议工作盘余量 **120 GiB**。这是配置上限之和，不代表实际使用量或性能承诺。调整研究并发时，必须一起考虑其他队列和模型网关限制。
 
-发布演练使用离线 fixture 驱动已有真实 Docker/Lean 测试，不使用真实 Key：
+发布演练可分别运行真实 Docker 与 Lean 检查，以及原生团队的浏览器回归。两项测试均使用离线夹具。
 
 ```bash
 bun scripts/test-web-runtime.ts --case mathlib-valid
-bun run test:web-cooperative-runtime
+bun run build:web
+bun scripts/test-web-native-team.ts
 ```
 
 默认模型的首次流程另用隔离、匿名的本地工作台验收；先构建同一源码的 web / worker 镜像并启动独立数据目录，然后显式允许真实调用：

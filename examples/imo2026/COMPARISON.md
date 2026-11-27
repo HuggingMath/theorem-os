@@ -1,5 +1,11 @@
 # Compare single, independent and cooperative solving
 
+These are historical host scheduling experiments. To prepare a new instance of
+the protocol below, run its commands from TheoremOS revision
+`ef08987d6f686856c6fe9ecf86676ebbaa632546`, before the switch to native teams.
+For an existing experiment, use the original revision and build recorded in its
+build manifest. The current CLI can read and check saved comparison reports.
+
 For module-plan comparisons with fixed cooperative workers, including optional
 context and custom-rule treatments, see [module experiments](../components/EXPERIMENTS.md).
 

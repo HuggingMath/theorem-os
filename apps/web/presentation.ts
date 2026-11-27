@@ -1,5 +1,6 @@
 import { webLimits, webPreparationSeconds, type WebEffort, type WebFailureKind, type WebRun } from './shared';
 import { locale, localeTag, localizeMessage, localizeText, t, translator } from './i18n';
+import { MIN_TEAM_AGENTS } from '../../src/solver/teamCapacity';
 
 export const isAcceptedRun = (run: WebRun) => run.status === 'completed' && run.result?.status === 'evaluated_passed';
 /** A compiled candidate can pass Lean while its correspondence to the original is still unapproved. */
@@ -190,8 +191,8 @@ const report: RecoveryAction = { id: 'report', label: t('查看报告') };
 const guides: Record<WebFailureKind, FailureGuide> = {
   authentication: { title: t('API Key 未通过认证'), detail: t('服务商拒绝了这个 API Key。请确认密钥属于所选服务商、没有过期且有模型权限，然后换一个密钥重新运行。'),
     actions: [{ id: 'key', label: t('更换 API Key') }] },
-  rate_limit: { title: t('服务商限制了请求'), detail: t('账户额度不足，或同时发出的请求超过了服务商的并发上限。请检查余额和并发配额，减少 Agent 数量，或稍后再试。'),
-    actions: [{ id: 'workers', label: t('减少 Agent 数量') }, retry] },
+  rate_limit: { title: t('服务商限制了请求'), detail: t('账户额度不足，或同时发出的请求超过了服务商的并发上限。请检查余额和并发配额，或稍后再试。'),
+    actions: [retry] },
   network: { title: t('模型服务连接失败'), detail: t('多次重试后仍无法连上模型服务，或请求超时。已检查的成果保存在报告中。请确认服务商状态后重新运行。'),
     actions: [retry, report] },
   budget: { title: t('已达到模型用量上限'), detail: t('本次运行的模型用量已到上限，后续调用已停止。已检查的成果保存在报告中。'),
@@ -238,6 +239,8 @@ export function failureGuide(run: WebRun): FailureGuide | undefined {
     : run.result?.status === 'limit_reached' ? 'time_limit' : undefined);
   if (kind) {
     if (kind === 'time_limit' && preparationStopped(run)) return preparationGuide(run);
+    if (kind === 'rate_limit' && (run.nativeTeamCapacity ?? 0) > MIN_TEAM_AGENTS)
+      return { ...guides.rate_limit, kind, actions: [{ id: 'workers', label: t('减少团队人数') }, retry] };
     const guide = kind === 'time_limit' ? timeGuide(run) : guides[kind], detail = run.failure?.reason && reasonDetails[run.failure.reason];
     // A stop before approval can include planning/revision work, or a historical run whose wait used its old budget.
     const unapproved = kind === 'time_limit' && run.observation?.inspection.planApproval?.status === 'pending'

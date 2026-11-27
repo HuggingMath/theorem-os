@@ -3,7 +3,6 @@ import { aggregateUsage, allowanceReached, attributeTaskUsage, beginRequestUsage
   modelDispatchAllowed, recordThreadUsage, reportedTotalTokens, type RequestUsageAccounting, type UsageAccounting } from '../src/solver/usageBudget';
 import type { SolverRunState } from '../src/solver/archive';
 import { ResearchUsage } from '../src/solver/researchUsage';
-import type { CooperativeAction } from '../src/solver/tasks';
 
 const accounting = (overrides: Partial<UsageAccounting> = {}): UsageAccounting =>
   ({ startedTurns: 1, reportedTurns: 1, pending: false, incomplete: false, ...overrides });
@@ -201,16 +200,16 @@ describe('task usage attribution in research sessions', () => {
   it('credits a request settled after its turn to the task that admitted it, not to a later lead turn', () => {
     const state = { turns: 0, tokenBudget: buildTokenBudget(0, []) } as unknown as SolverRunState;
     initializeUsageAccounting(state);
-    const usage = new ResearchUsage({ state, research: state, maxTotalTokens: 0, signal: new AbortController().signal,
+    const usage = new ResearchUsage({ state, research: state, signal: new AbortController().signal,
       remainingMs: () => Infinity, changed: () => {}, emit: () => {} });
     const callbacks = usage.bindSession('session', () => undefined);
     usage.sessionOpened({ threadId: 'thread', usageSource: 'upstream-requests', run: async () => 'completed',
       close: async () => {}, interrupt: async () => {} });
-    usage.begin({ kind: 'task', task: { id: 'lemma_a' }, assignment: {} } as unknown as CooperativeAction);
+    usage.begin('lemma_a');
     const late = callbacks.requestGate!();
     if (!late.allowed) throw new Error('fixture_request_not_admitted');
     usage.finish(true);
-    usage.begin({ kind: 'lead', seedCommit: 'seed' });
+    usage.begin();
     const lead = callbacks.requestGate!();
     if (!lead.allowed) throw new Error('fixture_request_not_admitted');
     late.settle({ usage: { totalTokens: 40, inputTokens: 30, outputTokens: 10 }, complete: true });

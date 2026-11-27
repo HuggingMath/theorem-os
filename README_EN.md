@@ -53,7 +53,7 @@ https://github.com/user-attachments/assets/57562769-aa15-474c-87ff-73265f097ec8
 
 | Web Workbench &amp; Human Control | Zero-Trust Acceptance (`S1` / `S3`) | Replaceable M1–M5 Modules |
 | :--- | :--- | :--- |
-| Built-in [`apps/web`](./apps/web/) UI supporting natural language, TeX, or single-file Lean input, background semantic review, cooperative/autonomous modes, and live Lean diagnostics. | A model claiming completion or local helper passes **never counts as theorem acceptance**; [`evaluation.ts`](./src/solver/evaluation.ts) re-verifies the frozen original problem cleanly, while [`archive.ts`](./src/solver/archive.ts) checkpoints every attempt for pause and resume. | Decouples proof construction, evidence checks, search scheduling, context assembly, and role assignment into versioned TypeScript interfaces for controlled ablation studies under identical problems and acceptance checks. |
+| Built-in [`apps/web`](./apps/web/) UI supporting natural language, TeX, or single-file Lean input, background semantic review, native Codex teams, optional initial route approval, and live Lean diagnostics. | A model claiming completion or local helper passes **never counts as theorem acceptance**; [`evaluation.ts`](./src/solver/evaluation.ts) re-verifies the frozen original problem cleanly, while [`archive.ts`](./src/solver/archive.ts) checkpoints every attempt for pause and resume. | Decouples proof construction, evidence checks, search scheduling, context assembly, and role assignment into versioned TypeScript interfaces used by past ablation studies. Use the pinned revision to reproduce a study. |
 
 | Repository | Scope &amp; Contents | License |
 | --- | --- | --- |
@@ -116,12 +116,9 @@ Swap individual research policies without altering the host verification loop or
 ```bash
 bun run math component init --name my-search
 bun run math component check --name my-search
-
-export THEOREMOS_COMPONENT_CASE="$PWD/../theorem-os-runs/my-search"
-bun run math example prepare --dir "$THEOREMOS_COMPONENT_CASE" --component my-search --workers 3
-bun run math example check --dir "$THEOREMOS_COMPONENT_CASE"
-bun run math example resume --dir "$THEOREMOS_COMPONENT_CASE"
 ```
+
+The Codex Lead assigns work in current collaborative runs. You can still inspect older host-scheduled runs. Resume them and reproduce M3 scheduling experiments with their respective pinned historical revisions. [Resume guide](./docs/harness-portability.md#resume-and-isolation)
 
 </details>
 
@@ -175,7 +172,7 @@ bun run math example resume --dir "$THEOREMOS_COMPONENT_CASE"
 
 ## Five Replaceable Research Components
 
-TheoremOS separates high-level search strategy from proof verification (full contracts in [`docs/solver-modules.md`](./docs/solver-modules.md) and [`src/solver/modules/index.ts`](./src/solver/modules/index.ts)):
+TheoremOS separates research decisions from proof verification. The table includes the historical M3 task ordering and M5 fixed-role contracts used to interpret scheduling experiments. The Codex Lead assigns work in current teams. [Module guide](./docs/solver-modules.md)
 
 | Component / Layer | Responsibility | Implementation | Guide &amp; Examples |
 | --- | --- | --- | --- |

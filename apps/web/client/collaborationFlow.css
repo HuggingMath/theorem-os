@@ -33,8 +33,6 @@
 .collaboration-draft code, .collaboration-issue-execution code { overflow-wrap: anywhere; white-space: normal; }
 .collaboration-issue-execution { margin-block: 1rem; }
 .collaboration-issue-execution > details, .collaboration-review { padding-block: .75rem; border-top: 1px solid var(--line); }
-.collaboration-issue-execution .research-check { display: flex; align-items: center; gap: .6rem; }
-.collaboration-issue-execution .research-check input { width: auto; }
 .collaboration-review > p { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; }
 .collaboration-review select { width: 100%; min-width: 0; }
 .collaboration-review .research-form { max-width: 100%; }

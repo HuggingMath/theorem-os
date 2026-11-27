@@ -136,6 +136,9 @@ export function pageKeys() {
  */
 export function serverKeys() {
   const keys = new Map<string, string>();
+  // The retired scheduler wrote these event messages into run archives, including the bundled sample.
+  for (const message of ['数学指导已提交；投递和采纳结果另行记录。', '计划修改已提交；应用与证明重查结果另行记录。',
+    '一条尚未送达的数学指导已撤回，Agent 不会收到它。']) keys.set(message, 'historical run events');
   for (const example of researchExamples) for (const value of [example.name, example.task]) keys.set(value, 'apps/web/problemExamples.ts');
   const files = ['apps/web/progress.ts', 'apps/web/jobs.ts', 'apps/web/runner.ts', 'apps/web/config.ts', 'apps/web/share.ts', 'apps/web/moduleRegistry.ts', 'src/solver/modules/policy.ts', 'scripts/build-web-sample.ts'];
   for (const relative of files) {
@@ -170,7 +173,7 @@ export function serverKeys() {
  */
 export function errorKeys() {
   const keys = new Map<string, string>();
-  const files = ['apps/web/conversations.ts', 'apps/web/formalizations.ts', 'apps/web/server.ts', 'apps/web/paperDrafts.ts', 'apps/web/jobs.ts', 'apps/web/storage.ts', 'apps/web/auth.ts', 'apps/web/explain.ts', 'apps/web/quota.ts', 'apps/web/admission.ts', 'apps/web/providerCheck.ts',
+  const files = ['apps/web/shared.ts', 'apps/web/conversations.ts', 'apps/web/formalizations.ts', 'apps/web/server.ts', 'apps/web/paperDrafts.ts', 'apps/web/jobs.ts', 'apps/web/storage.ts', 'apps/web/auth.ts', 'apps/web/explain.ts', 'apps/web/quota.ts', 'apps/web/admission.ts', 'apps/web/providerCheck.ts',
     'apps/web/runner.ts', 'apps/web/worker.ts', 'apps/web/moduleRegistry.ts', 'apps/web/knowledgeService.ts', 'apps/web/researchProjects.ts', 'apps/web/researchAssets.ts', 'apps/web/researchApi.ts', 'apps/web/researchMathematics.ts', 'apps/web/researchCandidateScope.ts', 'apps/web/researchAssetPrefill.ts', 'apps/web/researchLibraryTrials.ts', 'apps/web/researchProblems.ts', 'apps/web/researchMathExamples.ts',
     'apps/web/researchBudgets.ts', 'apps/web/researchPersonal.ts', 'apps/web/researchJourney.ts', 'apps/web/researchProjectStart.ts',
     'apps/web/sharedProofs.ts', 'apps/web/researchCollections.ts', 'apps/web/researchCollaborationApi.ts', 'apps/web/researchMode.ts', 'apps/web/nativeTeamProfiles.ts'];
@@ -188,11 +191,14 @@ export function errorKeys() {
     // Besides error constructors, `.error =` and `error:`: the worker's `{ type: 'error', message }` and the explain
     // service's table of provider statuses.
     const visit = (node: ts.Node) => {
-      if (ts.isNewExpression(node) && /Error$/u.test(node.expression.getText(source))) node.arguments?.forEach(collect);
+      if (relative === 'apps/web/shared.ts' && ts.isVariableDeclaration(node) &&
+        /^retired.*Message$/u.test(node.name.getText(source)) && node.initializer) collect(node.initializer);
+      else if (ts.isNewExpression(node) && /Error$/u.test(node.expression.getText(source))) node.arguments?.forEach(collect);
       else if (['apps/web/researchAssets.ts', 'apps/web/researchApi.ts', 'apps/web/researchMathematics.ts', 'apps/web/researchAssetPrefill.ts', 'apps/web/researchLibraryTrials.ts', 'apps/web/researchPersonal.ts', 'apps/web/researchJourney.ts', 'apps/web/sharedProofs.ts'].includes(relative) && ts.isCallExpression(node) && node.expression.getText(source) === 'fail' && node.arguments[1]) collect(node.arguments[1]);
       else if (relative === 'apps/web/researchLibraryTrials.ts' && ts.isPropertyAssignment(node) && ['incompatibility', 'error'].includes(node.name.getText(source))) collect(node.initializer);
       else if (relative === 'apps/web/researchLibraryTrials.ts' && ts.isVariableDeclaration(node) && node.name.getText(source) === 'reason' && node.initializer) collect(node.initializer);
-      else if (relative === 'apps/web/researchAssets.ts' && ts.isPropertyAssignment(node) && node.name.getText(source) === 'reason') collect(node.initializer);
+      else if (['apps/web/researchAssets.ts', 'apps/web/conversations.ts'].includes(relative) &&
+        ts.isPropertyAssignment(node) && node.name.getText(source) === 'reason') collect(node.initializer);
       else if (relative === 'apps/web/researchApi.ts' && ts.isBinaryExpression(node) && node.left.getText(source) === 'reason') collect(node.right);
       else if (relative === 'apps/web/researchApi.ts' && ts.isVariableDeclaration(node) && node.name.getText(source) === 'reason' && node.initializer) collect(node.initializer);
       else if (relative === 'apps/web/researchCandidateScope.ts' && ts.isReturnStatement(node) && node.expression) collect(node.expression);

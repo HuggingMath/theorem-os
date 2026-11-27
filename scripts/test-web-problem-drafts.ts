@@ -21,7 +21,7 @@ const writes: string[] = [], checks: string[] = [], contexts: BrowserContext[] =
 let prohibited = 0, phase = 'login', active: Page | undefined, failure: unknown;
 let release: unknown;
 const runner: WebRunner = {
-  async readiness() { return { ready: true, message: 'Disposable problem draft fixture' }; },
+  async readiness() { return { ready: true, nativeTeam: true, message: 'Disposable problem draft fixture' }; },
   async run() { prohibited++; throw new Error('Drafts must not run research'); },
   async formalize() { prohibited++; throw new Error('Keyboard submission is intercepted before any model call'); },
 };
@@ -168,12 +168,16 @@ try {
   await page.locator('#source').fill(leanSource); await page.locator('#task').fill('保留这一份未完成证明与预算。');
   await page.locator('#composer-settings').click(); await page.locator('#model').fill('lean-draft-model');
   await page.locator('[data-settings-section="settings-execution"]').click();
-  await page.locator('#max-turns').fill('7'); await page.locator('#max-seconds').fill('600'); await page.locator('#workers').fill('3');
+  await page.locator('#max-turns').fill('7'); await page.locator('#max-seconds').fill('600');
+  assert.match(await page.locator('#current-research-mode').innerText(), /Codex 原生团队/u);
+  await page.locator('#native-team-capacity').selectOption('5');
   await closeSettings(page); const lean = await save(page, 'Lean 待完成版本'); assert.equal(lean.version.value.mode, 'lean');
   await chooseVersion(other, lean); await other.locator('body[data-entry=lean]').waitFor({ state: 'attached' });
   assert.equal(await other.locator('#source').inputValue(), leanSource); assert.equal(await other.locator('#task').inputValue(), '保留这一份未完成证明与预算。');
   assert.equal(await other.locator('#model').inputValue(), 'lean-draft-model'); assert.equal(await other.locator('#max-turns').inputValue(), '7');
-  assert.equal(await other.locator('#max-seconds').inputValue(), '600'); assert.equal(await other.locator('#workers').inputValue(), '3');
+  assert.equal(await other.locator('#max-seconds').inputValue(), '600');
+  assert.match(await other.locator('#current-research-mode').textContent() ?? '', /Native Codex team/u);
+  assert.equal(await other.locator('#native-team-capacity').inputValue(), '5');
   assert.equal(await other.locator('#api-key').inputValue(), '');
   await other.goto(`${origin}/?accountDraft=${lean.draft.id}&draftVersion=${lean.version.id}`);
   await openChatModelSettings(other); await enterLean(other);

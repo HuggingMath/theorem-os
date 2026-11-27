@@ -52,6 +52,26 @@ describe('shared native harness process isolation', () => {
     expect(fs.readFileSync(secret, 'utf8')).toBe('hidden file');
   });
 
+  it('allows planning notes while the proof workspace and repository metadata are read-only', () => {
+    const proof = path.join(workspace, 'proof.lean');
+    const gitDirectory = path.join(workspace, '.git');
+    fs.writeFileSync(proof, 'theorem proposed : True := by sorry');
+    fs.mkdirSync(gitDirectory);
+    const launch = prepareHarnessProcess({ workspace, profile, readOnlyWorkspace: true },
+      process.execPath, ['-e', `
+        const fs = require('fs'), path = require('path');
+        for (const file of ['proof.lean', 'new.lean', '.git/HEAD']) {
+          try { fs.writeFileSync(file, 'bad'); process.exit(9); }
+          catch (error) { if (error.code !== 'EROFS' && error.code !== 'EACCES') throw error; }
+        }
+        fs.writeFileSync(path.join(path.dirname(process.env.TMPDIR), 'plan.md'), 'route notes');
+      `]);
+    const result = spawnSync(launch.command, launch.args, { env: launch.env, encoding: 'utf8', timeout: 10_000 });
+    expect(result.status, result.stderr).toBe(0);
+    expect(fs.readFileSync(proof, 'utf8')).toContain('sorry');
+    expect(fs.readFileSync(path.join(workspace, '.scratch', 'plan.md'), 'utf8')).toBe('route notes');
+  });
+
   it('lets a Mathlib writer start a nested sandbox without exposing its hidden roots', () => {
     const canary = path.join(outside, 'canary');
     fs.writeFileSync(canary, 'private');

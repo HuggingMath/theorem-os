@@ -15,7 +15,8 @@ const input = (): WebRunInput => ({ providerId: 'openai', apiKey: 'sk-operations
   maxRunSeconds: 30, workers: 1, coordination: 'cooperative' });
 class HeldRunner implements WebRunner {
   ready = true;
-  async readiness() { return { ready: this.ready, message: 'Local fixture worker' }; }
+  nativeTeam = true;
+  async readiness() { return { ready: this.ready, nativeTeam: this.nativeTeam, message: 'Local fixture worker' }; }
   private hold(signal: AbortSignal) {
     return new Promise<never>((_resolve, reject) => {
       signal.throwIfAborted();
@@ -110,7 +111,7 @@ describe('administrator operations HTTP API', () => {
     expect((await maintenance(admin, true)).status).toBe(200);
     const ready = await request('/readyz');
     expect(ready.status).toBe(503);
-    expect(await ready.json()).toEqual({ ready: false, maintenance: true, commit: config.sourceCommit });
+    expect(await ready.json()).toEqual({ ready: false, maintenance: true, nativeTeam: true, commit: config.sourceCommit });
     expect((await request('/healthz')).status).toBe(200);
     for (const route of ['/api/runs', '/api/formalizations', '/api/precheck'])
       expect((await request(route, admin, {})).status).toBe(503);
@@ -119,6 +120,9 @@ describe('administrator operations HTTP API', () => {
     expect(await status(admin)).toMatchObject({ maintenance: true, queues: { research: { running: 1, queued: 0 } } });
     expect((await maintenance(admin, false)).status).toBe(200);
     expect((await request('/readyz')).status).toBe(200);
+    runner.nativeTeam = false;
+    expect(await status(admin)).toMatchObject({ maintenance: false, ready: false });
+    runner.nativeTeam = true;
     runner.ready = false;
     expect((await request('/readyz')).status).toBe(503);
     expect(await status(admin)).toMatchObject({ maintenance: false, ready: false });

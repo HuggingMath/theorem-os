@@ -9,7 +9,7 @@ function fixture(prior?: SolverRunState) {
   const state = prior ?? { turns: 0 } as SolverRunState;
   initializeUsageAccounting(state);
   const events: string[] = [];
-  const usage = new ResearchUsage({ state, research: state, maxTotalTokens: 100, signal: new AbortController().signal,
+  const usage = new ResearchUsage({ state, research: state, signal: new AbortController().signal,
     remainingMs: () => Infinity, changed: () => { state.tokenBudget = buildTokenBudget(100, [state]); },
     emit: event => { events.push(event); } });
   const open = (id: string, source: MathAgentSession['usageSource'] = 'native-turn-totals') => {

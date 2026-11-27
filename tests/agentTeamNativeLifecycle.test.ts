@@ -30,7 +30,9 @@ const fixtures: ReturnType<typeof fixture>[] = [];
 const ROOT = '00000000-0000-4000-8000-000000000001';
 
 /** Only model execution is controlled; task state, worktree isolation, source freezing and Lean checks are real. */
-function fixture({ earlyCompletion = false, beforeOpen }: { earlyCompletion?: boolean; beforeOpen?: () => Promise<void> } = {}) {
+function fixture({ earlyCompletion = false, beforeOpen, beforeVerification }: {
+  earlyCompletion?: boolean; beforeOpen?: () => Promise<void>; beforeVerification?: () => Promise<void>;
+} = {}) {
   const directory = temporaryDirectory('native-team-lifecycle-'), root = path.resolve('.');
   const receipt = bootstrapLeanTask(path.join(directory, 'primary'), {
     task: 'Prove the frozen statement.', source: 'namespace NativeTeam\ntheorem original : True := by sorry\nend NativeTeam\n',
@@ -109,7 +111,8 @@ function fixture({ earlyCompletion = false, beforeOpen }: { earlyCompletion?: bo
     leadAccess: { environment, retrievalRoot: path.join(state.worktree, problem.projectRelative), researchSkill: skill },
     modules, executable: 'offline-fixture', profile: 'offline-fixture', signal: controller.signal,
     maxAgents: 3, maxTurns: Infinity, maxTurnMs: Infinity, maxTotalTokens: 0, remainingMs: () => Infinity,
-    save: () => writeSolverRunState(path.join(directory, 'state.json'), state), emit: () => {}, exclusiveCheck: operation => operation(),
+    save: () => writeSolverRunState(path.join(directory, 'state.json'), state), emit: () => {},
+    exclusiveCheck: async operation => { await beforeVerification?.(); return operation(); },
   });
   const rootOptions = team.nativeAgentControlOptions()!;
   const rootConnection: NativeAgentControlConnection = { info: { sessionId: ROOT,
@@ -214,7 +217,7 @@ describe('native AgentControl preserves the mathematical team lifecycle', () => 
     expect((await capture()).inspection.nativeTeam!.adoptions[0]).toEqual(latest.inspection.nativeTeam!.adoptions[0]);
 
     await f.native('send', { caller: ROOT, target: { kind: 'id', threadId: originalThread },
-      input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: 'Continue with the checked helper.' } }, startOptions: {} });
+      input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: consumerTask.message } }, startOptions: {} });
     expect(consumer!.native!.threadId).toBe(originalThread);
     expect(consumer!.tasks.map(task => task.id)).toEqual([consumerTask.id]);
     const resumed = fs.readFileSync(f.source(consumer!.worktree), 'utf8');
@@ -325,23 +328,55 @@ describe('native AgentControl preserves the mathematical team lifecycle', () => 
     await expect(f.team.restore()).rejects.toThrow('math_writer_stop_unconfirmed:broken');
   });
 
-  it('rejects a followup when the run stops while the previous writer is being closed', async () => {
+  it('rejects a followup promptly while the previous writer is still stopping', async () => {
     const f = fixture();
     await f.spawn('analyst');
     const worker = f.state.agentTeam!.workers[0]!, session = f.sessions[0]!;
     await session.complete(false);
     await expect.poll(() => worker.activity).toBe('stopping');
-    const followup = f.native('send', { caller: ROOT, target: { kind: 'id', threadId: worker.native!.threadId },
-      input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: 'Continue the work.' } } })
-      .then(() => 'accepted', error => (error as Error).message);
-    await new Promise<void>(resolve => setImmediate(resolve));
-    f.controller.abort(new Error('run-stopped'));
-    await expect.poll(() => f.team.hasActiveWorkers).toBe(false);
-    const nextTick = new Promise(resolve => setImmediate(() => resolve('still pending')));
-    expect(await Promise.race([followup, nextTick])).toBe('math_team_dispatch_stopped');
+    await expect(f.native('send', { caller: ROOT, target: { kind: 'id', threadId: worker.native!.threadId },
+      input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: 'Continue the work.' } } }))
+      .rejects.toThrow('math_team_native_member_busy');
     expect(worker.tasks).toHaveLength(1);
     expect(f.sessions).toHaveLength(1);
+    session.stopGate.resolve();
+    await expect.poll(() => f.team.hasActiveWorkers).toBe(false);
   });
+
+  it('keeps the member mailbox available while a Lean delivery check runs', async () => {
+    const checking = deferred(), finishCheck = deferred();
+    const f = fixture({ beforeVerification: () => { checking.resolve(); return finishCheck.promise; } });
+    try {
+      await f.spawn('analyst');
+      const worker = f.state.agentTeam!.workers[0]!, prior = f.sessions[0]!;
+      fs.writeFileSync(f.source(worker.worktree), fs.readFileSync(f.source(worker.worktree), 'utf8').replace('end NativeTeam',
+        'theorem reusable (n : Nat) : n = n := by rfl\nend NativeTeam'));
+      expect(await f.tool({ operation: 'submit', summary: 'A useful helper.',
+        declarations: [{ file: 'Submission.lean', name: 'NativeTeam.reusable', type: '∀ n : Nat, n = n' }] }, worker.id))
+        .toMatchObject({ status: 'pending-writer-stop' });
+      await prior.complete();
+      await checking.promise;
+      expect(worker.activity).toBe('checking');
+      const target = { caller: ROOT, target: { kind: 'id', threadId: worker.native!.threadId } };
+      const send = (mode: 'queueOnly' | 'triggerTurn', text: string) => f.native('send', {
+        ...target, input: { kind: 'message', mode, message: { kind: 'plaintext', text } },
+      });
+      const followup = send('triggerTurn', 'Investigate a new gap.');
+      const message = send('queueOnly', 'Save this advisory update for later.');
+      await expect(followup).rejects.toThrow('math_team_native_member_busy');
+      const response = await message;
+      expect(f.team.archive.nativeControl!.mailbox).toContainEqual(expect.objectContaining({
+        id: response.result.submissionId, status: 'queued',
+      }));
+      expect(f.team.archive.deliveries).toHaveLength(0);
+      expect(worker.tasks).toHaveLength(1);
+      finishCheck.resolve();
+      await expect.poll(() => f.team.hasActiveWorkers, { timeout: 30_000 }).toBe(false);
+      expect(f.team.archive.deliveries).toHaveLength(1);
+      await send('triggerTurn', 'Investigate a new gap.');
+      expect(worker.tasks).toHaveLength(2);
+    } finally { finishCheck.resolve(); }
+  }, 40_000);
 
   it('keeps a child accepted by the host when its initiating request is subsequently cancelled', async () => {
     const f = fixture(), caller = new AbortController();
@@ -443,6 +478,28 @@ describe('native AgentControl preserves the mathematical team lifecycle', () => 
     expect(f.sessions[1].options.nativeAgentControl!.initialInput).toMatchObject({ author: '/root',
       input: { message: { text: 'The dependency is now available; continue.' } } });
     expect(fs.readFileSync(path.join(worker.worktree, 'RESEARCH.md'), 'utf8')).toContain('saved dependency');
+  });
+
+  it('keeps an unchanged handoff paused and accepts new instructions on the same draft', async () => {
+    const f = fixture();
+    const objective = 'Prove the same helper.';
+    await f.spawn('analyst', 'Profiles: prover\n' + objective);
+    const worker = f.state.agentTeam!.workers[0], task = worker.tasks[0], first = f.sessions[0];
+    expect(await f.tool({ operation: 'yield', reason: 'Waiting for a checked premise.' }, worker.id))
+      .toMatchObject({ status: 'pending-writer-stop' });
+    await first.complete();
+    await expect.poll(() => f.team.hasActiveWorkers).toBe(false);
+    expect(task.status).toBe('paused');
+    const saved = readSolverRunState(path.join(f.directory, 'state.json')).agentTeam!.workers[0]!.tasks[0]!;
+    expect(saved.sourceCommit).toBe(saved.lastStartedSourceCommit);
+    const followup = (text: string) => f.native('send', { caller: ROOT, target: { kind: 'id', threadId: worker.native!.threadId },
+      input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text } } });
+    await expect(followup(objective)).rejects.toThrow('math_team_native_followup_unchanged');
+    expect(f.sessions).toHaveLength(1);
+    expect(task).toMatchObject({ status: 'paused', objectiveRevision: 1 });
+    await followup('First derive the premise by induction.');
+    expect(worker.tasks).toEqual([task]);
+    expect(task).toMatchObject({ status: 'running', objectiveRevision: 2 });
   });
 
   it('can reuse a yielded worker for a different route and return to its original task', async () => {

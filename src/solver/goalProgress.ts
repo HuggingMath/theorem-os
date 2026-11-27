@@ -8,9 +8,11 @@ import { nextCheckSchema, type NextCheck } from './mathematicalGapContract';
 import { nextCheckExecutionMatchesTask } from './mathematicalGaps';
 import type { NextCheckRecord } from './nextCheckContract';
 import { z } from 'zod';
+import { invalidPlanField } from './planDiagnostics';
 
 /** A review interval of started worker execution, never a deadline for a proof. */
 export const GOAL_PROGRESS_REVIEW_MS = 30 * 60_000;
+export const GOAL_PROGRESS_REASON_MAX_LENGTH = 2000;
 export type GoalProgressNextCheck = NextCheck & { targetTaskId: string; taskDigest?: string };
 export type GoalProgressDecision = { id: string; reason: string; nextChecks: GoalProgressNextCheck[] };
 export type GoalProgressState = {
@@ -34,7 +36,7 @@ export const goalProgressStateSchema = z.object({
     coreFrontier: z.array(z.object({ taskId: z.string(), taskDigest: z.string(), contractDigest: z.string() })).optional() })),
   pending: z.object({ id: z.string(), at: savedCount, goalKeys: z.array(z.string()), goalIds: z.array(z.string()),
     retryAt: savedCount.optional() }).optional(),
-  decisions: z.array(z.object({ id: z.string(), at: savedCount, reason: z.string().min(1).max(2000), goalKeys: z.array(z.string()),
+  decisions: z.array(z.object({ id: z.string(), at: savedCount, reason: z.string().min(1).max(GOAL_PROGRESS_REASON_MAX_LENGTH), goalKeys: z.array(z.string()),
     nextChecks: z.array(nextCheckSchema.required({ targetTaskId: true }).extend({ taskDigest: z.string().optional() }))
       .min(1).max(32).optional() })).max(16).optional(),
 }).transform((value): GoalProgressState => value as GoalProgressState);
@@ -244,16 +246,19 @@ export function parseGoalProgressDecision(value: unknown, restoring = false): Go
   const decision = (value as { progressReview: unknown }).progressReview;
   if (!decision || typeof decision !== 'object' || Array.isArray(decision) ||
       typeof (decision as GoalProgressDecision).id !== 'string' || !(decision as GoalProgressDecision).id.trim() ||
-      typeof (decision as GoalProgressDecision).reason !== 'string' || !(decision as GoalProgressDecision).reason.trim() ||
-      (decision as GoalProgressDecision).reason.length > 2000)
+      typeof (decision as GoalProgressDecision).reason !== 'string' || !(decision as GoalProgressDecision).reason.trim())
     throw new Error('math_plan_progress_review_invalid: provide the presented id, reason and nextChecks.');
+  const reason = (decision as GoalProgressDecision).reason;
+  if (reason.length > GOAL_PROGRESS_REASON_MAX_LENGTH)
+    throw invalidPlanField('math_plan_progress_review_invalid', 'progressReview.reason',
+      'Shorten the reason to at most ' + GOAL_PROGRESS_REASON_MAX_LENGTH + ' characters (received ' + reason.length + ').');
   // Historical notes may contain a reason-only response. Loading it supplies no new decision.
   if (restoring && !Object.hasOwn(decision, 'nextChecks')) return;
   const nextChecks = nextCheckSchema.required({ targetTaskId: true }).array().min(1).max(32)
     .safeParse((decision as GoalProgressDecision).nextChecks);
   if (!nextChecks.success)
     throw new Error('math_plan_progress_review_invalid: nextChecks require action, objective, expectedEvidence and targetTaskId.');
-  return { id: (decision as GoalProgressDecision).id, reason: (decision as GoalProgressDecision).reason.trim(),
+  return { id: (decision as GoalProgressDecision).id, reason: reason.trim(),
     nextChecks: nextChecks.data.map(check => ({ ...check, targetTaskId: check.targetTaskId })) };
 }
 

@@ -6,7 +6,7 @@ import type { ProofCheck } from './modules/evidence';
 import type { SolverFailure } from './feedback';
 import type { ResearchCandidate } from './modules/execution';
 import type { ResearchRole } from './modules/organization';
-import type { CooperationState } from './cooperation';
+import type { CooperationState } from './cooperationShared';
 import type { MathAgentActivity } from '../runtime/agentSession';
 import type { ResearchHarnessIdentity } from '../runtime/researchHarness';
 import { safeFailureDiagnostic, type MathAgentFailureDiagnostic } from '../runtime/failureDiagnostic';
@@ -93,7 +93,7 @@ export type SolverRunState = {
   portfolioExploration?: PortfolioExploration;
   teamUsage?: Record<string, unknown>;
   writerProcess?: import('../runtime/harnessProcess').HarnessProcessIdentity;
-  nativeAgents?: import('../runtime/nativeDelegation').NativeResearchAgent[];
+  nativeAgents?: z.infer<typeof archivedNativeAgentSchema>[];
   /** A stopped writer's check/consumption resumes before any new model dispatch. */
   pendingDeclarationCheck?: { commit: string; requestDigest: string; phase?: 'completed' };
   /** Stopped research sources must finish freezing even if the host exits before journaling their checks. */
@@ -217,6 +217,14 @@ const check = z.object({ commit: z.string().min(1), sourceDigest: z.string().min
     targetCommit: z.string().optional(), results: z.array(record) }).passthrough() }).passthrough();
 const advisoryCheckpoint = z.object({ noProgressStreak: safeCount,
   contentDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(), inputDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional() });
+// Historical investigator observations are archive data.
+const archivedNativeAgentSchema = z.object({ threadId: z.string().min(1), parentThreadId: z.string().min(1),
+  startedAt: safeCount, updatedAt: safeCount, status: z.enum(['running', 'completed', 'errored', 'interrupted', 'stopped', 'unknown']),
+  usage: record.optional(), message: z.string().optional(), stoppedAt: safeCount.optional(),
+  dispatch: z.literal('host-mediated-native-threads').optional(), callId: z.string().optional(),
+  parentTurnId: z.string().optional(), turnId: z.string().optional(), question: z.string().optional(),
+  permissionProfile: z.literal('math-investigator').optional() });
+
 const research = z.object({ worktree: z.string().min(1), phase, turns: count, threadId: z.string().optional(),
   dispatchCounts: z.object({ planning: count.optional(), research: count.optional(), proof: count.optional(), review: count.optional() }).optional(),
   solveStartedAt: count.optional(), solveFinishedAt: count.optional(), solveWaitingMs: count.optional(),
@@ -380,12 +388,7 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
       usageAccounting: usageAccounting.optional(), requestUsageAccounting: requestUsageAccountingSchema.optional(),
     })).max(3),
   }).optional(),
-  nativeAgents: z.array(z.object({ threadId: z.string().min(1), parentThreadId: z.string().min(1),
-    startedAt: safeCount, updatedAt: safeCount, status: z.enum(['running', 'completed', 'errored', 'interrupted', 'stopped', 'unknown']),
-    usage: record.optional(), message: z.string().optional(), stoppedAt: safeCount.optional(),
-    dispatch: z.literal('host-mediated-native-threads').optional(), callId: z.string().optional(),
-    parentTurnId: z.string().optional(), turnId: z.string().optional(), question: z.string().optional(),
-    permissionProfile: z.literal('math-investigator').optional() })).optional(),
+  nativeAgents: z.array(archivedNativeAgentSchema).optional(),
   pendingDeclarationCheck: z.object({ commit: z.string().regex(/^[a-f0-9]{40,64}$/u),
     requestDigest: z.string().regex(/^[a-f0-9]{64}$/u), phase: z.literal('completed').optional() }).strict().optional(),
   pendingResearchFreeze: z.object({ commit: z.string().regex(/^[a-f0-9]{40,64}$/u),

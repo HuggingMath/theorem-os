@@ -29,7 +29,7 @@ export type TaskDraft = {
   skillLoading?: 'native' | 'file';
   nativeTeamCapacity?: number;
   nativeTeamPreferredProfiles?: string[];
-  /** 先审计划: hold the Agents until the plan is approved. Only `true` is stored; it applies to cooperative runs of 2+ Agents. */
+  /** Hold proof work until the initial route is approved. Only `true` is stored. */
   planApproval?: true;
   templateId: string;
   modulePlan?: ResearchModulePlan;

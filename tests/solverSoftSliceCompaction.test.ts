@@ -5,10 +5,10 @@ import type { MathAgentOptions, MathAgentSession } from '../src/runtime/agentSes
 import { readMathAgentSkill } from '../src/runtime/codexSkills';
 import { directSolverModules } from '../src/solver/modules';
 import { commitSolverSources } from '../src/solver/problem';
-import { runResearchWorkers } from '../src/solver/research';
+import { runResearchLead } from '../src/solver/research';
 import { MAX_COMPACTIONS_PER_SLICE, SOFT_SLICE_MS, softSliceSettings } from '../src/solver/softSlice';
 import { deferred } from './helpers/async';
-import { leadWorker, localExample, solverState } from './helpers/solver';
+import { localExample, solverState } from './helpers/solver';
 
 vi.mock(import('../src/math/mathBuildManifest'), async importOriginal =>
   ({ ...await importOriginal(), readMathBuildManifest: vi.fn() }));
@@ -25,7 +25,6 @@ describe('soft research milestones', () => {
     const interrupt = vi.fn(async () => { done.resolve('interrupted'); });
     const stop = vi.fn(async () => ({ status: 'stopped' as const }));
     const events: { event: string; details?: Record<string, unknown> }[] = [];
-    const worker = leadWorker(problem, workspace);
     const skill = trigger === 'independent' ? undefined : (() => {
       const skillRoot = path.join(workspace, '.agents/skills/theoremos-research');
       fs.mkdirSync(path.dirname(skillRoot), { recursive: true });
@@ -33,10 +32,8 @@ describe('soft research milestones', () => {
       return readMathAgentSkill(path.join(skillRoot, 'SKILL.md'));
     })();
     const state = solverState(problem, workspace, { runId: 'soft-slice-fixture', phase: 'prepared',
-      ...(trigger === 'team' ? { researchDelegation: { mode: 'team', maxAgents: 3 }, portfolioExploration: {
-        phase: 'completed', durationMs: 1000, scouts: [{ profile: 'structural-symmetry', status: 'timed-out', turns: 1 }],
-        gate: { retiredRoutes: [], foundationLemmas: [] },
-      } } : {}),
+      ...(trigger === 'team' ? { researchDelegation: { mode: 'team', maxAgents: 3 }, agentTeam: { schema: 'theorem-os.agent-team.v1',
+        transport: 'native-agent-control', workers: [], events: [], deliveries: [], adoptions: [], operations: [] } } : {}),
       ...(skill ? { researchMode: 'skill', researchSkill: { name: skill.name, digest: skill.digest, loading: skill.loading } } : {}) });
     const modules: typeof directSolverModules = { ...directSolverModules,
       M2: { ...directSolverModules.M2, check: async () => {
@@ -48,16 +45,15 @@ describe('soft research milestones', () => {
       M1: { ...directSolverModules.M1, open: async (options: MathAgentOptions): Promise<MathAgentSession> => ({
         threadId: 'offline-soft-slice', usageSource: 'upstream-requests', advisoryNotifications: 'native-history',
         notify, interrupt, close: vi.fn(async () => {}), stopForFreeze: stop,
-        run: async (message, _id, _workspace, begin) => {
-          if (trigger === 'team') expect(message).toContain('Phase 1 ended without a usable report');
+        run: async (_message, _id, _workspace, begin) => {
           begin('held-turn');
           started.resolve(options);
           return done.promise;
         },
       }) },
     };
-    const completion = runResearchWorkers({ state, workers: [worker], modules,
-      access: new Map([[worker.id, { environment: {}, retrievalRoot: directory, researchSkill: skill }]]),
+    const completion = runResearchLead({ state, modules,
+      access: { environment: {}, retrievalRoot: directory, researchSkill: skill },
       root: directory, buildFile: path.join(directory, 'unused-build.json'), taskText: 'Prove both original addition targets.',
       executable: 'offline-fixture', profile: 'offline-fixture', signal: controller.signal,
       deadline: Infinity, maxTurnMs: Infinity, maxTurns: 1, maxTotalTokens: 0,
@@ -84,7 +80,7 @@ describe('soft research milestones', () => {
         : /standalone helper.*fewer than 20 lines.*RESEARCH\.md/u;
       expect(notify.mock.calls).toEqual([[expect.stringMatching(notice), { mode: 'advisory' }]]);
       if (trigger === 'team') {
-        expect(options.instructions).toContain('spawn useful independent work');
+        expect(options.instructions).toContain('spawn and coordinate useful child agents');
         expect(notify.mock.calls.flat()).not.toContainEqual(expect.stringContaining('declaration-submission.json'));
         // This file is handled after the turn, outside the whole-proof diagnostics watcher.
         expect(options.completedOutput?.file).toMatch(/lean-diagnostics-latest\.json$/u);

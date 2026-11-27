@@ -7,7 +7,7 @@ import { mathDigest } from '../src/math/mathRuntimeIo';
 import * as residualReader from '../src/math/leanResidualGoals';
 import * as knowledgeContext from '../src/solver/knowledgeContext';
 import type { SolverRunState } from '../src/solver/archive';
-import type { CooperationState } from '../src/solver/cooperation';
+import type { CooperationState } from '../src/solver/cooperationShared';
 import { installedLibraryContextSections, installedLibraryRetrievals, readInstalledLibrarySnapshot } from '../src/solver/installedLibraryContext';
 import * as knowledgeApplications from '../src/solver/knowledgeApplications';
 import { buildResearchContext, finalizeResearchDispatch, type ContextAccess } from '../src/solver/modules/context';
@@ -450,7 +450,7 @@ describe('installed library retrieval in actual task context', () => {
       'you may add import Mathlib or any pinned Mathlib.* import', 'Add helpers in owned modules', 'check-lean --workspace',
       'add application:{expression:']) expect(context.instructions).not.toContain(writableAdvice);
     expect(context.instructions.split('\n').find(line => line.startsWith('Edit only ')))
-      .toBe(`Edit only ${path.join(f.receipt.workspaceRoot, 'RESEARCH.md')}, ${path.join(f.receipt.workspaceRoot, leadPlanDeliveryFile(assignment)!)}.`);
+      .toBe(`Edit only ${path.join(f.receipt.workspaceRoot, 'RESEARCH.md')}, ${path.join(f.receipt.workspaceRoot, '.scratch/plan.json')}.`);
     expect(packets(context.message)).toHaveLength(1);
     expect(packets(context.message)[0].candidates[0]).toMatchObject({ name: 'Frozen.Arithmetic.add_comm',
       import: 'import Submission.Library.Arithmetic.Commutativity', check: '#check Frozen.Arithmetic.add_comm' });

@@ -407,7 +407,7 @@ describe('agent-owned declaration deliveries with real Lean', () => {
     const declarations = [...peer.declarations, ...own];
     expect(declarationSubmissionSchema.safeParse({ declarations: own }).success).toBe(true);
     expect(declarationSubmissionSchema.safeParse({ declarations }).success).toBe(false);
-    // The duplicate is in the second checker batch; collection-wide delta checks still reject it.
+    // The last entry repeats the first and leaves a change unnamed.
     await expect(checkAgentTeamProofDelivery({ ...f.check, agentId: 'consumer', worktree: consumer.worktree,
       declarations: [...declarations.slice(0, 32), peer.declarations[0]] }))
       .rejects.toThrow('math_agent_team_proof_undeclared_source_change');
@@ -470,6 +470,22 @@ describe('agent-owned declaration deliveries with real Lean', () => {
       .rejects.toThrow('math_git_failed:merge-base');
     fs.unlinkSync(f.source(f.worktree));
     await expect(checkAgentTeamProofDelivery(f.check)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(fs.existsSync(f.common.evidenceDirectory)).toBe(false);
+  });
+
+  it('preserves the Git diagnostic when an existing seed commit is missing the owned source', async () => {
+    const f = fixture(), file = f.source(f.worktree), source = fs.readFileSync(file);
+    const relative = path.relative(f.worktree, file);
+    git(f.worktree, ['rm', '--force', '--quiet', '--', relative]);
+    git(f.worktree, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@localhost', 'commit',
+      '--no-gpg-sign', '--quiet', '-m', 'Fixture without the owned source']);
+    const seedCommit = git(f.worktree, ['rev-parse', 'HEAD']);
+    fs.writeFileSync(file, source);
+    commitSolverSources(f.problem, f.worktree);
+    await expect(checkAgentTeamProofDelivery({ ...f.check, seedCommit })).rejects.toMatchObject({
+      message: 'math_task_source_unavailable',
+      diagnostic: { command: 'show', commit: seedCommit, file: relative },
+    });
     expect(fs.existsSync(f.common.evidenceDirectory)).toBe(false);
   });
 
@@ -536,6 +552,21 @@ describe('agent-owned declaration deliveries with real Lean', () => {
     expect(git(f.receipt.workspaceRoot, ['rev-parse', 'HEAD'])).toBe(before);
     expect(fs.readFileSync(f.source(f.receipt.workspaceRoot), 'utf8')).toContain('-- changed while checking');
     expect(fs.existsSync(path.join(f.common.evidenceDirectory, 'adoptions'))).toBe(false);
+  }, 90_000);
+
+  it('rejects an edit to the staged adoption while Lean is checking', async () => {
+    const f = fixture(), delivery = await checkAgentTeamProofDelivery(f.check);
+    const verify = evidence.checkProjectedDeclarations;
+    vi.spyOn(evidence, 'checkProjectedDeclarations').mockImplementationOnce(async (...args) => {
+      const result = await verify(...args);
+      expect(result.passed).toBe(true);
+      fs.appendFileSync(f.source(args[2]), '\n-- staged source changed after Lean read it\n');
+      return result;
+    });
+    await expect(integrateAgentTeamProofDelivery({ ...f.common, delivery, worktree: f.receipt.workspaceRoot,
+      expectedCommit: f.problem.baseCommit })).rejects.toThrow('math_agent_team_proof_source_changed');
+    expect(git(f.receipt.workspaceRoot, ['rev-parse', 'HEAD'])).toBe(f.problem.baseCommit);
+    expect(fs.existsSync(path.join(f.common.evidenceDirectory, 'adoption-intents'))).toBe(false);
   }, 90_000);
 
   it('recovers the exact FF after publication failed and makes the same call idempotent', async () => {

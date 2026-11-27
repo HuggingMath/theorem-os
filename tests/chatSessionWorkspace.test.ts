@@ -25,6 +25,7 @@ function fixture(state: 'formalizing' | 'proving' = 'proving', wide = true) {
     conversation: { messages: [] }, currentId: 'chat-a', draft: '', references: [],
     formalizations: [], summaries: [], unsavedDrafts: new Set(), liveShown: new Set(), liveSelected: new Map(),
     submissionIdentity: { unresolved: false }, guidanceFeedback: { runId: '', records: [] },
+    withdrawing: new Set(), withdrawalNotes: new Map(),
     options: { session: () => undefined, runs: () => [], keyRequired: () => false, onArtifact },
     answers: { sync: vi.fn() }, reading: { rendered: vi.fn(), capture },
     refreshGuidanceFeedback: vi.fn(), solve: () => ({ process, wide }),

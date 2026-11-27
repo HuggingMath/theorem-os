@@ -147,6 +147,16 @@ describe('personal research search and accounting', () => {
 });
 
 describe('evidence-based research brief', () => {
+  it('shows the initial route approval after a new solver round starts', () => {
+    const f = fixture(), value = run();
+    value.initialPlanApproval = { solverRunId: 'first-round', receipt: { required: true, status: 'approved',
+      planVersion: 'later-route', approvedVersion: 'first-route', approvedId: 'approved-route', approvedAt: Date.parse(value.createdAt),
+      rejections: [], leadRevising: false } };
+    delete value.observation!.inspection.planApproval;
+    f.save(alice, value);
+    expect(f.workspace.brief(alice, value.id).planApproval).toEqual({ status: 'approved', planVersion: 'first-route' });
+  });
+
   it.each(['pending', 'rejected', 'interrupted', 'superseded'] as const)('exports %s candidate review without approved evidence', confirmation => {
     const f = fixture(), value = run();
     value.formalization = { id: crypto.randomUUID(), original: 'Prove True', candidateDigest: 'c'.repeat(64), confirmation };

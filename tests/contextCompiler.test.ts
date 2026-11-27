@@ -13,7 +13,6 @@ import type { DeliveryRecord } from '../src/solver/deliveries';
 import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 import { buildProofContinuation } from '../src/solver/progress';
 import { createCapacityExploration } from '../src/solver/capacityExploration';
-import { cooperativeResearch } from './helpers/cooperation';
 import { localExample, leadWorker, peerWorker, solverState } from './helpers/solver';
 
 const baseCommit = 'a'.repeat(40), proofCommit = 'b'.repeat(40);
@@ -1173,43 +1172,6 @@ it.each(['proposal', 'refutation'] as const)('loads a current %s source and its 
   expect(context.message).toContain('EXACT_SELECTED_DELIVERY_INPUT');
   expect(context.message).not.toContain('STALE_DELIVERY_INPUT');
   expect(taskRecordIndex(context.message).map(row => row.id)).toEqual([staleSource.id, staleInput.id]);
-});
-
-it('writes exact digest-retrievable task records and failed inputs to each worker archive within its visibility scope', async () => {
-  const example = localExample('context-record-retrieval-', 'lead'), controller = new AbortController(),
-    workers = [leadWorker(example.problem, example.workspace, 'lead'), peerWorker(example, 'peer')],
-    sameGroup = node({ ...lemma('peer_task'), groupId: 'first', sharing: 'group' }),
-    privateOther = node({ ...lemma('private_task'), groupId: 'other', sharing: 'group' }),
-    publicHelper = { ...node({ ...lemma('public_helper'), groupId: 'other', sharing: 'problem' }), status: 'completed' as const };
-  sameGroup.status = 'running';
-  sameGroup.assignment = { ...assign(sameGroup.task).assignment, workerId: workers[1].id, seedCommit: example.problem.baseCommit };
-  const failedInputs = [sameGroup, privateOther].map(record => ({ id: `failure-${record.task.id}`, taskId: record.task.id,
-    taskDigest: taskVersion(record.task), inputDigest: `input-${record.task.id}`, feedback: `Exact feedback for ${record.task.id}`,
-    basis: { contractDigest: 'contract', environmentDigest: 'environment', dependencies: {} } })),
-    state = solverState(example.problem, example.workspace, { runId: 'context-record-retrieval', phase: 'running',
-      cooperation: { canonicalCommit: example.problem.baseCommit, tasks: [sameGroup, privateOther, publicHelper], failedTaskInputs: failedInputs } }),
-    cooperative = cooperativeResearch({ state, workers, retrievalRoot: example.directory, signal: controller.signal });
-  try {
-    cooperative.activate(workers[1], { kind: 'task', task: sameGroup.task, assignment: sameGroup.assignment }, async () => {}, async () => {});
-    for (const worker of workers) {
-      const archive = JSON.parse(fs.readFileSync(path.join(worker.worktree, 'COOPERATION.json'), 'utf8')),
-        action = worker.id === 'lead' ? undefined : { kind: 'task' as const, task: sameGroup.task, assignment: sameGroup.assignment! },
-        scoped = cooperative.contextState(action, worker);
-      expect(archive.tasks).toEqual(JSON.parse(canonicalMathJson(scoped.tasks)));
-      expect(archive.failedTaskInputs).toEqual(JSON.parse(canonicalMathJson(scoped.failedTaskInputs)));
-      for (const record of scoped.tasks) {
-        const archived = archive.tasks.find((item: TaskRecord) => item.task.id === record.task.id);
-        expect(mathDigest(canonicalMathJson(archived))).toBe(mathDigest(canonicalMathJson(record)));
-        expect(archive.peers.find((peer: { id: string }) => peer.id === record.task.id).taskDigest).toBe(taskVersion(record.task));
-      }
-      if (worker.id === 'peer') {
-        expect(archive.tasks.map((record: TaskRecord) => record.task.id)).toEqual(['peer_task', 'public_helper']);
-        expect(archive.failedTaskInputs.map((record: { taskId: string }) => record.taskId)).toEqual(['peer_task']);
-      } else expect(archive.tasks.map((record: TaskRecord) => record.task.id)).toContain('private_task');
-    }
-  } finally {
-    controller.abort(); await cooperative.stop(); fs.rmSync(example.directory, { recursive: true, force: true });
-  }
 });
 
 function unusedPlannedDependency() {

@@ -5,7 +5,7 @@ import { mathematicsRuntimeInstruction } from '../math/mathRuntimeEnvironment';
 import { mathToolsInstruction } from '../math/mathTools';
 import { assertMathAgentSkillsCurrent } from '../runtime/agentSkills';
 import type { SolverRunState } from './archive';
-import { compileContextSections, compileTaskContext, portfolioContextSections, type ContextSection } from './contextCompiler';
+import { compileContextSections, compileTaskContext, type ContextSection } from './contextCompiler';
 import { continuationContextSection, readContinuationSnapshot } from './continuationInput';
 import { solverProofFeedback } from './feedback';
 import type { ContextAccess, ContextBundle, ResearchDispatchOptions } from './modules/context';
@@ -59,7 +59,7 @@ export function buildCommonResearchContext(problem: SolverProblem, state: Readon
   const action = access.assignment, cooperation = state.cooperation;
   const readOnly = action?.kind === 'lead' || action?.kind === 'review' || action?.kind === 'task' &&
     (isFeasibilityReview(action.task) || isFinalCandidateReview(action.task));
-  const mandatory: ContextSection[] = [...(action?.kind === 'review' ? [] : portfolioContextSections(state)),
+  const mandatory: ContextSection[] = [
   { id: 'common-guidance-identity', kind: 'assignment',
     text: 'Frozen shared mathematical skill:\n' + canonicalMathJson(state.commonResearchSkill) },
   { id: 'saved-research', kind: 'sources', text: 'Read current owned sources and worktree-root RESEARCH.md before continuing. ' +

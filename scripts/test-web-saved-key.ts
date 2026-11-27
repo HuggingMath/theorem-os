@@ -25,7 +25,7 @@ const replacement = 'sk-replacement-browser-check-never-publish-R7m2';
 const keys: string[] = [];
 let formalizationCalls = 0;
 const runner: WebRunner = {
-  async readiness() { return { ready: true, message: 'Local saved key fixture; no model or Lean' }; },
+  async readiness() { return { ready: true, nativeTeam: true, message: 'Local saved key fixture; no model or Lean' }; },
   async formalize() { formalizationCalls++; throw new Error('Saving an account key must not start formalization.'); },
   async run(input, send) { keys.push(input.input.apiKey); send({ type: 'result', result: { status: 'incomplete', proof: '', report: { fixture: true } } }); },
 };

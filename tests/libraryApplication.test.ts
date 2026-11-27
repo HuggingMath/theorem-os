@@ -6,16 +6,16 @@ import { bootstrapLeanTask } from '../src/math/leanTask';
 import { LIBRARY_PACK_SCHEMA } from '../src/math/libraryPacks';
 import { leanReferenceCommands, parseLeanReferenceReport } from '../src/math/leanReferences';
 import type { MathematicsVerifierBatchRequest } from '../src/math/verifier';
-import { parseCooperationPlan } from '../src/solver/cooperation';
+import { parseCooperationPlan } from '../src/solver/tasks';
 import { checkTaskProof } from '../src/solver/cooperativeProof';
 import { readInstalledLibrarySnapshot } from '../src/solver/installedLibraryContext';
 import * as installedLibraryContext from '../src/solver/installedLibraryContext';
 import { applyOriginalLibraryTasks, prepareLibraryApplication } from '../src/solver/libraryApplication';
 import { directSolverModules } from '../src/solver/modules';
 import { committedSource, git, readSolverProblem, withSolverWorktree } from '../src/solver/problem';
-import { runResearchWorkers } from '../src/solver/research';
+import { runResearchLead } from '../src/solver/research';
 import { taskVersion, type CooperativeTask } from '../src/solver/tasks';
-import { cooperativeResearch, workerAccess } from './helpers/cooperation';
+import { workerAccess } from './helpers/solver';
 import { temporaryDirectory } from './helpers/files';
 import { newestLeanBinary } from './helpers/lean';
 import { leadWorker, solverState } from './helpers/solver';
@@ -564,14 +564,14 @@ describe('host applications of installed theorems', () => {
   it('resumes a saved single-worker library proof through whole-problem acceptance without a model', async () => {
     const f = fixture(), worker = leadWorker(f.problem, f.worktree);
     const state = solverState(f.problem, f.worktree, { runId: 'library-resume', phase: 'running', environmentDigest });
-    const access = workerAccess([worker], f.root);
-    access.get(worker.id)!.installedLibrary = f.library;
+    const access = workerAccess([worker], f.root).get(worker.id)!;
+    access.installedLibrary = f.library;
     const interrupted = new AbortController();
     let saved: typeof state | undefined;
-    const input = { state, workers: [worker], access, modules: directSolverModules,
+    const input = { state, access, modules: directSolverModules,
       root: f.root, buildFile: 'unused', taskText: 'Prove the target.', executable: 'unused', profile: 'unused',
       deadline: Infinity, maxTurns: 0, maxTurnMs: Infinity, maxTotalTokens: 0, emit: vi.fn() };
-    const interruption = await runResearchWorkers({ ...input, signal: interrupted.signal, save: () => {
+    const interruption = await runResearchLead({ ...input, signal: interrupted.signal, save: () => {
       if (!saved && state.phase === 'checking' && !state.check?.passed) {
         saved = JSON.parse(JSON.stringify(state));
         interrupted.abort();
@@ -580,7 +580,7 @@ describe('host applications of installed theorems', () => {
     expect(interrupted.signal.aborted, String(interruption)).toBe(true);
     expect(saved).toMatchObject({ phase: 'checking', turns: 0 });
     expect(read(f)).not.toContain('by sorry');
-    const winner = await runResearchWorkers({ ...input, state: saved!,
+    const winner = await runResearchLead({ ...input, state: saved!,
       signal: new AbortController().signal, save: vi.fn() });
     expect(winner?.check.passed).toBe(true);
     expect(saved!.turns).toBe(0);
@@ -603,72 +603,4 @@ describe('host applications of installed theorems', () => {
       ...(outcome === 'rejected' ? { passed: false, usedDeclarations: [] } : { checkError: expect.any(String) }) }));
   });
 
-  it('keeps a rejected library probe diagnostic out of the original task feedback', async () => {
-    const f = fixture(), peer = path.join(f.root, 'proof');
-    git(f.worktree, ['worktree', 'add', '--quiet', '--detach', peer, f.seedCommit]);
-    const workers = [leadWorker(f.problem, f.worktree), { ...leadWorker(f.problem, peer, 'proof'), role: 'researcher' as const }];
-    const plan = parseCooperationPlan(f.problem, { tasks: [{ ...f.task, ownerId: 'proof' }],
-      groups: [{ id: 'main', objective: 'Prove the goal', status: 'active', maxConcurrent: 1 }] });
-    const originalFeedback = 'Original target diagnostic: preserve the closed-ideal hypotheses.';
-    const state = solverState(f.problem, f.worktree, { runId: 'library-probe-rejected', phase: 'running', environmentDigest,
-      cooperation: { canonicalCommit: f.seedCommit, tasks: plan.tasks.map(task =>
-        ({ task, status: 'pending', attempts: 0, feedback: originalFeedback })),
-      groups: plan.groups.map(group => ({ group, turns: 0 })) } });
-    const access = workerAccess(workers, f.root);
-    for (const worker of access.values()) worker.installedLibrary = f.library;
-    const probeDiagnostic = 'Type mismatch: Probability.sum_biasedWeight does not prove the closed-ideal goal.';
-    host.verify.mockImplementation(async (request: MathematicsVerifierBatchRequest) =>
-      failedBatch(verifiedBatch(request, { sessionId: 'library-probe-rejected', checks: true }), {
-        stdoutPreview: () => probeDiagnostic,
-      }));
-    const emit = vi.fn(), cooperative = cooperativeResearch({ state, workers, access, retrievalRoot: f.root, emit,
-      modules: { ...directSolverModules, M1: { ...directSolverModules.M1, open: host.model, execute: host.model } } });
-    try {
-      expect(await cooperative.next(workers[1], { maxTurns: Infinity, remainingMs: Infinity }))
-        .toMatchObject({ kind: 'task', task: { id: f.task.id } });
-      const node = state.cooperation!.tasks.find(node => node.task.id === f.task.id)!;
-      expect(node.feedback).toContain(originalFeedback);
-      expect(node.feedback).toContain('Host library application attempt (advisory)');
-      expect(node.feedback).not.toContain(probeDiagnostic);
-      expect(node.feedback).not.toContain('Type mismatch');
-      expect(emit).toHaveBeenCalledWith('task_library_application', expect.objectContaining({ passed: false,
-        diagnostic: expect.stringContaining(probeDiagnostic), receiptIds: expect.any(Array) }));
-      expect(host.model).not.toHaveBeenCalled();
-    } finally { await cooperative.stop(); }
-  });
-
-  it.each(['goal', 'lemma'] as const)('integrates a library-closed %s through normal cooperative acceptance without a model', async kind => {
-    const f = fixture(), peer = path.join(f.root, 'proof');
-    git(f.worktree, ['worktree', 'add', '--quiet', '--detach', peer, f.seedCommit]);
-    const workers = [leadWorker(f.problem, f.worktree), { ...leadWorker(f.problem, peer, 'proof'), role: 'researcher' as const }];
-    const task: CooperativeTask = kind === 'goal' ? f.task : { ...f.task, id: 'helper', kind, theoremName: 'Current.helper',
-      type: 'forall (n : Nat), n + 0 = n' };
-    const plan = parseCooperationPlan(f.problem, { tasks: [
-      { ...task, ownerId: 'proof' },
-      { id: 'followup', kind: 'research', objective: 'Observe checked dependency', ownerId: 'proof', dependsOn: [task.id] },
-      ...(kind === 'lemma' ? [{ ...f.task, status: 'paused' }] : []),
-    ], groups: [{ id: 'main', objective: 'Prove the goal', status: 'active', maxConcurrent: 1 }] });
-    const state = solverState(f.problem, f.worktree, { runId: 'library-application', phase: 'running', environmentDigest,
-      cooperation: { canonicalCommit: f.seedCommit, tasks: plan.tasks.map(task => ({ task, status: 'pending', attempts: 0 })),
-        groups: plan.groups.map(group => ({ group, turns: 0 })) } });
-    const access = workerAccess(workers, f.root);
-    for (const worker of access.values()) worker.installedLibrary = f.library;
-    const emit = vi.fn(), applyLibrary = vi.fn(prepareLibraryApplication), taskText = 'Use Frozen.add_zero.';
-    const cooperative = cooperativeResearch({ state, workers, access, retrievalRoot: f.root, emit, taskText,
-      modules: { ...directSolverModules, M2: { ...directSolverModules.M2, applyLibrary },
-        M1: { ...directSolverModules.M1, open: host.model, execute: host.model } } });
-    try {
-      expect(await cooperative.next(workers[1], { maxTurns: Infinity, remainingMs: Infinity }))
-        .toMatchObject({ kind: 'task', task: { id: 'followup' } });
-      const node = state.cooperation!.tasks.find(node => node.task.id === task.id)!;
-      expect(node).toMatchObject({ status: 'integrated', attempts: 0, integratedCheck: { passed: true, taskDigest: taskVersion(node.task) } });
-      expect(read(f, state.cooperation!.canonicalCommit)).toContain('exact _root_.Frozen.add_zero');
-      expect(state.cooperation!.deliveries!.find(delivery => delivery.taskId === task.id)).toMatchObject({
-        knowledgeUses: [expect.objectContaining({ source: 'installed-library', status: 'checked-reference', declaration: reference })] });
-      expect(emit).toHaveBeenCalledWith('task_library_application', expect.objectContaining({ passed: true, usedDeclarations: [reference] }));
-      expect(applyLibrary).toHaveBeenCalledWith(expect.objectContaining({ taskText }));
-      expect(state.turns).toBe(0);
-      expect(host.model).not.toHaveBeenCalled();
-    } finally { await cooperative.stop(); }
-  });
 });

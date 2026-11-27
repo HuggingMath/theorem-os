@@ -7,7 +7,7 @@ import { WebStorage } from '../apps/web/storage';
 import { WebResearchPersonal } from '../apps/web/researchPersonal';
 import { WebResearchProjects } from '../apps/web/researchProjects';
 import type { WebResearchProblems } from '../apps/web/researchProblems';
-import { webAgentTeamPreset, webPortfolioPreset, webResearchArguments, webResearchModeError } from '../apps/web/researchMode';
+import { webAgentTeamPreset, webResearchArguments, webResearchModeError } from '../apps/web/researchMode';
 import { webSolverModules } from '../apps/web/worker';
 import { directSolverModules } from '../src/solver/modules';
 import { decodeTaskDraft, encodeTaskDraft, type TaskDraft } from '../apps/web/client/draft';
@@ -17,7 +17,7 @@ import { loadWebSample } from '../apps/web/sample';
 import { isWebObservation, parseWorkerMessage, type WebRunner } from '../apps/web/runner';
 import { projectWebNativeTeam } from '../apps/web/nativeTeamObservation';
 import type { WebObservation } from '../apps/web/collaboration';
-import type { WebProvider, WebRunInput, WorkerInput, WorkerMessage } from '../apps/web/shared';
+import { retiredPortfolioMessage, retiredResearchCoordinationMessage, type WebProvider, type WebRunInput, type WorkerInput, type WorkerMessage } from '../apps/web/shared';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { personalExpertCardsDigest } from '../src/solver/personalExperts';
 import { defaultResearchModulePlan } from '../src/solver/modules/policy';
@@ -53,23 +53,14 @@ function observation(id: string, sequence: number): WebObservation {
 }
 
 describe('Web Skill research arrangement and frozen identity', () => {
-  it('opts into portfolio scouting with enough capacity and freezes its configuration for dispatch', async () => {
-    const fixture = controlled(), jobs = new WebJobs(fixture.runner, { concurrency: 1, queueLimit: 4 }); queues.push(jobs);
-    const selected = input({ workers: 2, coordination: 'cooperative', portfolioExploration: true, portfolioSeconds: 45 });
-    const run = jobs.create('owner', selected, provider, undefined, 'portfolio');
-    await tick();
-    expect(run).toMatchObject({ portfolioExploration: true, portfolioSeconds: 45 });
-    expect(webResearchArguments(fixture.actual.input, provider).slice(-3))
-      .toEqual(['--portfolio-exploration', '--portfolio-seconds', '45']);
-    expect(webResearchArguments({ ...selected, portfolioExploration: undefined, portfolioSeconds: undefined }))
-      .toEqual(['--research-mode', 'skill', '--skill-loading', 'native']);
-    expect(webResearchArguments({ ...selected, portfolioExploration: false, portfolioSeconds: undefined }).at(-1)).toBe('--skip-portfolio');
-    expect(webResearchArguments(input({ nativeTeamCapacity: 2, portfolioExploration: true })).at(-1)).toBe('--portfolio-exploration');
-    expect(webPortfolioPreset({ workers: 2 })).toBe(true);
-    expect(webPortfolioPreset({ workers: 2, portfolioExploration: false })).toBe(false);
-    for (const invalid of [{ workers: 1 }, { portfolioSeconds: 0 }, { portfolioExploration: false }])
-      expect(webResearchModeError({ ...selected, ...invalid })).toBeDefined();
-    expect(() => jobs.replay('owner', { ...selected, portfolioSeconds: 46 }, provider, 'portfolio')).toThrow(/不同/);
+  it('retires standalone scouting and accepts an explicit false as an old-client no-op', () => {
+    const team = input(webAgentTeamPreset());
+    for (const historical of [{ portfolioExploration: true }, { portfolioSeconds: 45 }]) {
+      const requested = { ...team, ...historical };
+      expect(webResearchModeError(requested, provider)).toBe(retiredPortfolioMessage);
+      expect(() => webResearchArguments(requested, provider)).toThrow(retiredPortfolioMessage);
+    }
+    expect(webResearchArguments({ ...team, portfolioExploration: false }, provider)).toEqual(webResearchArguments(team, provider));
   });
   it('restores a native team with the chosen capacity, rejects host scheduling, and binds observations to the same team', async () => {
     const selected = { ...draft(), nativeTeamCapacity: 3 };
@@ -78,7 +69,8 @@ describe('Web Skill research arrangement and frozen identity', () => {
     const team = input({ ...webAgentTeamPreset(), skillLoading: 'file' });
     expect(webResearchArguments(team, provider)).toEqual(['--research-mode', 'skill', '--skill-loading', 'file',
       '--skill-delegation', 'team', '--skill-max-agents', '3']);
-    for (const change of [{ workers: 3 }, { coordination: 'cooperative' as const }, { planApproval: true }, { nativeTeamCapacity: 1 }, { nativeTeamCapacity: 9 }])
+    expect(webResearchArguments({ ...team, planApproval: true }, provider)).toEqual(webResearchArguments(team, provider));
+    for (const change of [{ workers: 3 }, { coordination: 'cooperative' as const }, { nativeTeamCapacity: 1 }, { nativeTeamCapacity: 9 }])
       expect(() => webResearchArguments({ ...team, ...change }, provider)).toThrow();
     expect(() => webResearchArguments(team, { harness: 'cli' })).toThrow(/Codex/);
     const fixture = controlled(), jobs = new WebJobs(fixture.runner, { concurrency: 1, queueLimit: 4 }); queues.push(jobs);
@@ -118,7 +110,7 @@ describe('Web Skill research arrangement and frozen identity', () => {
     record.inspection.configuration.researchDelegation.preferredProfiles = ['D011', 'engineer'];
     fixture.send({ type: 'observation', observation: record }); expect(run.observation?.sequence).toBe(1);
   });
-  it('forwards explicit skill CLI arguments while preserving the legacy default and cooperative module choices', () => {
+  it('forwards explicit Skill arguments and refuses to execute a retired host team', () => {
     expect(webResearchArguments(input())).toEqual(['--research-mode', 'skill', '--skill-loading', 'native']);
     expect(webResearchArguments(input({ skillLoading: 'file' }))).toEqual(['--research-mode', 'skill', '--skill-loading', 'file']);
     expect(webResearchArguments(input({ researchMode: undefined }))).toEqual([]);
@@ -128,7 +120,8 @@ describe('Web Skill research arrangement and frozen identity', () => {
       { researchSelection: { skills: [{ assetId: 'custom-strategy', version: '1.0.0' }] } }])
       expect(webResearchModeError(input(change as Partial<WebRunInput>))).toBeUndefined();
     expect(webResearchModeError(input({ researchMode: undefined, skillLoading: 'native' }))).toMatch(/Skill/);
-    expect(webResearchModeError(input({ workers: 4, coordination: 'cooperative', planApproval: true }))).toBeUndefined();
+    expect(() => webResearchArguments(input({ workers: 4, coordination: 'cooperative', planApproval: true })))
+      .toThrow(retiredResearchCoordinationMessage);
     const modules = webSolverModules({ id: 'fixture', input: input(), provider });
     expect(modules.M3).toBe(directSolverModules.M3); expect(modules.M5).toBe(directSolverModules.M5);
     expect(webSolverModules({ id: 'fixture', input: input(), provider }, undefined,
@@ -183,7 +176,7 @@ describe('Web Skill research arrangement and frozen identity', () => {
   });
 
   it('keeps skill mode through local drafts, archive imports and account drafts, and includes it in submission matching', () => {
-    const original = { ...draft(), nativeTeamCapacity: 8, nativeTeamPreferredProfiles: ['D011', 'engineer'] };
+    const original = { ...draft(), planApproval: true as const, nativeTeamCapacity: 8, nativeTeamPreferredProfiles: ['D011', 'engineer'] };
     expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(original)))).toEqual(original);
     const { templateId: _template, ...archived } = original;
     expect(decodeTaskDraft({ schema: 'theorem-os.web-export.v1', run: { ...archived,
@@ -195,7 +188,7 @@ describe('Web Skill research arrangement and frozen identity', () => {
       scope: { kind: 'problem', draftKey: 'skill-draft' }, value, requestId: 'save-skill', expectedRevision: 0,
       summary: 'Skill draft', deviceId: 'fixture', deviceName: 'Fixture', clientUpdatedAt: new Date().toISOString() });
     expect(personal.draft('account:alice@example.org', saved.draft.id).version.value).toEqual(value);
-    const run = jobs.create('owner', input({ skillLoading: 'file', nativeTeamCapacity: 8, nativeTeamPreferredProfiles: original.nativeTeamPreferredProfiles }), provider);
+    const run = jobs.create('owner', input({ skillLoading: 'file', planApproval: true, nativeTeamCapacity: 8, nativeTeamPreferredProfiles: original.nativeTeamPreferredProfiles }), provider);
     expect(matchesProblemRun(value, run)).toBe(true);
     expect(matchesProblemRun(value, { ...run, researchMode: 'legacy' })).toBe(false);
     expect(matchesProblemRun(value, { ...run, skillLoading: 'native' })).toBe(false);

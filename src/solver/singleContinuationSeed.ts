@@ -5,7 +5,7 @@ import { readMathBuildManifest } from '../math/mathBuildManifest';
 import { bindLeanPackages } from '../math/leanDiagnostics';
 import { MATH_PROOF_ENVIRONMENT_ENV, MATH_PROOF_ENVIRONMENT_SANDBOX_ENV, prepareMathProofEnvironment } from '../math/mathProofEnvironment';
 import { DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT } from '../math/mathProofEnvironmentCache';
-import { canonicalMathJson, mathDigest, readMathFile, readMathJson, withMathRuntimeLease, writeMathJsonDurable } from '../math/mathRuntimeIo';
+import { canonicalMathJson, mathDigest, readMathFile, readMathJson, withMathRuntimeLease, writeMathJsonDurable, type MathLease } from '../math/mathRuntimeIo';
 import { resolveMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnvironment';
 import { assertMathCanonicalPath } from '../math/paths';
 import { resolveMathematicsLakePackagesCache } from '../math/verifier';
@@ -14,7 +14,7 @@ import { inheritedContinuationText, singleContinuationHistory } from './continua
 import { readAgentTeamContinuationNote, type AgentTeamResearchArtifactReference, type AgentTeamContinuationOrigin } from './agentTeamResearch';
 import { freezeContinuationInput, MAX_CONTINUATION_ATTACHMENT_BYTES, readContinuationContents, type ContinuationManifest } from './continuationInput';
 import { captureContinuationTaskDrafts, continuationOwnershipExtension, continuationSourcePolicyDigest,
-  type ContinuationSeedReport, type seedSolverContinuation } from './continuationSeed';
+  type ContinuationSeedReport, type ContinuationSeedOptions } from './continuationSeed';
 import { checkDeclarationArtifacts, readDeclarationArtifacts, writeDeclarationArtifacts } from './declarationArtifacts';
 import { readRunInspection } from './inspection';
 import { assertSolverSources, committedSource, commitSolverSources, git, pinSolverResearchSkill, readSolverProblem, withSolverWorktree } from './problem';
@@ -38,7 +38,6 @@ const sourceSchema = z.object({ schema: z.literal('theorem-os.single-continuatio
     description: z.string().optional(), premises: z.array(z.string()).optional() }).strict()),
 }).strict();
 type SingleSource = z.infer<typeof sourceSchema>;
-type Options = Parameters<typeof seedSolverContinuation>[0];
 type SingleSeedReport = ContinuationSeedReport & { declarationFailures?: { id: string; name: string; error: string }[] };
 
 const configurationDigest = (state: SolverRunState) => mathDigest(canonicalMathJson({ runId: state.runId,
@@ -230,13 +229,13 @@ function freezeSource(source: SingleSource, directory: string) {
 }
 
 /** Import artifacts into a new idle single run; historical scheduling state is never recreated. */
-export async function seedSingleSolverContinuation(options: Options): Promise<ContinuationSeedReport> {
+export async function seedSingleSolverContinuation(options: ContinuationSeedOptions): Promise<ContinuationSeedReport> {
   const stateFile = readRunInspection(options.run).stateFile, directory = path.dirname(stateFile);
   const sourceStateFile = path.basename(path.resolve(options.sourceRun)) === 'state.json'
     ? path.resolve(options.sourceRun) : `${path.resolve(options.sourceRun)}.runtime/state.json`;
   assertMathCanonicalPath(sourceStateFile);
   if (sourceStateFile === stateFile) throw new Error('math_continuation_seed_identity_changed');
-  const seed = async (lease: NonNullable<Options['lease']>) => {
+  const seed = async (lease: MathLease) => {
     const state = readSolverRunState(stateFile), sourceFile = path.join(directory, 'continuation-single-source.json');
     const reportFile = path.join(directory, 'continuation-seed.json'), seeded = fs.existsSync(sourceFile);
     assertPrepared(state, stateFile, seeded);

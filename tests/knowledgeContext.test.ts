@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import type { SolverRunState } from '../src/solver/archive';
 import * as contextCompiler from '../src/solver/contextCompiler';
-import type { CooperationState } from '../src/solver/cooperation';
+import type { CooperationState } from '../src/solver/cooperationShared';
 import { knowledgeContextConsumers, knowledgeContextSections, type KnowledgeContextSnapshot } from '../src/solver/knowledgeContext';
 import { buildResearchContext, buildStatementReviewContext, type ContextAccess } from '../src/solver/modules/context';
 import type { SolverProblem } from '../src/solver/problem';

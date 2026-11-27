@@ -143,10 +143,9 @@ describe('OpenCode native session adapter', () => {
     controller.abort(); await expect(completion).rejects.toThrow(); expect(f.missing).toHaveBeenCalledOnce();
   });
 
-  it('fails before launch for unsupported native skill and delegation', async () => {
+  it('fails before launch for unsupported native skill loading', async () => {
     const f = fixture();
     await expect(f.open({ skills: [{ ...f.options.skills![0], loading: 'native' }] })).rejects.toThrow('requires_file_skill');
-    await expect(f.open({ delegation: { mode: 'read-only', maxAgents: 2 } })).rejects.toThrow('delegation_unsupported');
     expect(fs.existsSync(path.join(f.profile, 'xdg/data/opencode-peer-state.json'))).toBe(false);
   });
 

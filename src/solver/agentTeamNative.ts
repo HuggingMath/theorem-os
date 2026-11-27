@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import type { NativeAgentControlConnection, NativeAgentControlOptions, NativeAgentControlRequest } from '../runtime/nativeAgentControl';
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import type { AgentTeamState, AgentTeamWorker } from './agentTeamState';
+import { AgentTeamOperations } from './agentTeamOperations';
 
 type Json = Record<string, unknown>;
 export type NativeTeamAcceptedChild = { agent: Json; configSnapshot: Json; submissionId: string };
@@ -60,7 +61,7 @@ export class AgentTeamNativeControl {
   private readonly updates = new Map<string, Promise<unknown>>();
 
   constructor(private readonly archive: AgentTeamState, private readonly lifecycle: AgentTeamNativeLifecycle,
-    private readonly save: () => void) {
+    private readonly save: () => void, private readonly operations = new AgentTeamOperations(archive.operations)) {
     // Queue ownership transferred to a lost runtime is uncertain, never a read receipt.
     for (const mail of archive.nativeControl?.mailbox ?? []) if (mail.status === 'accepted') mail.status = 'uncertain';
   }
@@ -305,16 +306,41 @@ export class AgentTeamNativeControl {
       return this.perform(actor, request, signal).then(result => ({ result }));
     const key = 'native:' + request.operationId;
     const digest = mathDigest(canonicalMathJson([request.sessionId, expected, request.operation, payload]));
-    const receipt = this.archive.operations.find(item => item.key === key);
+    const receipt = this.operations.get(key);
     if (receipt) return receipt.digest !== digest ? Promise.reject(new Error('math_team_call_changed')) : Promise.resolve(object(receipt.result));
     const pending = this.pending.get(key);
     if (pending) return pending.digest === digest ? pending.promise : Promise.reject(new Error('math_team_call_changed'));
-    const apply = this.perform(actor, request, signal).then(result => {
+    const operation = request.operation === 'spawn'
+      ? this.spawn(actor, request, digest, signal)
+      : this.perform(actor, request, signal);
+    const apply = operation.then(result => {
       const response = { result };
-      this.archive.operations.push({ key, digest, result: response }); this.save(); return response;
+      this.operations.append({ key, digest, result: response }); this.save(); return response;
     }).finally(() => this.pending.delete(key));
     this.pending.set(key, { promise: apply, digest });
     return apply;
+  }
+
+  private async spawn(actor: string, request: NativeAgentControlRequest, requestDigest: string, signal: AbortSignal) {
+    if (actor !== 'lead') throw new Error('math_team_lead_operation_required');
+    signal.throwIfAborted();
+    const { payload, threadId: caller } = request;
+    const source = nativeSource(payload.source), agentPath = text(source.agent_path);
+    if (!/^\/root\/[^/]+$/u.test(agentPath) || source.parent_thread_id !== caller)
+      throw new Error('math_team_native_flat_team_required');
+    const existing = this.archive.workers.find(worker => worker.native?.agentPath === agentPath);
+    if (existing) {
+      const native = existing.native!;
+      if (native.spawnOperationId !== request.operationId) throw new Error('math_team_agent_exists');
+      if (native.spawnRequestDigest !== requestDigest) throw new Error('math_team_call_changed');
+      if (native.agent && native.configSnapshot && native.submissionId)
+        return { agent: native.agent, configSnapshot: native.configSnapshot, submissionId: native.submissionId };
+      throw new Error('math_team_native_spawn_unconfirmed');
+    }
+    const threadId = crypto.randomUUID(), input = object(payload.input), bootstrap = { ...object(payload.bootstrap), threadId };
+    const initialInput = { author: this.identity(caller).path, input, startOptions: object(payload.startOptions ?? {}) };
+    return this.lifecycle.spawn({ sessionId: request.sessionId, threadId, agentPath, parentThreadId: caller,
+      operationId: request.operationId, requestDigest, bootstrap, initialInput, message: nativeTeamAssignmentMessage(input) }, signal);
   }
 
   private async perform(actor: string, request: NativeAgentControlRequest, signal: AbortSignal): Promise<Json> {
@@ -322,28 +348,6 @@ export class AgentTeamNativeControl {
     const leadOnly = () => { if (actor !== 'lead') throw new Error('math_team_lead_operation_required'); };
     switch (request.operation) {
       case 'resolve': return { threadId: this.target(payload.target) };
-      case 'spawn': {
-        leadOnly(); signal.throwIfAborted();
-        const source = nativeSource(payload.source), agentPath = text(source.agent_path);
-        if (!/^\/root\/[^/]+$/u.test(agentPath) || source.parent_thread_id !== caller)
-          throw new Error('math_team_native_flat_team_required');
-        const existing = this.archive.workers.find(worker => worker.native?.agentPath === agentPath);
-        const requestDigest = mathDigest(canonicalMathJson([request.sessionId, caller, request.operation, payload]));
-        if (existing) {
-          const native = existing.native!;
-          if (native.spawnOperationId === request.operationId) {
-            if (native.spawnRequestDigest !== requestDigest) throw new Error('math_team_call_changed');
-            if (native.agent && native.configSnapshot && native.submissionId)
-              return { agent: native.agent, configSnapshot: native.configSnapshot, submissionId: native.submissionId };
-            throw new Error('math_team_native_spawn_unconfirmed');
-          }
-          throw new Error('math_team_agent_exists');
-        }
-        const threadId = crypto.randomUUID(), input = object(payload.input), bootstrap = { ...object(payload.bootstrap), threadId };
-        const initialInput = { author: this.identity(caller).path, input, startOptions: object(payload.startOptions ?? {}) };
-        return this.lifecycle.spawn({ sessionId: state.sessionId, threadId, agentPath, parentThreadId: caller,
-          operationId: request.operationId, requestDigest, bootstrap, initialInput, message: nativeTeamAssignmentMessage(input) }, signal);
-      }
       case 'send': {
         const target = this.target(payload.target), input = object(payload.input);
         if (input.kind !== 'message') throw new Error('math_team_native_message_required');
@@ -379,8 +383,11 @@ export class AgentTeamNativeControl {
       }
       case 'list': {
         const prefix = payload.pathPrefix == null ? undefined : text(payload.pathPrefix);
-        return { agents: [...this.connections.keys()].filter(id => !prefix || this.identity(id).path === prefix ||
-          this.identity(id).path.startsWith(prefix + '/')).flatMap(id => {
+        return { agents: [...this.connections.keys()].filter(id => {
+          if (!prefix) return true;
+          const agentPath = this.identity(id).path;
+          return agentPath === prefix || agentPath.startsWith(prefix + '/');
+        }).flatMap(id => {
           const snapshot = this.snapshot(id); return snapshot.kind === 'loaded' ? [snapshot.agent] : [];
         }) };
       }

@@ -19,7 +19,7 @@ export const libraryRequestSchema = z.object({ schema: z.literal('theorem-os.lib
 export type LibraryRequest = z.infer<typeof libraryRequestSchema>;
 const contextSchema = z.object({ schema: z.literal('theorem-os.library-access.v1'),
   catalog: z.object({ file: z.string(), digest: hash }).strict(), problemReceiptDigest: hash,
-  seedCommit: z.string(), frozenFiles: z.record(hash) }).strict();
+  seedCommit: z.string(), frozenFiles: z.record(hash), requestInstallation: z.literal(false).optional() }).strict();
 
 /** Full release search and installation have no task-policy projection yet. */
 export function assertLibraryCatalogAccess(problem: SolverProblem): void {
@@ -27,11 +27,11 @@ export function assertLibraryCatalogAccess(problem: SolverProblem): void {
 }
 
 /** Published by the host before a turn; shell requests are advisory until the host validates them. */
-export function writeLibraryAccess(problem: SolverProblem, worktree: string, catalog: LibraryAccess) {
+export function writeLibraryAccess(problem: SolverProblem, worktree: string, catalog: LibraryAccess, requestInstallation = true) {
   assertLibraryCatalogAccess(problem);
   writeMathJsonDurable(path.join(worktree, LIBRARY_ACCESS_FILE), { schema: 'theorem-os.library-access.v1', catalog,
     problemReceiptDigest: problem.receiptDigest, seedCommit: git(worktree, ['rev-parse', 'HEAD']),
-    frozenFiles: problem.frozenFiles ?? {} }, 0o400);
+    frozenFiles: problem.frozenFiles ?? {}, ...(requestInstallation ? {} : { requestInstallation: false }) }, 0o400);
 }
 
 export function agentLibrary(worktreeInput: string) {
@@ -60,6 +60,7 @@ export function agentLibrary(worktreeInput: string) {
       'library_source_budget');
     },
     request(requestedNames: string[], reason: string) {
+      if (context.requestInstallation === false) throw new Error('math_library_request_lead_required: send Lead the declaration name and intended application');
       const request = libraryRequestSchema.parse({ schema: 'theorem-os.library-request.v1',
         catalogDigest: context.catalog.digest, problemReceiptDigest: context.problemReceiptDigest,
         seedCommit: context.seedCommit, names: [...new Set(requestedNames.map(name => name.replace(/^_root_\./u, '')))], reason });

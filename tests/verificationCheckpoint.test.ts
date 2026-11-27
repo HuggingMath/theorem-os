@@ -6,7 +6,6 @@ import { checkpointVerification, VerificationCheckpointError, withVerificationCh
   type VerificationCheckpoint } from '../src/solver/verificationCheckpoint';
 import type { MathematicsVerifierBatchRequest } from '../src/math/verifier';
 import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
-import { WorkerProofLifecycle } from '../src/solver/workerProofLifecycle';
 import { taskVersion, type CooperativeAction } from '../src/solver/tasks';
 import path from 'node:path';
 import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
@@ -92,22 +91,4 @@ describe('resumable verification scheduling', () => {
     expect(checkpoints).toEqual([]);
   });
 
-  it('keeps a frozen candidate pending on timeout and retries it without opening a model writer', async () => {
-    const task = { id: 'goal', kind: 'goal' as const, objective: 'Prove the target', dependsOn: [], revision: 0 };
-    const assignment: CooperativeAction = { kind: 'task', task,
-      assignment: { taskId: task.id, taskDigest: taskVersion(task), workerId: 'peer', seedCommit: example.problem.baseCommit } };
-    const ready = { status: 'frozen', snapshotCommit: example.problem.baseCommit };
-    const close = vi.fn(async () => {}), checked = vi.fn(), completed = vi.fn();
-    const cooperation = { pendingProofReady: () => ready,
-      deliver: vi.fn(async () => { throw new VerificationCheckpointError({ key: 'fixture', timeoutMs: 1000, attempts: 1,
-        at: 1, targetCommit: example.problem.baseCommit, receiptIds: [] }); }), proofReadyCompleted: completed };
-    const state = solverState(example.problem, example.workspace, { runId: 'frozen', phase: 'running' });
-    const lifecycle = new WorkerProofLifecycle({ state, research: state, worker: { id: 'peer', role: 'engineer', worktree: example.workspace, ownedFiles: [] },
-      cooperation: cooperation as never, close, checked, save: () => {}, emit: () => {} });
-    await expect(lifecycle.resumeFrozen(assignment)).rejects.toBeInstanceOf(VerificationCheckpointError);
-    expect(ready.status).toBe('frozen'); expect(completed).not.toHaveBeenCalled();
-    cooperation.deliver.mockResolvedValueOnce({ check: undefined } as never);
-    expect(await lifecycle.resumeFrozen(assignment)).toBe(true);
-    expect(cooperation.deliver.mock.calls).toHaveLength(2); expect(close).toHaveBeenCalledTimes(2); expect(checked).toHaveBeenCalledOnce();
-  });
 });

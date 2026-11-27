@@ -38,15 +38,14 @@ export function ResearchReview({ feedback, project, selfId, canReview, refresh, 
   return <section class="collaboration-review" id={`review-${feedback.id}`} tabIndex={-1} data-feedback-review>
     {feedback.candidateDelivery && <div class="candidate-delivery-status" data-candidate-delivery-status={feedback.candidateDelivery.status}>
       <p>{needsNewCandidate && feedback.decision.status === 'needs-info' ? tx('评审要求新版候选，请按当前任务版本修订源码并重新检查。', 'The reviewer requested a new candidate. Revise the source for the current task and check it again.')
+        : feedback.candidateDelivery.status === 'awaiting-review' && feedback.decision.status === 'accepted' ? tx('人工评审已采纳。', 'Accepted in human review.')
         : feedback.candidateDelivery.status === 'awaiting-review' ? tx('候选检查已通过，等待人工批准。', 'The candidate passed its check and is waiting for human approval.')
         : feedback.candidateDelivery.status === 'approved' && newAttempt ? tx('已评审通过，请在带入固定库的新尝试中使用。', 'Review approved. Use this candidate in a new attempt with the fixed library.')
         : feedback.candidateDelivery.status === 'approved' ? tx('候选已批准，投递回执待确认。', 'The candidate is approved; delivery is awaiting confirmation.')
         : feedback.candidateDelivery.status === 'dispatched' ? tx('候选已投递，可继续跟踪采纳和执行。', 'The candidate was sent. Follow its adoption and execution below.')
         : feedback.candidateDelivery.status === 'withdrawn' ? tx('此候选已撤回或由新修订接续。', 'This candidate was withdrawn or continued in a newer revision.')
         : feedback.proofCheck?.status === 'failed' ? tx('候选未通过检查，可修改后提交新修订。', 'The candidate check failed. Revise it and submit a new version.') : tx('候选检查中。', 'Checking the candidate.')}</p>
-      {newAttempt && <p>{tx('这份候选将在新尝试中使用，评审批准后可准备完整源码与固定库。', 'This candidate will be used in a new attempt. After review, prepare its complete source and fixed library.')}</p>}
-      {feedback.candidateDelivery.status === 'awaiting-review' && canJudge && !feedback.supersededBy && !['needs-info', 'declined'].includes(feedback.decision.status) && <button class="button" type="button" data-candidate-approve disabled={action.busy} onClick={() => void action.run('POST', `${base}/theorems/${enc(project.id)}/feedback/${enc(feedback.id)}/candidate-delivery`, { action: 'approve', expectedRevision: feedback.revision }, refresh)}>{newAttempt ? tx('批准在新尝试中使用', 'Approve use in a new attempt') : tx('批准并投递此候选', 'Approve and send this candidate')}</button>}
-      {['checking', 'awaiting-review', 'approved'].includes(feedback.candidateDelivery.status) && (feedback.author.id === selfId || project.permissions.manage) && <button class="text-button" type="button" data-candidate-withdraw disabled={action.busy} onClick={() => void action.run('POST', `${base}/theorems/${enc(project.id)}/feedback/${enc(feedback.id)}/candidate-delivery`, { action: 'withdraw', expectedRevision: feedback.revision }, refresh)}>{tx('撤回投递', 'Withdraw delivery')}</button>}
+      {newAttempt && <p>{tx('这份候选将在新尝试中使用，记录采纳决定后可准备完整源码与固定库。', 'This candidate will be used in a new attempt. Record an acceptance decision to prepare its complete source and fixed library.')}</p>}
       {canPrepareAttempt && <a class="button" data-prepare-library-attempt href={`./?libraryProposal=${enc(feedback.id)}&project=${enc(project.id)}`}>{tx('带入完整源码与固定库，准备新尝试', 'Prepare a new attempt with the complete source and fixed library')}</a>}
     </div>}
     {Boolean(relatedAttempts.length) && <section data-library-proposal-followups>

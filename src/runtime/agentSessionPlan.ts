@@ -1,8 +1,7 @@
 import type { MathAgentHarnessId, MathAgentOptions, MathAgentSessionPlan } from './agentSession';
 import type { CliConfiguration } from './cliConfiguration';
-import { validateNativeDelegation } from './nativeDelegation';
 
-type Request = Pick<MathAgentOptions, 'skills' | 'readIsolation' | 'outputSchema' | 'completedOutput' | 'delegation'>;
+type Request = Pick<MathAgentOptions, 'skills' | 'readIsolation' | 'outputSchema' | 'completedOutput'>;
 
 /** Resolve actual workflow requirements before a native process or provider request.
  * A read-only host-root mount is not the sealed, credential-free role sandbox.
@@ -13,11 +12,6 @@ export function planMathAgentSession(harness: MathAgentHarnessId, request: Reque
   if (request.readIsolation && request.skills?.length) throw new Error(`math_${prefix}_skill_read_isolation_unsupported`);
   if (request.readIsolation && harness === 'cli' && !cli?.sealedRole)
     throw new Error('math_cli_sealed_role_configuration_required');
-  if (request.delegation) {
-    if (harness !== 'codex') throw new Error(`math_${prefix}_delegation_unsupported`);
-    validateNativeDelegation(request.delegation);
-    if (request.readIsolation) throw new Error('math_native_delegation_read_isolation_unsupported');
-  }
   const loading = new Set(request.skills?.map(skill => skill.loading));
   if (harness !== 'codex' && loading.has('native')) throw new Error(harness === 'claude-code'
     ? 'math_claude_native_skill_loading_unsupported' : `math_${prefix}_requires_file_skill`);

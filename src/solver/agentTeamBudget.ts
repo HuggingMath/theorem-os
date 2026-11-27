@@ -1,4 +1,4 @@
-import { modelDispatchAllowed, reportedTotalTokens, type TokenBudget } from './usageBudget';
+import { reportedTotalTokens, type TokenBudget } from './usageBudget';
 
 /** Limits are cumulative across every turn of the same task, including yields and resumes. */
 export type AgentTeamAllowance = Readonly<{ tokens?: number; turns?: number }>;
@@ -13,12 +13,6 @@ export type AgentTeamBudgetInput = Readonly<{
   /** A missing settled receipt is different from a request whose receipt is still pending. */
   taskUsageUnavailable?: boolean;
 }>;
-
-export type AgentTeamBudgetStopReason = 'math_total_token_limit' | 'math_model_usage_unavailable' |
-  'math_team_total_turn_limit' | 'math_team_lead_token_reserve' | 'math_team_lead_turn_reserve' |
-  'math_team_task_token_limit' | 'math_team_task_turn_limit';
-export type AgentTeamChildAdmission = Readonly<{ allowed: true }> |
-  Readonly<{ allowed: false; reason: AgentTeamBudgetStopReason }>;
 
 const remaining = (limit: number | undefined, used: number) =>
   limit === undefined || limit === Infinity ? null : Math.max(0, limit - used);
@@ -67,34 +61,4 @@ export function projectAgentTeamBudget(input: AgentTeamBudgetInput) {
       },
     } } : {}),
   };
-}
-
-/**
- * Call with "turn" before reserving a new child turn and with "request" before each
- * upstream request. The current turn has already consumed its turn allowance at request
- * admission; reaching that turn cap must not prevent the turn's own requests from running.
- * This helper applies only to children. Lead uses the ordinary global allowance.
- */
-export function agentTeamChildAdmission(input: AgentTeamBudgetInput,
-  stage: 'turn' | 'request' = 'turn'): AgentTeamChildAdmission {
-  if (!modelDispatchAllowed(input.tokenBudget)) return { allowed: false,
-    reason: input.tokenBudget.status === 'usage-unavailable' ? 'math_model_usage_unavailable' : 'math_total_token_limit' };
-  const projection = projectAgentTeamBudget(input);
-  const task = projection.task;
-  if (stage === 'turn' && projection.remaining.turns !== null && projection.remaining.turns <= 0)
-    return { allowed: false, reason: 'math_team_total_turn_limit' };
-  if (task?.budget.tokens !== undefined &&
-      task?.usageUnavailable)
-    return { allowed: false, reason: 'math_model_usage_unavailable' };
-  if (task && task.remaining.tokens !== null && task.remaining.tokens <= 0)
-    return { allowed: false, reason: 'math_team_task_token_limit' };
-  if (projection.childRemaining.tokens !== null && projection.childRemaining.tokens <= 0)
-    return { allowed: false, reason: 'math_team_lead_token_reserve' };
-  if (stage === 'turn') {
-    if (task && task.remaining.turns !== null && task.remaining.turns <= 0)
-      return { allowed: false, reason: 'math_team_task_turn_limit' };
-    if (projection.childRemaining.turns !== null && projection.childRemaining.turns <= 0)
-      return { allowed: false, reason: 'math_team_lead_turn_reserve' };
-  }
-  return { allowed: true };
 }

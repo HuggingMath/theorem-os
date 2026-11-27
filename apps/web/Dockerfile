@@ -109,6 +109,7 @@ ENV THEOREMOS_CODEX_BACKEND_EXECUTABLE=/opt/theoremos-codex-backend/codex
 USER 10001:10001
 RUN timeout 30s python3 scripts/codex-backend/check-capabilities.py "$THEOREMOS_CODEX_BACKEND_EXECUTABLE"
 LABEL org.theoremos.native-agent-control=v1
+LABEL org.theoremos.native-team-workflow=v1
 LABEL org.theoremos.team-profile-preferences=v1
 LABEL org.theoremos.team-expert-cards=v1
 LABEL org.theoremos.worker-control=v1

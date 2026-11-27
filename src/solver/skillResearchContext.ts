@@ -5,7 +5,7 @@ import { mathToolGuide } from '../math/mathTools';
 import { assertMathAgentSkillsCurrent, type MathAgentSkill } from '../runtime/agentSkills';
 import type { MathAgentOptions } from '../runtime/agentSession';
 import type { SolverRunState } from './archive';
-import { compileContextSections, portfolioContextSections, type ContextSection } from './contextCompiler';
+import { compileContextSections, type ContextSection } from './contextCompiler';
 import { continuationContextSection, readContinuationSnapshot } from './continuationInput';
 import { DECLARATION_INDEX_FILE } from './declarationIndex';
 import { solverProofFeedback } from './feedback';
@@ -45,20 +45,18 @@ export function skillResearchContinuationSection(problem: Pick<SolverProblem, 'r
 }
 
 export function agentTeamContextSection(state: Readonly<SolverRunState>): ContextSection {
-  const native = state.agentTeam?.transport === 'native-agent-control';
   const overview = agentTeamOverview(state);
   return { id: 'agent-team', kind: 'feedback',
-    text: 'Team observations (advisory; ' + (native ? 'receive updates through native messages' : 'use theoremos_team poll for the durable inbox') + '):\n' +
+    text: 'Team observations (advisory; receive updates through native messages):\n' +
       JSON.stringify({ ...overview,
         recentEvents: agentTeamRecentEvents(state.agentTeam, 'lead'),
         latestSequence: state.agentTeam?.events.at(-1)?.sequence ?? 0,
-        inbox: native ? 'Native messages carry addressed updates. Use history for complete tasks and inspect or inspect-research for saved results. Native acceptance and latestSequence are not read acknowledgments.' :
-          'Poll after your last received cursor (initially 0) for the full durable inbox. latestSequence is not an acknowledgment.' }) };
+        inbox: 'Native messages carry addressed updates. Use history for complete tasks and inspect or inspect-research for saved results. Native acceptance and latestSequence are not read acknowledgments.' }) };
 }
 
 /** Stable host contracts and current facts; research methods live in the pinned skill. */
 export function buildSkillResearchContext(problem: SolverProblem, state: Readonly<SolverRunState>,
-  access: ContextAccess & { researchSkill: MathAgentSkill }): ContextBundle {
+  access: ContextAccess & { researchSkill: MathAgentSkill }): ContextBundle & { inboxThrough?: number } {
   const skill = access.researchSkill;
   assertMathAgentSkillsCurrent([skill]);
   if (!state.researchSkill || state.researchSkill.digest !== skill.digest || state.researchSkill.name !== skill.name ||
@@ -67,7 +65,7 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
     if (!access.knowledgeDigest || access.knowledgeDigest !== state.knowledgeDigest) throw new Error('math_knowledge_identity_changed');
   } else if (state.knowledgeDigest) throw new Error('math_knowledge_identity_missing');
   const { command, help, leanCheckCommand, longCommandSummary } = buildResearchToolGuide(problem, access, state.environmentDigest,
-    state.researchDelegation?.mode === 'team' ? state.agentTeam?.transport ?? 'host-tools' : undefined);
+    state.researchDelegation?.mode === 'team');
   const project = path.join(access.worktree, problem.projectRelative);
   const team = state.researchDelegation?.mode === 'team';
   const teamWorker = state.researchDelegation?.mode === 'team' && access.teamRole?.role === 'worker';
@@ -106,8 +104,7 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
     'Consider these when they fit a concrete gap. You choose whether to delegate and may use any other catalogued specialty. ' +
     'To give a member profile knowledge, put its ID on the Profiles: line of that assignment.\n\n' : '';
   const instructions = (state.researchDelegation?.mode === 'team'
-    ? agentTeamInstructions(access.teamRole ?? { id: 'lead', role: 'lead' }, state.researchDelegation.maxAgents,
-      state.agentTeam?.transport) : '') +
+    ? agentTeamInstructions(access.teamRole ?? { id: 'lead', role: 'lead' }, state.researchDelegation.maxAgents) : '') +
     (leadProfile ? leadProfile.text + '\n\n' : '') + preferenceInstruction + cardCatalogue +
     (teamWorker ? 'Research the current Lead assignment in this isolated worktree using the pinned theoremos-research skill. ' +
       'The frozen original problem is background and source constraints; the assignment defines the result you own.\n'
@@ -123,12 +120,7 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
     'Do not read external candidate solutions. Do not edit the pinned skill, host help, configuration or receipts. ' +
     'A message, local diagnostic or historical receipt is never acceptance. The host freezes sources after writer shutdown and checks every original target. ' +
     'There is no host task graph in this mode. Execution-limit observations describe any stage and hard deadlines. ' +
-    (state.researchDelegation?.mode === 'team' ? '' :
-    state.researchDelegation?.mode === 'read-only' ? `The theoremos_investigate tool dispatches read-only native threads through the host, with at most ${state.researchDelegation.maxAgents} agents including you. ` +
-      'Pass a questions array of bounded independent questions; the call waits for every result. Built-in spawn/fork is disabled. ' +
-      'Delegate bounded questions only when parallel work helps. Children return advisory findings or candidates; you alone integrate formal sources. ' +
-      'Each investigator is archived before its result returns; the host stops the entire session tree on delivery. All provider requests share your total allowance.\n'
-      : 'Native child delegation is disabled in this run.\n') +
+    (team ? '' : 'Native child delegation is disabled in this run.\n') +
     (leanCheckCommand ? `Lean check for an editable file (run from any directory):\n${leanCheckCommand}\n` : '') +
     toolSummary + longCommandSummary + help.instruction(access.worktree) + mathematicsRuntimeInstruction(access.environment.DEEPSCIENTIST_MATH_ENV_FILE);
   const originalProblem: ContextSection = { id: 'original-problem', kind: 'problem',
@@ -137,7 +129,7 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
       statement: problem.contract.informalStatement, formalStatement: problem.contract.formalStatement,
       assumptions: problem.contract.assumptions, targets: problem.targets,
       baselineCommit: problem.baseCommit, ownedFiles: problem.ownedFiles, frozenFiles: Object.keys(problem.frozenFiles ?? {}) }) };
-  const mandatory: ContextSection[] = portfolioContextSections(state);
+  const mandatory: ContextSection[] = [];
   const feedback = [access.sourceFeedback, !teamWorker && state.check && !state.check.passed
     ? solverProofFeedback(state.check, access.previousCheck, access.previousFailures) : undefined].filter(Boolean).join('\n\n');
   if (feedback) mandatory.push({ id: 'host-feedback', kind: 'feedback', text: feedback });
@@ -154,9 +146,11 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
   mandatory.push({ id: 'saved-work', kind: 'sources', text: 'Read the current owned source files, relevant definitions and worktree-root RESEARCH.md before extending a remembered or inherited argument. ' +
     `The current owned declaration index is ${path.join(access.worktree, DECLARATION_INDEX_FILE)}. ` +
     'Current files and complete references remain available even when their full text is not included in this message. Continue the original research from saved work.' });
+  const workerContext = teamWorker ? agentTeamWorkerSection(state, access.teamRole!, access.teamAssignment!) : undefined;
+  const workerSections = workerContext
+    ? [workerContext.section, agentTeamProfileSection(skill, access.teamAssignment!.message, cards)] : [];
   const compile = (options: ResearchDispatchOptions = {}) => compileContextSections({ instructions,
-    mandatory: [...(teamWorker ? [agentTeamWorkerSection(state, access.teamRole!, access.teamAssignment!).section,
-      agentTeamProfileSection(skill, access.teamAssignment!.message, cards)] : []),
+    mandatory: [...workerSections,
       ...(access.executionLimits ? [executionLimitsSection(access.executionLimits)] : []),
       options.continuation ? skillResearchContinuationSection(problem, state) : originalProblem,
       ...mandatory, ...(options.checkpointInstruction ? [{ id: 'checkpoint', kind: 'checkpoint' as const,
@@ -164,6 +158,6 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
     maxOptionalContextBytes: access.maxOptionalContextBytes, inlineManifest: false });
   const continued = compile({ continuation: true });
   return { instructions, ...compile(), continuationMessage: continued.message, continuationManifest: continued.manifest,
-    compileDispatch: compile,
+    compileDispatch: compile, inboxThrough: workerContext?.inboxThrough,
     scope: 'original-problem-and-allowed-library', sources: { problemReceiptDigest: problem.receiptDigest } };
 }

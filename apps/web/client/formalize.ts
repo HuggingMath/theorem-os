@@ -165,13 +165,14 @@ function controls() {
   const usable = state.item?.status === 'confirmed' && !changed && !state.busy;
   const guided = Boolean(state.item?.humanReview);
   use.textContent = guided ? t('返回对话') : embedded ? t('继续证明研究') : t('带入研究草稿');
-  $('#formalize-confirmed .field-note').textContent = guided ? t('在原对话中启动双 Agent 研究，并审核研究计划。')
+  $('#formalize-confirmed .field-note').textContent = guided ? t('返回原对话继续研究并审核初始路线。')
     : t('带入后可设置研究要求，不会自动启动证明。');
   use.setAttribute('aria-disabled', String(!usable));
   if (usable) use.href = guided ? '/' : `/?formalization=${encodeURIComponent(state.item!.id)}`;
   else use.removeAttribute('href');
   const queueFull = !retry && !!caps && state.items.filter(active).length >= caps.limits.perOwner;
-  $<HTMLButtonElement>('#formalize-start').disabled = state.busy || !caps || !caps.available && !retry || !original.value.trim() || queueFull
+  const available = embedded ? caps?.solveAvailable ?? caps?.available : caps?.available;
+  $<HTMLButtonElement>('#formalize-start').disabled = state.busy || !caps || !available && !retry || !original.value.trim() || queueFull
     || (!embedded && !retry && caps?.key === 'required' && !key.value.trim());
   const sendStatus = $('#formalize-send-status');
   sendStatus.hidden = !embedded || Boolean(caps) && !queueFull && !state.busy;
@@ -197,9 +198,10 @@ function drawCapabilities() {
       research.maxRunSeconds ? t('{0} 分钟', Math.ceil(research.maxRunSeconds / 60)) : t('不限'), research.maxTurns || t('不限'),
       research.maxTotalTokens ? research.maxTotalTokens.toLocaleString(localeTag) : t('不限'))));
   }
-  const note = $('#formalize-unavailable'); note.hidden = caps.available;
+  const available = embedded ? caps.solveAvailable ?? caps.available : caps.available;
+  const note = $('#formalize-unavailable'); note.hidden = available;
   note.textContent = caps.reason === 'provider' ? t('当前未配置支持形式化的服务商，请联系管理员配置。') : t('当前运行环境尚未支持在线形式化。已有结果仍可查看。');
-  if (embedded && !caps.available) $<HTMLDetailsElement>('#formalize-settings').open = true;
+  if (embedded && !available) $<HTMLDetailsElement>('#formalize-settings').open = true;
   controls();
 }
 function drawList() {

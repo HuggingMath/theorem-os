@@ -1,6 +1,6 @@
-// Turns the archive written by test:web-cooperative-runtime into the workbench's read-only sample run.
-// That run uses the real Docker host, command pipe and Lean checks, with a scripted offline agent in place of a model,
-// so the sample needs no API key and the page says so. Usage: bun scripts/build-web-sample.ts [archive.json]
+// Converts a saved historical Web archive into the workbench's read-only sample.
+// The archived fixture used Docker, offline agents and real Lean checks.
+// Usage: bun scripts/build-web-sample.ts [archive.json]
 import fs from 'node:fs';
 import path from 'node:path';
 import { webSampleRunId, webSampleSchema, type WebSampleFile } from '../apps/web/sample';

@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Page } from 'playwright';
 import { readWebConfig } from '../apps/web/config';
+import { webAgentTeamPreset } from '../apps/web/researchMode';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { ResearchProjectDetail } from '../apps/web/researchProjectTypes';
@@ -17,7 +18,7 @@ const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-collaboratio
 const errors: string[] = [], external: string[] = [], mail: unknown[] = [], finishers: (() => void)[] = [], checks: object[] = [];
 const source = 'theorem collaboration_entry_fixture : True := by sorry\n';
 const runner: WebRunner = {
-  async readiness() { return { ready: true, message: 'Disposable entry-permission check' }; },
+  async readiness() { return { ready: true, nativeTeam: true, message: 'Disposable entry-permission check' }; },
   async run(_input, _send, signal) { await new Promise<void>(resolve => { finishers.push(resolve); signal.addEventListener('abort', () => resolve(), { once: true }); }); },
   async check() { throw new Error('This check must not invoke Lean'); },
   async command() { throw new Error('This check must not dispatch solver commands'); },
@@ -46,7 +47,7 @@ try {
   let project = (await http<{ item: ResearchProjectDetail }>(owner, 'POST', '/api/research/theorems', { requestId: crypto.randomUUID(), title: '公开入口授权', visibility: 'public' })).item;
   const projectPath = '/api/research/theorems/' + project.id;
   project = (await http<{ item: ResearchProjectDetail }>(owner, 'POST', projectPath + '/versions', { requestId: crypto.randomUUID(), expectedRevision: project.revision, statement: 'Prove True', source, environment: 'standard' })).item;
-  const run = (await http<{ run: { id: string } }>(owner, 'POST', '/api/runs', { requestId: crypto.randomUUID(), providerId: 'openai', apiKey: 'sk-disposable-entry-check', model: 'fixture', effort: 'low', environment: 'standard', source, task: 'Check entry permissions', maxTurns: 1, maxRunSeconds: 600, workers: 1, coordination: 'cooperative' })).run;
+  const run = (await http<{ run: { id: string } }>(owner, 'POST', '/api/runs', { requestId: crypto.randomUUID(), providerId: 'openai', apiKey: 'sk-disposable-entry-check', model: 'fixture', effort: 'low', environment: 'standard', source, task: 'Check entry permissions', maxTurns: 1, maxRunSeconds: 600, ...webAgentTeamPreset() })).run;
   project = (await http<{ item: ResearchProjectDetail }>(owner, 'POST', projectPath + '/runs', { requestId: crypto.randomUUID(), expectedRevision: project.revision, statementVersionId: project.currentStatementVersionId, runId: run.id, exposure: 'public' })).item;
   project = (await http<{ item: ResearchProjectDetail }>(owner, 'PUT', projectPath + '/members/' + researcher.researcherId, { requestId: crypto.randomUUID(), expectedRevision: project.revision, role: 'reader' })).item;
   const href = `${origin}/theorems.html?id=${project.id}&run=${run.id}&version=${project.currentStatementVersionId}`;

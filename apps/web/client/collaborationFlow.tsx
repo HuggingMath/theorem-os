@@ -9,7 +9,7 @@ import type { WebApi } from './collaborationUi';
 import { Rich, RichProse } from './richText';
 import { BookmarkControl } from './researchCollections';
 import { ResearchDraftPicker, useResearchDrafts } from './researchDrafts';
-import { IssueExecution } from './researchIssueExecution';
+import { IssueExecutionHistory } from './researchIssueExecution';
 import { completeIssueReply, type IssueReplyDraft } from './researchIssueReplyDraft';
 import { SharedStageReference } from './researchStageReference';
 import { ProjectInvitationLinks } from './researchInvite';
@@ -223,7 +223,7 @@ function IssueThread({ issue, project, selfId, refresh, onRevealFeedback }: { is
       {project.permissions.member && issue.status === 'open' && <button class="text-button" type="button" onClick={() => { setReplyTo(reply.id); saveDraft({ replyTo: reply.id }); const input = document.getElementById(`issue-input-${issue.id}`); const details = input?.closest('details'); if (details) details.open = true; input?.focus(); }}>{tx('回复此条', 'Reply')}</button>}</li>)}</ol>
     {issue.resolution && <div class="collaboration-resolution"><strong>{issue.resolution.author.displayName} · {issue.resolution.action === 'reopen' ? tx('重新讨论的原因', 'Reason for reopening') : tx('决议', 'Resolution')}</strong><RichProse text={issue.resolution.text} />
       {issue.resolution.proposalId && <a href={`#reply-${issue.resolution.proposalId}`}>{tx('采用的方案', 'Selected proposal')}</a>}{issue.resolution.feedbackIds.map(id => <a class="research-inline-link" key={id} href={`#feedback-${enc(id)}`} onClick={event => { event.preventDefault(); onRevealFeedback(id); }}>{tx('查看决议关联的指导或调整', 'View linked guidance or changes')}</a>)}</div>}
-    {issue.status === 'resolved' && issue.resolution && project.permissions.edit && <IssueExecution key={`${selfId}:${project.id}:${issue.id}`} issue={issue} project={project} selfId={selfId} refresh={refresh} onRevealFeedback={onRevealFeedback} />}
+    <IssueExecutionHistory key={`${selfId}:${project.id}:${issue.id}`} issue={issue} project={project} selfId={selfId} onRevealFeedback={onRevealFeedback} />
     {Boolean(issue.resolutionHistory?.length) && <details><summary>{tx('历次决议与重新讨论', 'Previous resolutions and reopenings')}</summary>{issue.resolutionHistory!.map((record, index) => <div class="collaboration-resolution" key={index}><div class="collaboration-meta">{record.author.displayName} · {stamp(record.createdAt)}</div><RichProse text={record.text} />{record.proposalId && <a href={`#reply-${record.proposalId}`}>{tx('采用的方案', 'Selected proposal')}</a>}</div>)}</details>}
     {selfId && project.permissions.member && (issue.status === 'open' || project.permissions.edit) && <details onToggle={event => { if (event.currentTarget.open && !text.trim()) setRevision(issue.revision); }}><summary>{issue.status === 'open' ? tx('补充意见或记录决议', 'Reply or record a resolution') : tx('重新讨论', 'Reopen discussion')}</summary>
       <ResearchDraftPicker drafts={drafts} filter={item => item.scope.issueId === issue.id} onRestore={item => { const value = item.value; setText(value.text); setKind(value.kind); setReplyTo(value.replyTo); setProposal(value.proposalId); setFeedback(value.feedbackId); setRevision(value.revision); action.reset(); }} />

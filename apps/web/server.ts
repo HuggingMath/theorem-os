@@ -1,5 +1,6 @@
 import { publicWebProvider, webProviderHarness, webHarnessResearchError } from './harness';
-import { nativeTeamCapacitySchema, nativeTeamPreferencesSchema, webDefaultSkillLoading, webPortfolioSecondsSchema } from './researchMode';
+import { nativeTeamCapacitySchema, nativeTeamPreferencesSchema, webAgentTeamPreset, webDefaultSkillLoading,
+  retiredWebRunInputError, webPortfolioSecondsSchema, webResearchModeError } from './researchMode';
 import { webTeamProfiles } from './nativeTeamProfiles';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import fs from 'node:fs';
@@ -11,13 +12,13 @@ import { z } from 'zod';
 import { getWebEnvironments, readWebConfig, webDefaults, webExplanationLimits, webLimits, webTemplates, webProvidersForAccount, type WebConfig } from './config';
 import { DockerWebRunner, type WebRunner } from './runner';
 import { WebJobs } from './jobs';
-import { accountLogin, webAgentActionLimits, webContinuationLabelMax, type WebAccountIdentity, type WebAdminOverview, type WebContinuation, type WebEffort,
+import { accountLogin, retiredResearchCoordinationCode, retiredResearchCoordinationMessage, webAgentActionLimits, webContinuationLabelMax, type WebAccountIdentity, type WebAdminOverview, type WebContinuation, type WebEffort,
   type WebExplanationLanguage, type WebExplanationOverview, type WebProvider, type WebRun, type WebRunInput, type WebSession, workbenchReturn } from './shared';
 import { researchModulePlanSchema, type ResearchModulePlan } from '../../src/solver/modules/policy';
 import { WebStorage, WebStorageError } from './storage';
 import { WebKnowledgeService, type WebKnowledgeDetailOptions } from './knowledgeService';
 import { WebModuleRegistry } from './moduleRegistry';
-import { webGuidanceSchema, webPlanApprovalSchema, webPlanProposalSchema } from './collaborationValidation';
+import { webPlanApprovalSchema } from './collaborationValidation';
 import { WebAuth, WebAuthError, type WebMailer, type WebMilestone } from './auth';
 import { WebSessionAdmission, WebAdmissionError } from './admission';
 import { WebOperations } from './operations';
@@ -54,7 +55,6 @@ import { selectWebLibraryPack } from './frozenLibrary';
 import type { ResearchConfigurationSelection, ResearchLibraryPack } from './researchAssetTypes';
 import { canonicalMathJson, mathDigest } from '../../src/math/mathRuntimeIo';
 import { researchLibraryProposalOriginSchema } from './researchLibraryProposalOrigin';
-import { webResearchModeError } from './researchMode';
 
 const inputSchema = z.object({
   requestId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u).optional(),
@@ -151,7 +151,7 @@ const formalizationProvider = (provider: WebProvider | undefined) => !!provider 
 const providerModel = (provider: WebProvider) => provider.id === SUB2API_PROVIDER.id ? SUB2API_PROVIDER.defaultModel : 'gpt-6.1-sol';
 
 class HttpError extends Error {
-  constructor(readonly status: number, message: string) { super(message); }
+  constructor(readonly status: number, message: string, readonly code?: string) { super(message); }
 }
 function paperPdfHttpError(error: WebPaperPdfError): HttpError {
   const location = error.file && Number.isSafeInteger(error.line) ? `${error.file}:${error.line}` : '';
@@ -251,6 +251,9 @@ type Session = { id: string; csrf: string; touchedAt: number; account?: WebAccou
 const objectBody = (value: unknown) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {}) as Record<string, unknown>;
 export function createWebService(config: WebConfig, runner: WebRunner = new DockerWebRunner(config),
   options: { mailer?: WebMailer; captchaAnswer?: () => string; sample?: WebSampleFile | null } = {}) {
+  const rejectRetiredCoordination = (): never => {
+    throw new HttpError(409, retiredResearchCoordinationMessage, retiredResearchCoordinationCode);
+  };
   const storage = new WebStorage(config.dataRoot);
   const operations = new WebOperations(storage, config.dataRoot);
   const productBuild = readProductBuild(config.staticRoot);
@@ -351,8 +354,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
       !['rejected', 'interrupted', 'superseded'].includes(run.formalization?.confirmation ?? '') &&
       (!run.formalization?.candidateDigest || run.formalization.candidateDigest === digest));
     if (existing) return existing.id;
-    const run = jobs.create(owner, { ...webDefaults, ...webFormalizationDefaults.research, ...formalization.research,
-      ...(formalization.humanReview ? { workers: 2, coordination: 'cooperative' as const, planApproval: true } : {}),
+    const run = jobs.create(owner, { ...webDefaults, ...webFormalizationDefaults.research, ...formalization.research, ...webAgentTeamPreset(),
+      ...(formalization.humanReview ? { planApproval: true } : {}),
       providerId: input.provider.id, apiKey: input.apiKey,
       autoExplain: formalization.autoExplain, explanationLanguage: formalization.explanationLanguage,
       model: input.model, effort: formalization.researchEffort ?? input.effort, source: evidence.candidate.source, environment: evidence.request.environment,
@@ -368,7 +371,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
       const existing = jobs.list(owner).find(run => run.formalizationId === formalization.id && !run.continueFrom &&
         run.formalization?.candidateDigest === digest && run.source === compiled.candidate.source && run.environment === compiled.request.environment);
       if (existing) return existing.id;
-      const run = jobs.create(owner, { ...webDefaults, ...webFormalizationDefaults.research, ...formalization.research,
+      const run = jobs.create(owner, { ...webDefaults, ...webFormalizationDefaults.research, ...formalization.research, ...webAgentTeamPreset(),
         providerId: input.provider.id, apiKey: input.apiKey, model: input.model, effort: formalization.researchEffort ?? input.effort,
         autoExplain: formalization.autoExplain, explanationLanguage: formalization.explanationLanguage,
         source: compiled.candidate.source, environment: compiled.request.environment, formalizationId: formalization.id,
@@ -487,8 +490,10 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
       if (request.url === '/healthz') { json(response, 200, { ok: true, ...config.sourceCommit ? { commit: config.sourceCommit } : {} }); return; }
       if (request.url === '/readyz' && request.method === 'GET') {
         const maintenance = operations.maintenance;
-        const ready = !maintenance && operations.writable() && (await runner.readiness()).ready;
-        json(response, ready ? 200 : 503, { ready, maintenance, ...(config.sourceCommit ? { commit: config.sourceCommit } : {}) }); return;
+        const runtime = await runner.readiness();
+        const nativeTeam = runtime.ready && runtime.nativeTeam === true;
+        const ready = !maintenance && operations.writable() && nativeTeam;
+        json(response, ready ? 200 : 503, { ready, maintenance, nativeTeam, ...(config.sourceCommit ? { commit: config.sourceCommit } : {}) }); return;
       }
       if (request.headers.host !== origin.host) throw new HttpError(403, '访问地址与服务配置不一致。');
       if (request.headers.origin && request.headers.origin !== origin.origin) throw new HttpError(403, '跨站请求已拒绝。');
@@ -518,8 +523,9 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           json(response, 200, { share: share.snapshot }); return;
         }
         if (url.pathname === '/api/product/status' && request.method === 'GET') {
+          const runtime = await runner.readiness();
           json(response, 200, productStatus({ build: productBuild, commit: config.sourceCommit, maintenance: operations.maintenance,
-            writable: operations.writable(), runtimeReady: (await runner.readiness()).ready })); return;
+            writable: operations.writable(), runtimeReady: runtime.ready && runtime.nativeTeam === true })); return;
         }
         let session = cookieSession(request);
         if (request.method === 'GET' && url.pathname === '/api/session') {
@@ -668,7 +674,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (!auth || !session.account || !auth.isAdmin(accountLogin(session.account))) throw new HttpError(403, '需要管理员账号。');
           if (url.pathname === '/api/admin/overview' && request.method === 'GET') { json(response, 200, adminOverview(auth, quota)); return; }
           if (url.pathname === '/api/admin/operations' && request.method === 'GET') {
-            const ready = operations.writable() && (await runner.readiness()).ready;
+            const runtime = await runner.readiness();
+            const ready = operations.writable() && runtime.ready && runtime.nativeTeam === true;
             let disk: ReturnType<WebOperations['disk']>;
             try { disk = operations.disk(); } catch { /* ready reports an inaccessible data volume. */ }
             json(response, 200, { maintenance: operations.maintenance, ready, ...(disk ? { disk } : {}), failures: operations.failures(),
@@ -773,21 +780,9 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             conversations.delete(owner, id); json(response, 200, { deleted: true }); return;
           }
           if (action === 'stop' && request.method === 'POST') { json(response, 200, { conversation: conversations.stop(owner, id) }); return; }
-          if (action === 'guidance' && request.method === 'POST') {
-            const { runId, ...input } = objectBody(await readBody());
-            const expectedRun = z.string().uuid().optional().safeParse(runId);
-            const parsed = webGuidanceSchema.safeParse(input);
-            if (!parsed.success || !expectedRun.success) throw new HttpError(400, '请检查指导对象、任务版本与内容。');
-            const conversation = await conversations.guide(owner, id, parsed.data,
-              (runId, guidance) => jobs.command(owner, runId, { type: 'guidance', guidance }), expectedRun.data);
-            json(response, 200, { conversation }); return;
-          }
-          if (action === 'guidance-withdraw' && request.method === 'POST') {
-            const commandId = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/u);
-            const parsed = z.object({ id: commandId, guidanceId: commandId }).strict().safeParse(await readBody());
-            if (!parsed.success) throw new HttpError(400, '请检查要撤回的指导。');
-            json(response, 200, await conversations.withdrawGuidance(owner, id,
-              { id: parsed.data.id, guidanceId: parsed.data.guidanceId }, (runId, command) => jobs.command(owner, runId, command))); return;
+          if (request.method === 'POST' && (action === 'guidance' || action === 'guidance-withdraw')) {
+            conversations.read(owner, id);
+            rejectRetiredCoordination();
           }
           if (action === 'messages' && request.method === 'POST') {
             const conversation = conversations.read(owner, id);
@@ -814,8 +809,10 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             savedKeysFor(session).some(item => item.providerId === provider.id) ? 'saved'
               : serverKeysFor(session)?.includes(provider.id) ? 'server' : 'required';
           if (request.method === 'GET') {
-            const formalizationReady = Boolean(runner.formalize) && (await runner.readiness()).ready;
-            const generation: WebFormalizationCapabilities = { available: !!defaultProvider && formalizationReady,
+            const runtime = await runner.readiness();
+            const formalizationReady = Boolean(runner.formalize) && runtime.ready;
+            const available = !!defaultProvider && formalizationReady;
+            const generation: WebFormalizationCapabilities = { available, solveAvailable: available && runtime.nativeTeam === true,
               ...(!defaultProvider ? { reason: 'provider' as const } : !formalizationReady ? { reason: 'runtime' as const } : {}),
               ...(defaultProvider ? { providerId: defaultProvider.id } : {}), model: defaultProvider ? providerModel(defaultProvider) : SUB2API_PROVIDER.defaultModel,
               key: defaultProvider ? keyKind(defaultProvider) : 'required', limits: webFormalizationLimits,
@@ -839,11 +836,12 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
               throw new HttpError(400, 'Sub2API 形式化目前支持 deepseek-flash 模型。');
             const previous = formalizations.replay(owner, input as WebFormalizationRequest, provider, model);
             if (previous) { json(response, 200, { formalization: previous }); return; }
-            const ready = Boolean(runner.formalize) && (await runner.readiness()).ready;
+            const runtime = await runner.readiness();
             // Readiness yields to concurrent requests; replay again before spending quota.
             const raced = formalizations.replay(owner, input as WebFormalizationRequest, provider, model);
             if (raced) { json(response, 200, { formalization: raced }); return; }
-            if (!ready) throw new HttpError(503, '形式化运行环境尚未就绪。');
+            if (!runner.formalize || !runtime.ready) throw new HttpError(503, '形式化运行环境尚未就绪。');
+            if (input.solve && !runtime.nativeTeam) throw new HttpError(503, '当前运行镜像未安装原生团队后端。');
             const apiKey = parsed.data.apiKey || heldKey(session, provider);
             if (!apiKey) throw new HttpError(400, '请填写 API Key。');
             // A confirmed formalization starts its proof through jobs.create itself, so it costs this kind only.
@@ -879,10 +877,12 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             const item = formalizations.read(owner, id);
             if (item.runId) { json(response, 200, { formalization: item }); return; }
             const provider = providersFor(session).find(provider => provider.id === (item.providerId ?? SUB2API_PROVIDER.id));
-            if (!provider) throw new HttpError(409, '这次运行的模型服务已不在配置中。');
+            if (!provider || !formalizationProvider(provider)) throw new HttpError(409, '这次运行的 Codex 模型服务已不在配置中。');
             const apiKey = parsed.data.apiKey || heldKey(session, provider);
             if (!apiKey) throw new HttpError(400, '请填写 API Key。');
-            if (!(await runner.readiness()).ready) throw new HttpError(503, '自动证明运行环境尚未就绪。');
+            const runtime = await runner.readiness();
+            if (!runtime.ready) throw new HttpError(503, '自动证明运行环境尚未就绪。');
+            if (!runtime.nativeTeam) throw new HttpError(503, '当前运行镜像未安装原生团队后端。');
             admitWork();
             try { json(response, 200, { formalization: formalizations.retryResearch(owner, id, provider, apiKey) }); }
             catch (error) {
@@ -1011,32 +1011,49 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (!parsed.success) throw new HttpError(400, '请检查题目、API Key、模型、模块方案及运行预算。');
           const provider = providersFor(session).find(item => item.id === parsed.data.providerId);
           if (!provider) throw new HttpError(400, '该模型服务尚未配置。');
-          const { saveKey, requestId: bodyRequestId, ...input } = parsed.data;
-          const legacyEnvironmentOmitted = input.environment === undefined;
-          input.environment ??= webDefaults.environment;
+          const { saveKey, requestId: bodyRequestId, ...submitted } = parsed.data;
+          const legacyEnvironmentOmitted = submitted.environment === undefined;
+          submitted.environment ??= webDefaults.environment;
           const headerId = request.headers['idempotency-key'];
           if (headerId !== undefined && (typeof headerId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/u.test(headerId)
               || bodyRequestId && bodyRequestId !== headerId)) throw new HttpError(400, '提交请求标识无效或不一致。');
           const requestId = bodyRequestId ?? (typeof headerId === 'string' ? headerId : undefined);
           // Confirmed statements retain their exact artifact bytes; ordinary Lean drafts keep the existing normalization.
-          if (!input.formalizationId) input.source = input.source.trim();
+          if (!submitted.formalizationId) submitted.source = submitted.source.trim();
           if (webProviderHarness(provider) !== 'codex') {
-            input.researchMode ??= 'skill'; input.skillLoading ??= 'file';
+            submitted.researchMode ??= 'skill'; submitted.skillLoading ??= 'file';
           }
-          const harnessError = webHarnessResearchError(provider, input as WebRunInput);
-          if (harnessError) throw new HttpError(400, harnessError);
-          const researchModeError = webResearchModeError(input as WebRunInput, provider);
-          if (researchModeError) throw new HttpError(400, researchModeError);
-          if (input.researchMode === 'skill') input.skillLoading ??= webDefaultSkillLoading(provider);
-          if (input.planApproval && (input.coordination !== 'cooperative' || input.workers < 2))
-            throw new HttpError(400, '先审计划需要协作模式和至少 2 个 Agent。');
-          if (!input.planApproval) delete input.planApproval;
-          const typed = input.apiKey;
+          if (submitted.researchMode === 'skill') submitted.skillLoading ??= webDefaultSkillLoading(provider);
+          if (!submitted.planApproval) delete submitted.planApproval;
+          // Retry the exact submitted identity before considering migration defaults or runtime capabilities.
+          const creationInput = submitted as WebRunInput;
+          const typed = submitted.apiKey;
           const submissionKeys = (failed = false) => vault ? { savedKeys: savedKeysFor(session),
             ...(failed || saveKey && typed && session.account && vault.get(session.account.id, provider.id, provider.baseUrl) !== typed
               ? { keySaveFailed: true } : {}) } : {};
-          const previous = jobs.replay(owner, input as WebRunInput, provider, requestId, legacyEnvironmentOmitted);
+          const previous = jobs.replay(owner, creationInput, provider, requestId, legacyEnvironmentOmitted);
           if (previous) { json(response, 200, { run: previous, ...submissionKeys() }); return; }
+          const retiredInput = retiredWebRunInputError(submitted);
+          if (retiredInput) throw new HttpError(400, retiredInput, retiredResearchCoordinationCode);
+          const harnessError = webHarnessResearchError(provider, creationInput);
+          if (harnessError) throw new HttpError(400, harnessError);
+          const researchModeError = webResearchModeError(creationInput, provider);
+          if (researchModeError) throw new HttpError(400, researchModeError);
+          if (submitted.planApproval && webProviderHarness(provider) !== 'codex')
+            throw new HttpError(400, '先审计划需要 Codex 原生团队。');
+          // A typed key wins; an empty one uses the account's saved key, then the server's key for admins.
+          const apiKey = typed || heldKey(session, provider);
+          if (!apiKey) throw new HttpError(400, '请填写 API Key。');
+          const readiness = await runner.readiness();
+          const raced = jobs.replay(owner, creationInput, provider, requestId, legacyEnvironmentOmitted);
+          if (raced) { json(response, 200, { run: raced, ...submissionKeys() }); return; }
+          if (!readiness.ready) throw new HttpError(503, '运行环境尚未就绪，请先构建 worker 镜像。');
+          if ((submitted.nativeTeamCapacity || submitted.planApproval) && !readiness.nativeTeam)
+            throw new HttpError(503, '当前运行镜像未安装原生团队后端。');
+          const input = { ...submitted, apiKey, environment: submitted.environment ?? webDefaults.environment, coordination: 'independent' as const,
+            ...(webProviderHarness(provider) === 'codex' && readiness.nativeTeam ? webAgentTeamPreset(submitted.nativeTeamCapacity) : {}) };
+          if (input.nativeTeamCapacity && input.modulePlan)
+            throw new HttpError(400, '原生团队不使用自定义模块方案。');
           if (input.libraryProposalOrigin) research.validateLibraryProposalOrigin(owner, input.libraryProposalOrigin);
           if (input.budgetOrigin) {
             const origin = research.projects.resolveBinding(owner, input.budgetOrigin.projectId, input.budgetOrigin.runId);
@@ -1057,18 +1074,6 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             const { digest: _digest, ...configuration } = frozenResearch;
             frozenResearch.digest = mathDigest(canonicalMathJson(configuration));
           }
-          // A typed key wins; an empty one uses the account's saved key, then the server's key for admins.
-          if (!typed) {
-            const held = heldKey(session, provider);
-            if (!held) throw new HttpError(400, '请填写 API Key。');
-            input.apiKey = held;
-          }
-          const readiness = await runner.readiness();
-          // Another request can be accepted while readiness is being checked.
-          const raced = jobs.replay(owner, input as WebRunInput, provider, requestId, legacyEnvironmentOmitted);
-          if (raced) { json(response, 200, { run: raced, ...submissionKeys() }); return; }
-          if (!readiness.ready) throw new HttpError(503, '运行环境尚未就绪，请先构建 worker 镜像。');
-          if (input.nativeTeamCapacity && !readiness.nativeTeam) throw new HttpError(503, '当前运行镜像未安装原生团队后端。');
           if (frozenResearch?.personalExperts?.length && !readiness.nativeTeamExpertCards)
             throw new HttpError(503, '当前运行镜像不支持个人专家资料。请移除专家资产或更新运行镜像。');
           if (input.nativeTeamPreferredProfiles?.length && !readiness.nativeTeamPreferences) throw new HttpError(503, '当前运行镜像不支持角色偏好。清空偏好后仍可使用原生团队。');
@@ -1099,7 +1104,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
               approved ? { evidence: approved.evidence, provenance: { id: approved.formalization.id,
                 evidenceSha256: approved.formalization.report!.evidenceSha256, original: approved.formalization.original,
                 confirmedAt: approved.formalization.confirmedAt!, confirmation: approved.formalization.confirmation ?? 'manual' } } : undefined,
-              frozenResearch);
+              frozenResearch, creationInput);
           }
           catch (error) {
             // A submit that never became a run gives the allowance back.
@@ -1368,27 +1373,16 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (!receipt) throw new HttpError(404, '命令回执尚不可用。');
           json(response, 200, { receipt }); return;
         }
-        if (operation === 'guidance' && request.method === 'POST') {
-          const parsed = webGuidanceSchema.safeParse(await readBody());
-          if (!parsed.success) throw new HttpError(400, '请检查指导对象、任务版本与内容。');
-          try { json(response, 200, { receipt: await jobs.command(owner, run.id, { type: 'guidance', guidance: parsed.data }) }); }
-          catch (error) { throw new HttpError(409, error instanceof Error ? error.message : '指导未能提交。'); }
-          return;
-        }
+        if (request.method === 'POST' && ['guidance', 'edits/preview', 'edits'].includes(operation ?? ''))
+          rejectRetiredCoordination();
         if (operation === 'plan-approval' && request.method === 'POST') {
+          if (!run.nativeTeamCapacity && run.planApproval) rejectRetiredCoordination();
+          if (!run.nativeTeamCapacity || !run.planApproval)
+            throw new HttpError(409, '此研究安排不支持计划审批。');
           const parsed = webPlanApprovalSchema.safeParse(await readBody());
           if (!parsed.success) throw new HttpError(400, '请重新读取当前计划后再批准。');
           try { json(response, 200, { receipt: await jobs.command(owner, run.id, { type: 'plan-approval', approval: parsed.data }) }); }
           catch (error) { throw new HttpError(409, error instanceof Error ? error.message : '计划批准未能提交。'); }
-          return;
-        }
-        if (['edits/preview', 'edits'].includes(operation ?? '') && request.method === 'POST') {
-          const parsed = webPlanProposalSchema.safeParse(await readBody());
-          if (!parsed.success) throw new HttpError(400, '计划草稿格式无效，请保留完整计划与基线版本。');
-          try { json(response, 200, { receipt: await jobs.command(owner, run.id, {
-            type: operation === 'edits/preview' ? 'edit-preview' : 'edit', proposal: parsed.data,
-          }) }); }
-          catch (error) { throw new HttpError(409, error instanceof Error ? error.message : '计划未能提交。'); }
           return;
         }
         if (operation === 'archive' && request.method === 'POST') {
@@ -1477,7 +1471,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
       const known = error instanceof HttpError || error instanceof WebStorageError || error instanceof WebAuthError
         || error instanceof WebAdmissionError || error instanceof WebProviderCheckError;
       if (!response.headersSent) json(response, known ? error.status : invalidKnowledgeInput ? 400 : 500,
-        { error: known ? error.message : invalidKnowledgeInput ? '知识查询或分页参数无效。' : '服务暂时不可用。' });
+        { error: known ? error.message : invalidKnowledgeInput ? '知识查询或分页参数无效。' : '服务暂时不可用。',
+          ...(error instanceof HttpError && error.code ? { code: error.code } : {}) });
       else response.end();
     }
   });

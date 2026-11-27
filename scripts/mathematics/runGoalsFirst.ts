@@ -18,7 +18,7 @@ const modules: SolverModules = {
 
 process.env.CODEX_HOME ||= path.join(os.homedir(), '.config', 'deepscientist', 'math-sol-codex');
 const root = path.resolve(path.dirname(fs.realpathSync(process.argv[1])), '../..');
-runSolver(process.argv.slice(2), root, modules).then(
+runSolver(process.argv.slice(2), root, modules, undefined, 'historical-component').then(
   code => { process.exitCode = code; },
   error => { console.error(error instanceof Error ? error.message : 'math_run_failed'); process.exitCode = 1; }
 );

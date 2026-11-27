@@ -401,6 +401,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     });
     const start = calls.find(call => call.method === 'thread/start').params;
     expect(start.config.allow_login_shell).toBe(false);
+    expect(start).not.toHaveProperty('dynamicTools');
+    expect(calls.some(call => call.method.startsWith('theoremos/agentControl/'))).toBe(false);
     expect(start.developerInstructions).toContain(options.instructions);
     expect(start.developerInstructions).toContain('"login": false');
     expect(start.config.mcp_servers.unrelated).toEqual({ enabled: false });

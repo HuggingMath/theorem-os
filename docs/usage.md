@@ -2,7 +2,7 @@
 
 [返回 README](../README.md) · [组件替换示例](../examples/components/README.md)
 
-这里保留手动准备题目、配置运行环境、恢复实验和调整协作计划的完整说明。第一次使用可以先跑[小题示例](../examples/getting-started/README.md)，再尝试 [IMO2026 Q1](../examples/imo2026/README.md)。
+这里介绍如何准备题目、配置环境、运行原生团队、审核首轮路线和读取历史档案。第一次使用可以先跑[小题示例](../examples/getting-started/README.md)，再尝试 [IMO2026 Q1](../examples/imo2026/README.md)。
 
 ## 环境诊断与小题示例
 
@@ -40,11 +40,11 @@ bun install --frozen-lockfile
 bun run build
 ```
 
-构建生成 `out/main/math-solver.js`、`search-lean.js`、`check-lean.js` 和 `proof-search.js`，并输出 JSON。记录其中的 **`buildManifestRef`**，运行时需要传入这个文件的绝对路径。源码与 bundle 均校验哈希，修改运行时代码后需重新构建。
+构建生成 `out/main/math-solver.js`、`out/main/search-lean.js` 和 `out/main/check-lean.js`，并输出 JSON。运行时传入 `buildManifestRef` 对应的绝对路径。源码与 bundle 均按哈希校验，修改运行时代码后需重新构建。
 
 CLI 默认使用 `~/.config/deepscientist/math-sol-codex` 中的 Codex profile，通过本地 Sub2API 网关 `http://127.0.0.1:8080/v1` 调用模型。`run` 的默认模型为 `deepseek-flash`，新运行的默认推理强度为 `high`。本机 profile 的认证命令按需读取已有部署的 Westlake 号池密钥，无需复制密钥或手动 export。也可通过 `CODEX_HOME` 指向其他已有 profile。
 
-`compare --provider sub2api` 和 `sample-putnam` 创建的独立 profile 使用环境变量 `SUB2API_WESTLAKE_API_KEY`；启动这些实验前需要在调用环境中设置它。密钥不会写入实验 profile 或数学工具环境文件。
+在历史版本中重跑使用 `compare --provider sub2api` 或 `sample-putnam` 的实验时，通过 `SUB2API_WESTLAKE_API_KEY` 提供认证。密钥不会写入实验 profile 或数学工具环境文件。
 
 项目原名 DeepScientist Math。CLI 入口为 `theorem-os`，同时保留 `deepscientist-math` 别名与 `bun run math`；已有环境变量、默认配置路径和运行档案格式继续兼容。
 
@@ -97,11 +97,11 @@ bun run math run \
   --build-manifest "$MATH_BUILD_MANIFEST" \
   --workspace "$MATH_RUN_ROOT/workspace" \
   --task-file "$MATH_RUN_ROOT/task.md" \
-  --workers 4 \
+  --agent-team 4 \
   --output "$MATH_RUN_ROOT/result.json"
 ```
 
-默认启用四个 Agent。CLI 默认不限制解题时间、模型调度次数和 token 用量。需要限制时，可设置 `--max-run-seconds`、`--max-turns` 或 `--max-total-tokens`。Web worker 会传入该次运行的预算。运行向标准输出发送 JSON 进度事件，并将结果写入 `result.json`。
+新建 Codex 运行默认使用原生团队，最多四人（含 Lead）。设置 `--plan-approval` 可在开工前审批 Lead 提交的路线。CLI 默认不限制解题时间、模型调度次数和 token 用量。需要限制时，可设置 `--max-run-seconds`、`--max-turns` 或 `--max-total-tokens`。Web worker 会传入该次运行的预算。运行向标准输出发送 JSON 进度事件，并将结果写入 `result.json`。
 
 首次配置环境时，可在上述命令末尾加 `--startup-only`，只检查准备条件，不调用模型。预检会创建运行状态；之后使用相同参数加 `--resume` 开始求解。
 
@@ -112,14 +112,15 @@ bun run math run \
   --build-manifest "$MATH_BUILD_MANIFEST" \
   --workspace "$MATH_RUN_ROOT/workspace" \
   --task-file "$MATH_RUN_ROOT/task.md" \
-  --workers 4 \
   --output "$MATH_RUN_ROOT/result.json" \
   --resume
 ```
 
 恢复时使用原有题目、构建、环境、模型和 Agent 数量。宿主校验运行身份，并重新验证已有证明；会话、失败记录和累计用量保留在运行档案中。
 
-新建续跑可用 `--continuation-manifest FILE` 明确附加历史证明、笔记或诊断。任务文件继续逐字作为必需题面，宿主不会按 Markdown 标题拆分或删除文字。附件清单例如：
+新版的 `--resume` 适用于单人运行和 Codex 原生团队。旧固定任务图、`host-tools` 团队和宿主只读调查可用 `inspect` 查看。若要续跑同一旧任务，请从它原来固定的 TheoremOS 版本，用相同的构建清单、工作区、任务文件和结果路径运行上面的命令。Web 旧任务的续跑也需要对应旧版本的服务和 Worker。
+
+要在新版以旧资料开始一次独立研究，可用 `--continuation-manifest FILE` 显式附加历史证明、笔记或诊断。任务文件继续逐字作为必需题面，宿主不会按 Markdown 标题拆分或删除文字。
 
 ```json
 {
@@ -151,17 +152,15 @@ bun run math run \
 bun run math run \
   --workspace "$MATH_RUN_ROOT/workspace" \
   --task-file "$MATH_RUN_ROOT/task.md" \
-  --workers 4 \
+  --agent-team 4 \
   --output /runs/continued/result.json \
   --build-manifest "$MATH_BUILD_MANIFEST" \
   --continuation-source-run /runs/previous/result.json
 ```
 
-宿主持有同一个目标运行锁和 proof environment，核对题目、任务摘要、原始源码约束和新构建身份，冻结旧 canonical 源码、任务图及工人草稿，再生成新的 Lean 收据并开始求解。同进程继续使用刚验证的无条件辅助证明收据，避免初始化后立即重复检查；条件性证明保留原来的待证义务。旧线程和工人的 assignment 不复用。附件同步到每个工人的项目，原运行与原构建保持原样。`--prepare-timeout-seconds` 仍约束准备与初始化阶段，解题阶段独立使用原有预算参数。
+宿主持有新运行的锁，核对题目、任务摘要、原始源码约束和构建身份。旧运行的规范源码按 commit 固定，旧任务和草稿独立保存为研究资料。宿主为可用的辅助声明生成新的 Lean 收据，再开始新研究。附带的条件性证明和笔记供研究参考。`--prepare-timeout-seconds` 约束准备与初始化阶段。
 
-普通 research/sketch 的交付记录保存本次实际上下文的输入身份，包括任务、传递依赖的 finding 与证明状态、环境、检索/知识库和可见源码。续跑只比较并沿用这份原记录；输入变化会重开调查并保留旧 finding 的历史，重新调查即使结论文字相同也保留新的交付身份。新 Lean 收据编号不构成输入变化，独立重检失败的依赖则会使研究重开。无法从存档确认原分工的源码可见范围时，也会保守地重新调查。该状态只结束研究，不授予任何证明验收。旧快照缺少真实交付输入身份时按待办恢复，原始 finding 仍保存在历史附件中。
-
-该入口只支持至少两个工人的协作运行，不能与 `--continuation-manifest` 同用。新团队无法承担的任务负责人（`ownerId`）会被释放，任务版本不变，由当前成员重新领取。加 `--startup-only` 会冻结续跑材料并保存零轮 checkpoint。待核验的辅助证明在移除 `--startup-only` 并加 `--resume` 后检查一次，随后直接在同一进程中开始求解。开始求解前，初始化、快照读取、工人附件分发或启动结果发布失败都保留可恢复的 `prepared` 状态，在原参数上加 `--resume` 可继续使用首次冻结的材料。开始过求解后，恢复时省略 `--continuation-source-run`，按普通 `--resume` 流程重新验证存档证明。
+该入口支持原生团队和单人 Skill 运行，与 `--continuation-manifest` 二选一。加 `--startup-only` 会冻结材料并保存零轮 checkpoint。移除 `--startup-only` 并加 `--resume` 后，宿主核验辅助证明并开始求解。准备过程若中断，可用 `--resume` 继续使用首次冻结的材料。开始求解后，按普通 `--resume` 流程恢复。
 
 也可以保留分步流程：先用新构建执行 `run --startup-only`，再运行独立初始化命令：
 
@@ -173,7 +172,7 @@ bun run math continuation-seed \
   --timeout-seconds 0
 ```
 
-独立命令只接受零轮、未开始求解的新预备运行。它创建并释放本次 proof environment，不复用已经结束的准备进程的临时 lease。完整源码投影及前提相同的 helper 每批最多合并 32 项检查，各批顺序执行，每个目标仍生成独立收据并保存进度。新的无条件收据通过后才标记 `integrated`，失败项保持未验收，可在报告中查看。
+独立命令只接受零轮、尚未开始求解的预备运行。它在临时环境中核对固定源码，为通过检查的辅助声明保存新的 Lean 收据，并在报告中列出失败项。
 
 初始化成功后，以新预备运行的原参数加 `--resume` 开始求解。中断的初始化可以用相同命令重试，重试复用首次冻结的快照；源运行后来产生的成果不会自动加入该快照。正式切换前应让源运行保存退出，再捕获最终快照。更换构建后直接 `--resume` 旧 checkpoint 仍会被身份校验拒绝。
 
@@ -203,34 +202,7 @@ bun run math inspect --run "$MATH_RUN_ROOT/result.json" \
 
 报告还会分别记录数学义务闭合、原题前沿变化、替代路线与局部障碍重开。局部阻塞、必需上下文与省略清单、`proofRoutes` 的 AND／OR 规则见[协作路线、上下文与数学进展](cooperative-proof-routes.md)。
 
-Lead 创建计划后，可以导出并修改引理类型、任务依赖、路线或暂停状态，然后提交修改：
-
-```bash
-bun run math edit --run "$MATH_RUN_ROOT/result.json" \
-  --plan "$MATH_RUN_ROOT/plan.json" --dry-run
-bun run math edit --run "$MATH_RUN_ROOT/result.json" \
-  --plan "$MATH_RUN_ROOT/plan.json"
-```
-
-保留导出计划的 `baseVersion` 和全部原题目标。`edit` 校验计划并追加到修改队列；运行中或恢复后的求解器继续检查版本、应用修改和重检受影响证明。`queued`、`applied` 与证明重检结果分别展示；过期计划需要重新导出。导出文件默认拒绝覆盖已有文件。
-
-已有外部 Lean 证明片段时，可交给宿主导入待处理的引理任务。先导出当前计划，读取其中的 `baseVersion`，再计算片段的 SHA-256：
-
-```bash
-FRAGMENT="/absolute/path/to/fragment.lean"
-FRAGMENT_SHA256="$(sha256sum "$FRAGMENT" | cut -d ' ' -f 1)"
-PLAN_BASE_VERSION="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).baseVersion' "$MATH_RUN_ROOT/plan.json")"
-bun run math import-proof --run "$MATH_RUN_ROOT/result.json" \
-  --task TASK_ID --fragment "$FRAGMENT" --sha256 "$FRAGMENT_SHA256" \
-  --base-version "$PLAN_BASE_VERSION" --dry-run
-bun run math import-proof --run "$MATH_RUN_ROOT/result.json" \
-  --task TASK_ID --fragment "$FRAGMENT" --sha256 "$FRAGMENT_SHA256" \
-  --base-version "$PLAN_BASE_VERSION"
-```
-
-仅支持计划中启用、状态为 `pending` 且有 `proofPath` / `theoremName` 的 `lemma` 任务；运行中的任务不能被导入抢占。片段只能包含具名 `theorem` / `lemma` 声明，不能含 `sorry`、`admit`、公理、导入、作用域命令、选项或定义；声明在任务已有源码上下文内追加，保留原声明。`--dry-run` 只校验；可选 `--id ID` 指定请求身份，完全相同的重试返回 `already_queued`，同一任务不能同时排队多个未结束请求。过期计划或哈希不符会被拒绝。
-
-命令捕获片段内容及运行、任务、计划、源码与环境身份，追加到运行目录的 `proof-imports.jsonl`，不直接修改 checkpoint。运行中或恢复后的求解器在正常任务派发后、打开模型前读取该队列；排队本身不唤醒等待者，也不绕过任务依赖、负责人、路线或预算门控，因此不保证立即处理。宿主冻结导入提交，再沿现有 proof-ready 流程独立检查 Lean 和规范源码合并；后续修改外部片段或工作文件不会替换已冻结内容，导入本身不计模型轮次或证明尝试。CLI 的 `queued` 仅表示已排队；消费后的 `proofImports`、proof-ready 检查和任务集成结果可用 `inspect --format json` 分别查看，排队或冻结都不等于证明已接纳。
+启用原生团队路线审批时，用 `inspect --format plan` 读取待审路线和版本，再用 `edit --run RESULT --approve-plan VERSION` 提交批准。旧宿主计划与证明导入记录仍可通过 `inspect --format json` 查看。复现旧任务图编辑（`plan-apply`）、证明导入（`import-proof`）和固定探路实验（`--portfolio-exploration`）时，使用对应历史版本。要把旧研究带入新运行，可以通过 `--continuation-source-run` 附入保存的源码和笔记，由新运行重新检查可用的 Lean 声明。
 
 ### 6. 同时求解多道题
 
@@ -238,7 +210,7 @@ bun run math import-proof --run "$MATH_RUN_ROOT/result.json" \
 
 ```json
 {
-  "args": ["bun", "/absolute/path/to/theorem-os/out/main/math-solver.js", "--workspace", "/runs/q1/workspace", "--task-file", "/runs/q1/task.md", "--output", "/runs/q1/result.json", "--build-manifest", "/absolute/path/to/manifest.json", "--workers", "4"]
+  "args": ["bun", "/absolute/path/to/theorem-os/out/main/math-solver.js", "--workspace", "/runs/q1/workspace", "--task-file", "/runs/q1/task.md", "--output", "/runs/q1/result.json", "--build-manifest", "/absolute/path/to/manifest.json", "--agent-team", "4"]
 }
 ```
 
@@ -255,9 +227,15 @@ bun run math batch \
 
 默认不限制空闲时间（`--idle-timeout-seconds 0`）。显式设置后，某题日志连续 N 秒没有增长时会被终止并记为 `stalled`：它不占用并发槽，也不会让批次退出码变为失败，便于无人值守批跑在有限尝试后继续后面的题。模型单轮可能长时间没有输出，阈值应大于最慢的单轮耗时。
 
-启动文件可选 `cwd` 和 `envFile`，路径相对启动文件所在目录解析；默认工作目录为启动文件所在目录，环境继承调用者。需要恢复时在对应题目的参数中添加 `--resume`，并为新批次指定新的 `--output`。Ctrl+C 会通知运行中的求解器保存退出，并停止启动排队题目；30 秒后仍未退出的进程会被强制停止。并发题数与每题 `--workers` 一起决定资源占用。
+启动文件可选 `cwd` 和 `envFile`，路径相对启动文件所在目录解析；默认工作目录为启动文件所在目录，环境继承调用者。需要恢复时在对应题目的参数中添加 `--resume`，并为新批次指定新的 `--output`。Ctrl+C 会通知运行中的求解器保存退出，并停止启动排队题目；30 秒后仍未退出的进程会被强制停止。并发题数与每题 `--agent-team` 一起决定资源占用。
 
 ## 协作方式
+
+新建协作由 Codex Lead 通过原生工具派工、通信和恢复任务。TheoremOS 提供隔离工作区、证明交付检查、成果采纳、共享预算和独立 Lean 验收。Lead 按题目选择角色和分工，团队人数参数设置名额上限。
+
+### 历史宿主调度器
+
+以下固定角色和任务图用于解读已保存的旧运行。续跑、修改任务计划和复现对照实验均使用对应的固定历史版本。
 
 ```mermaid
 flowchart LR
@@ -347,11 +325,11 @@ Lead 的普通规划和初始规划执行 90 秒后收到保存提醒，120 秒�
 | --- | --- | --- |
 | `--model` | `deepseek-flash` | 所选 provider 提供的模型 ID |
 | `--effort` | `high` | 推理强度（Sub2API DeepSeek 支持 low/high/max） |
-| `--workers` | `4` | Agent 总数，支持 1–8；四人以上增加专门的辅助引理 Prover |
+| `--agent-team` | `4`（Codex） | 原生团队人数上限，含 Lead，支持 2–8 人 |
+| `--workers 1` | 无 | 显式启动单人研究。其他后端默认单人 |
+| `--plan-approval` | 关闭 | 审批 Lead 的首轮路线后开始证明 |
 | `--method` | `direct` | 仅支持 `direct`，保留以兼容已有命令 |
-| `--coordination` | `cooperative` | 协作，或 `independent` 独立并行尝试 |
 | `--continuation-manifest` | 无 | 新建时绑定显式历史附件；恢复时沿用同一只读快照 |
-| `--scheduler` | `plan` | 按计划顺序调度；`critical-path` 按依赖链排序；`continuation` 优先承接已证成果的主路径任务 |
 | `--prepare-timeout-seconds` | `0` | 环境准备与依赖预编译预算 |
 | `--max-run-seconds` | `0` | 准备完成后的共享解题时间预算 |
 | `--max-turns` | `0` | 所有 Agent 合计模型调度次数 |
@@ -359,6 +337,8 @@ Lead 的普通规划和初始规划执行 90 秒后收到保存提醒，120 秒�
 | `--max-turn-seconds` | `0` | 单轮时间限制；停止写入后检查已保存源码 |
 | `--proof-timeout-seconds` | `0` | 单次宿主证明检查预算；超时保存可恢复检查点 |
 | `--evaluator-timeout-seconds` | `0` | 集成后 Lean 复核与最终评测共享的独立时间预算 |
+
+CLI 先用 `inspect --run RESULT --format plan` 查看待审路线和版本，再用 `edit --run RESULT --approve-plan VERSION` 提交批准。等待批准时暂停解题计时。旧调度器的对照实验使用生成原计划时固定的版本。新版可以读取已有实验报告。
 
 `--prepare-timeout-seconds`、`--max-run-seconds`、`--max-turns`、`--max-turn-seconds`、`--proof-timeout-seconds` 与 `--evaluator-timeout-seconds` 在 CLI 中均默认为 `0`，表示不限。可以分别设置解题、证明检查和最终评测的时限。显式设置证明检查时限后，同一源码、任务和环境的检查超时会保留候选，恢复时逐次延长检查时间，最多 24 小时。
 
@@ -402,13 +382,10 @@ bun run math bootstrap-lean-eval --help
 | `informalize` | 已编译的 Lean 证明 → 逐步对应 Lean 声明的自然语言证明，宿主校验引用与原文摘录，独立审核查漏步与编造；见 [证明讲解](informalization.md) |
 | `library-pack` | 从保存运行抽取已检查的 owned 模块，或从本地上游仓库原样回移文件，生成库包（[规则](solver-modules.md)） |
 | `run` | 启动、预检或恢复运行 |
-| `inspect` | 查看存档研究报告，导出 JSON 或带版本的可编辑计划 |
-| `edit` | 校验并提交人工计划修改，支持 `--dry-run` |
-| `import-proof` | 将纯 Lean 声明排队给待处理引理，由宿主冻结、检查并合并，支持 `--dry-run` |
-| `compare` | 准备、运行并汇总固定预算的单 Agent / 独立并行 / 协作对照 |
+| `inspect` | 查看存档研究报告，导出 JSON 或带版本的路线 |
+| `edit` | 批准原生团队发布的首轮路线版本 |
+| `compare` | 读取和检查已保存的对照实验报告 |
 | `check-lean` | 获取局部诊断、预检闭合类型或具体应用表达式 |
-| `proof-search` | 在当前分配的 helper 上执行有界 Lean tactic 分支，保存并恢复完整证明状态 |
-| `research-observe` | 即时交付研究观察和完整 Lean 探针，可同时保留当前 owned 源码 |
 | `continuation` | 按摘要及附件 ID 分页读取冻结的续跑材料 |
 | `search-lean` | 检索已验证的本地 Lean 包声明 |
 | `knowledge` | [导入、搜索和读取历史已检查定理](theorem-knowledge.md)；显式 enrich 补采类型与引用，consumers 回读历史应用链 |
@@ -426,21 +403,7 @@ bun run math check-lean \
 
 `check-lean` 默认超时为 `0`（等待完成），保留失败退出码和最早错误；其诊断仅用于局部修复。
 
-`proof-search` 从当前 worker 的 `COOPERATION.json` 读取任务、目标和环境身份，仅支持已分配的闭合 helper lemma。请求文件指定分支和本次预算，例如：
-
-```json
-{"branches":[{"tactics":["intro n","rfl"]}],"limits":{"timeoutMs":30000,"maxTransitions":8}}
-```
-
-```bash
-bun run math proof-search --worktree /PATH/worker --request-file /PATH/request.json
-```
-
-返回的 `checkpoint: {path,digest}` 可放入下次请求的 `resume`；分支的 `from` 可指向已保存节点。恢复所需的 tactic 重放计入预算。宿主保留断点与源码，任务或环境改变时拒绝套用旧状态。候选仅为建议，仍须写入任务文件并经过 ready、停写冻结、Lean 检查和原目标 S3 验收。
-
-搜索后端使用固定 Pantograph 源码构建，清单由 `DEEPSCIENTIST_MATH_PANTOGRAPH_MANIFEST` 显式指定。当前接受分别为 Lean 4.33.0 或 4.33.1 编译的产物，项目工具链必须与后端精确一致；需要宿主提供的 sealed 依赖环境和隔离 worker。Web 镜像为 Mathlib 环境装配 4.33.0 后端，标准 Lean 环境暂不启用。未配置或不兼容时命令返回 `unavailable`，不自动下载或升级。导入 Aesop 的项目可使用 `aesop (config := { terminal := false })` 保留未闭合状态。
-
-研究者可用 `research-observe --worktree /PATH/worker --finding /PATH/finding.json --probe /PATH/probe.lean` 即时交付观察，`--probe` 可重复，`--snapshot-sources` 保留当前 owned 源码。结构化 `nextCheck` 由宿主绑定当前任务和环境后派发；检查结果仍需 Lead 作出继续、修改或停止的决定。
+旧任务图的 `proof-search` 与 `research-observe` 依赖固定的 worker assignment。复现实验时使用对应历史运行时。原生团队可在独立工作树运行 Lean 探针，通过 Codex 消息分享诊断，并保存可复查的源码与研究笔记。
 
 数学 worker 的临时目录为工作树根的 `.scratch/tmp`，由 shell 的 `TMPDIR` 指向；`/tmp` 在沙箱内只读。创建探针前运行 `mkdir -p "$TMPDIR"`，并把临时 Lean 文件、备份和诊断输出保存在该目录。宿主检查前会清理 `.scratch`，可复用代码和结论需先保存在根目录 `RESEARCH.md` 或已有的 owned Lean 文件中。
 
@@ -461,32 +424,30 @@ bun run math check-lean \
 
 对照报告可用 `compare --phase check-report --directory DIR` 只读核对快照；续跑后旧报告标为过期，重新生成会保留 `report.json.history/`。预算等身份改变的续跑即使通过，也不会计入原固定预算对照。
 
-`compare` 和 `sample-putnam` 的 `--phase prepare` 支持 `--knowledge-base FILE`，冻结目录及源码对象，并向每次运行透传同一快照。`--knowledge-mode transfer` 为默认，拒绝可识别的目标题目来源、目标条目和源码声明及同题路线记忆；同题历史恢复显式使用 `--knowledge-mode recovery`。后续 run/report 沿用计划，目录或身份变化不能静默续跑。报告中的 `knowledgeFunnel` 区分检索命中、进入上下文、模型选择、应用检查与原题闭合；旧记录缺失保持未知，观测本身不证明解题收益。完整用法见[定理知识库](theorem-knowledge.md)。
+在实验固定的历史版本中，`compare` 和 `sample-putnam` 的 `--phase prepare` 支持 `--knowledge-base FILE`，冻结目录及源码对象，并向每次运行透传同一快照。`--knowledge-mode transfer` 为默认，拒绝可识别的目标题目来源、目标条目和源码声明及同题路线记忆；同题历史恢复显式使用 `--knowledge-mode recovery`。后续 run/report 沿用计划，目录或身份变化不能静默续跑。报告中的 `knowledgeFunnel` 区分检索命中、进入上下文、模型选择、应用检查与原题闭合；旧记录缺失保持未知，观测本身不证明解题收益。完整用法见[定理知识库](theorem-knowledge.md)。
 
 ## 架构与开发
 
-研究组件的职责见[组件模型](../README.md#组件模型)，输入、产物及验收边界见[解题模块与交接协议](solver-modules.md)，扩展示例见[替换一个组件](../examples/components/README.md)。入口在 [run.ts](../src/solver/run.ts)，Agent 执行循环在 [research.ts](../src/solver/research.ts)，异步协作与集成在 [cooperation.ts](../src/solver/cooperation.ts)。
+运行入口在 [run.ts](../src/solver/run.ts)，会话执行和恢复在 [research.ts](../src/solver/research.ts)，原生团队的隔离与交付在 [agentTeam.ts](../src/solver/agentTeam.ts)。旧任务图实验的契约与验收边界见[解题模块与交接协议](solver-modules.md)。
 
 | 模块 | 职责 | 实现 |
 | --- | --- | --- |
 | M1 执行 | 在指定隔离工作区执行模型轮次，记录候选与来源 | [execution.ts](../src/solver/modules/execution.ts) |
 | M2 证据 | 固定版本、精确声明的 Lean 证据与局部义务检查 | [evidence.ts](../src/solver/modules/evidence.ts)、[cooperativeProof.ts](../src/solver/cooperativeProof.ts) |
-| M3 搜索调度 | 检查依赖与分配可行性、路线预算、继续 / 停止及重试 | [search.ts](../src/solver/modules/search.ts)、[value.ts](../src/solver/modules/value.ts) |
+| M3 搜索调度 | 原生团队由 Lead 选择路线。旧任务图使用依赖与任务排序策略 | [search.ts](../src/solver/modules/search.ts)、[value.ts](../src/solver/modules/value.ts) |
 | M4 上下文 | 完整必需接口、工作契约、未决提案、反馈与省略清单 | [context.ts](../src/solver/modules/context.ts)、[contextCompiler.ts](../src/solver/contextCompiler.ts) |
-| M5 职责分配 | 在存活工作槽中匹配职责、显式负责人和路线约束 | [organization.ts](../src/solver/modules/organization.ts) |
+| M5 职责分配 | 原生团队由 Lead 分派职责。旧任务图匹配工作槽、负责人和路线约束 | [organization.ts](../src/solver/modules/organization.ts) |
 | S1 任务与成果档案 | 保存与恢复候选、回执、失败和运行状态 | [archive.ts](../src/solver/archive.ts) |
 | S3 环境与评测合同 | 冻结题目，集成后重检并独立评测 | [problem.ts](../src/solver/problem.ts)、[evaluation.ts](../src/solver/evaluation.ts)、[src/math/](../src/math/) |
 
-[index.ts](../src/solver/modules/index.ts) 绑定默认模块与版本；`runSolver(args, root, modules)` 支持替换模块，模块版本参与恢复身份。宿主固定执行源码边界检查、总预算限制和最终验收。当前 M3 采用规则与依赖调度，S2 跨任务学习尚未实现。
+[index.ts](../src/solver/modules/index.ts) 记录模块契约和版本。宿主继续执行源码边界检查、总预算限制和独立验收。S2 跨任务学习尚未实现。
 
-命令行可用 `--scheduler critical-path` 同时替换 M3 排序和 M5 分配，按通往未完成原题目标的最长依赖链排序，同长度时优先覆盖更多目标的任务，由 Researcher 和 Engineer 共同领取。显式负责人、路线限制和恢复归属仍然生效；链长只作启发式排序，不预测证明耗时。模块版本写入状态，恢复时校验。这些策略尚无性能提升结论。[三组对照实验](../examples/imo2026/COMPARISON.md) 提供固定题目、模型和总预算的准备、运行与汇总步骤，保留失败、缺失记录和用量缺口。
-
-`--scheduler continuation` 优先推进通往未完成原题、能够使用当前已证引理的就绪任务，再推进主路径的核心缺口；两项主路径工作并行时，为其他就绪路线保留一个探索机会。负责人、依赖、路线和固定版本检查继续生效。Lead、证明角色与 `inspect` 报告会看到原题的未闭合依赖前沿，并分别列出计划消费者、Lean 回执中的证明引用、声明引用和条件性引用。未记录消费者不代表引理无用；这些摘要不提供完成百分比或新的证明验收。重复两次交付未更新的继承研究笔记会交给 Lead 决策，正常长研究与 checkpoint 不按此计数。
+历史 `--scheduler critical-path` 和 `--scheduler continuation` 用于比较两种固定任务选择策略。各实验记录保留模型、预算、模块版本和用量缺口。复现步骤见[三组对照实验](../examples/imo2026/COMPARISON.md)。
 
 Codex stdio 协议适配在 [codexSession.ts](../src/runtime/codexSession.ts)。
 
 <details>
-<summary>Agent 交付协议与提前共享</summary>
+<summary>旧任务图档案中的 Agent 交付协议与提前共享</summary>
 
 agent 的常用协议只有两步：读取任务，写出成果。需要结构化回复时，在 `RESEARCH.md` 中保留一个 `math` JSON 代码块；普通说明可写在代码块外。
 

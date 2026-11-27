@@ -109,17 +109,6 @@ describe('proof-writing context', () => {
   } as unknown as SolverRunState, { root: '/runtime', worktree: '/proof', environment: {}, taskText: 'Prove the target',
     retrievalRoot: '/library', frozenContexts: { 'Submission.lean': 'theorem target : True := /- body omitted -/' }, assignment: action });
 
-  it('tells a typed helper writer to save a proof and keeps its exact interface mandatory', () => {
-    const action: CooperativeAction = { kind: 'task', task: helper.task,
-      assignment: { taskId: helper.task.id, taskDigest: taskVersion(helper.task), workerId: 'prover-1', seedCommit: 'seed' } };
-    const context = build(action);
-    expect(context.instructions).toContain('You are a Lean Prover.');
-    expect(context.instructions).toContain('The host freezes the saved sources and independently checks and integrates them');
-    expect(context.instructions).not.toContain('You are a Mathematical Researcher.');
-    expect(context.message).toContain('Your role: prover');
-    expect(context.message).toContain(JSON.stringify(helper.task.type));
-  });
-
   it('gives Lead the actual proof roster and the expanded route capacity', () => {
     const context = build({ kind: 'lead', seedCommit: 'seed' });
     expect(context.instructions).toContain('"id":"prover-4","role":"prover"');

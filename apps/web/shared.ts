@@ -1,5 +1,5 @@
 import type { ResearchModulePlan, ResearchModuleSlot } from '../../src/solver/modules/policy';
-import type { WebObservation, WebArchive, WebLibraryRestart } from './collaboration';
+import type { WebObservation, WebArchive, WebLibraryRestart, WebPlanApproval } from './collaboration';
 import type { WebFormalizationBackgroundReview } from './formalizationTypes';
 import type { ResearchLibraryProposalOrigin } from './researchLibraryProposalOrigin';
 import { webTaskEnvironment } from './environment';
@@ -7,6 +7,9 @@ import { webTaskEnvironment } from './environment';
 export type WebEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type WebCoordination = 'cooperative' | 'independent';
 export type WebResearchMode = 'legacy' | 'skill';
+export const retiredResearchCoordinationCode = 'math_legacy_collaboration_retired';
+export const retiredResearchCoordinationMessage = '旧协作任务请使用对应的历史版本继续。新建多人研究使用 Codex 原生团队。';
+export const retiredPortfolioMessage = '旧版独立路线探索已停用；新研究可由 Codex 原生团队探索路线。';
 export type WebSkillLoading = 'native' | 'file';
 export type WebTeamProfile = { id: string; name: string; kind: 'work' | 'domain'; nameZh?: string; alias?: string };
 export type WebRunStatus = 'queued' | 'running' | 'completed' | 'cancelled' | 'error';
@@ -83,7 +86,7 @@ export type WebRunInput = {
   /** Optional bounded scouting stage before ordinary proof dispatch. */
   portfolioExploration?: boolean;
   portfolioSeconds?: number;
-  /** AgentResearchTeam capacity includes Lead. The host starts one Lead with native tools and can fall back to host tools. */
+  /** AgentResearchTeam capacity includes Lead. New teams use native Codex tools. */
   nativeTeamCapacity?: number;
   /** Advisory Skill profile IDs requested before starting; actual assignments belong to Lead. */
   nativeTeamPreferredProfiles?: string[];
@@ -192,6 +195,8 @@ export type WebRun = {
     confirmation?: 'automatic' | 'manual' | 'pending' | 'rejected' | 'interrupted' | 'superseded'; reviewMode?: 'direct' };
   /** Host-declared solver attempt; observation sequences continue across library restarts. */
   solverAttempt?: { solverRunId: string; round: number; sequence: number };
+  /** Approval recorded by the first solver, retained when the Web run installs a library and continues. */
+  initialPlanApproval?: { solverRunId: string; receipt: WebPlanApproval };
   observation?: WebObservation;
   archives?: WebArchive[];
   knowledgeCatalogDigest?: string;

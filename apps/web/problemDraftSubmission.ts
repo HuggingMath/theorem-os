@@ -28,7 +28,8 @@ export function matchesProblemRun(value: ProblemDraftValue, run: WebRun): boolea
     || !equal(run.nativeTeamPreferredProfiles ?? [], [...new Set(draft.nativeTeamPreferredProfiles ?? [])].sort())
     || run.maxTurns !== Number(draft.maxTurns) || run.maxRunSeconds !== Number(draft.maxRunSeconds) || run.workers !== Number(draft.workers)
     || (run.maxTotalTokens ?? 0) !== Math.round(Number(draft.maxTotalTokens ?? '') * 10_000)
-    || Boolean(run.planApproval) !== Boolean(draft.planApproval && draft.coordination === 'cooperative' && Number(draft.workers) >= 2)
+    || Boolean(run.planApproval) !== Boolean(draft.planApproval &&
+      (draft.nativeTeamCapacity || draft.coordination === 'cooperative' && Number(draft.workers) >= 2))
     || draft.knowledgeDigest !== undefined && (run.knowledgeDigest ?? null) !== draft.knowledgeDigest) return false;
   const refs = [...(config?.agent ? [config.agent.ref] : []), ...(config?.skills.map(item => item.ref) ?? []), ...(config?.libraries.map(item => item.ref) ?? [])];
   const sameRef = (a: ResearchReleaseRef, b: ResearchReleaseRef) => a.assetId === b.assetId && a.version === b.version && (!a.digest || a.digest === b.digest);

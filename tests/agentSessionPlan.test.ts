@@ -19,8 +19,6 @@ describe('workflow session requirements and selected execution contracts', () =>
   });
 
   it.each(['claude-code', 'opencode', 'cli'] as const)('retains %s native capability restrictions', harness => {
-    expect(() => planMathAgentSession(harness, { delegation: { mode: 'read-only', maxAgents: 2 } }))
-      .toThrow('delegation_unsupported');
     expect(() => planMathAgentSession(harness, { skills: [skill('native')] }))
       .toThrow(harness === 'claude-code' ? 'native_skill_loading_unsupported' : 'requires_file_skill');
   });
@@ -30,12 +28,6 @@ describe('workflow session requirements and selected execution contracts', () =>
       .toMatchObject({ skillLoading: 'none', roleIsolation: 'sealed-role', structuredOutput: 'native-schema' });
     expect(() => planMathAgentSession('codex', { readIsolation: { environment: 'standard' }, skills: [skill('file')] }))
       .toThrow('math_codex_skill_read_isolation_unsupported');
-    expect(planMathAgentSession('codex', { delegation: { mode: 'read-only', maxAgents: 2 } }))
-      .toMatchObject({ roleIsolation: 'run-workspace' });
-    expect(() => planMathAgentSession('codex', { delegation: { mode: 'read-only', maxAgents: 0 } }))
-      .toThrow('math_native_delegation_configuration_invalid');
-    expect(() => planMathAgentSession('codex', { readIsolation: { environment: 'standard' },
-      delegation: { mode: 'read-only', maxAgents: 2 } })).toThrow('math_native_delegation_read_isolation_unsupported');
     expect(planMathAgentSession('codex', { skills: [skill('native'), skill('file')] }).skillLoading).toBe('mixed');
   });
 

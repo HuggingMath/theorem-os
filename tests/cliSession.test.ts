@@ -319,7 +319,6 @@ describe('configured headless CLI sessions with isolated local children', () => 
 
   it('rejects unsupported responsibility contracts and effort before launching a process', async () => {
     await expect(open({ ...options, readIsolation: { environment: 'standard' } })).rejects.toThrow('math_cli_sealed_role_configuration_required');
-    await expect(open({ ...options, delegation: { mode: 'read-only', maxAgents: 2 } })).rejects.toThrow('math_cli_delegation_unsupported');
     await expect(open({ ...options, outputSchema: {} })).rejects.toThrow('math_cli_output_schema_unsupported');
     await expect(open({ ...options, skills: [{ name: 'fixture', path: '/never/SKILL.md', digest: 'a'.repeat(64), loading: 'native' }] }))
       .rejects.toThrow('math_cli_requires_file_skill');

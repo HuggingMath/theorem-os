@@ -109,7 +109,6 @@ describe('Skill methods with complete host workflows', () => {
     expect(context.workContract?.input).toMatchObject({ taskId: 'helper', taskDigest: assignment.taskDigest });
     const help = fs.readFileSync(path.join(f.workspace, '.scratch/theoremos-help.md'), 'utf8');
     expect(help).not.toContain('Lead plan submission');
-    expect(help).toContain("bun '" + tools.replaceAll("'", "'\\''") + "' research-observe");
     const continued = finalizeResearchDispatch(context, { continuation: true });
     expect(continued.message).toContain('CURRENT_EXACT_TYPE_ERROR');
     expect(continued.message).toContain(assignmentDeliveryFile(assignment));

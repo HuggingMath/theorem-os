@@ -20,23 +20,25 @@ const original = '保留这份原题：对任意自然数 n，证明 n + 0 = n�
 const texts = {
   zh: {
     runtime: '当前服务暂不支持自然语言解题，可切换到 Lean 输入。',
+    'old-worker': '当前运行镜像未安装原生团队后端。',
     provider: '当前服务未配置自然语言解题的模型，请联系管理员；也可切换到 Lean 输入。',
     offline: '运行环境暂未就绪，原题会保留；恢复后可继续发送。',
   },
   en: {
     runtime: 'This service does not currently support solving natural-language problems. You can switch to Lean input.',
+    'old-worker': 'The worker image does not include the native team backend.',
     provider: 'No model service is configured for natural-language problems. Contact the administrator, or switch to Lean input.',
     offline: 'The runtime is not ready. Your problem is kept; you can send it when the runtime recovers.',
   },
 };
 let phase = 'setup', failure: unknown, runnerCalls = 0;
 try {
-  for (const kind of ['runtime', 'provider', 'offline'] as const) {
+  for (const kind of ['runtime', 'old-worker', 'provider', 'offline'] as const) {
     const data = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-round9-availability-'));
     const port = await freePort(), origin = `http://127.0.0.1:${port}`;
     let runtimeReady = kind !== 'offline';
     const runner: WebRunner = {
-      async readiness() { return { ready: runtimeReady, message: runtimeReady ? 'Ready' : 'Fixture runtime unavailable' }; },
+      async readiness() { return { ready: runtimeReady, nativeTeam: runtimeReady && kind !== 'old-worker', message: runtimeReady ? 'Ready' : 'Fixture runtime unavailable' }; },
       async run() { runnerCalls++; throw new Error('Availability checks must not start a run'); },
       ...(kind === 'runtime' ? {} : { async formalize() { runnerCalls++; throw new Error('Availability checks must not formalize'); } }),
     };
@@ -68,7 +70,9 @@ try {
         try {
           const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/formalizations');
           await page.goto(origin); const capabilities = (await (await response).json()).generation;
-          assert.equal(capabilities.available, false); assert.equal(capabilities.reason, kind === 'provider' ? 'provider' : 'runtime');
+          assert.equal(capabilities.available, kind === 'old-worker');
+          assert.equal(capabilities.solveAvailable, false);
+          assert.equal(capabilities.reason, kind === 'old-worker' ? undefined : kind === 'provider' ? 'provider' : 'runtime');
           await page.locator('#formalize-original').fill(original);
           await clickWorkbenchAction(page, '#open-settings');
           if (kind !== 'provider') await page.locator('#formalize-key').fill('sk-disposable-availability');
@@ -86,7 +90,7 @@ try {
             await page.locator('#open-natural-language').click();
             await page.locator('#formalize-original').waitFor();
             assert.equal(await page.locator('#formalize-original').inputValue(), original, 'The original survives checking the Lean alternative');
-          } else {
+          } else if (kind === 'offline') {
             runtimeReady = true;
             // A visibility refresh respects the workbench's list refresh interval.
             await page.clock.fastForward(6_001);
@@ -98,9 +102,11 @@ try {
             assert.equal(await page.locator('#formalize-original').inputValue(), original);
             runtimeReady = false;
           }
+          assert.equal(await page.locator('#formalize-original').inputValue(), original);
           assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
           checks.push({ name: phase, status: 'passed', capabilityReason: capabilities.reason, actionableBlocker: true,
-            draftPreserved: true, ...(kind === 'offline' ? { recoveredWithoutReload: true } : { leanFallbackAvailable: true }) });
+            draftPreserved: true, ...(kind === 'offline' ? { recoveredWithoutReload: true }
+              : kind !== 'old-worker' ? { leanFallbackAvailable: true } : {}) });
           console.log(`PASS ${phase}`);
         } finally { await context.close(); }
       }

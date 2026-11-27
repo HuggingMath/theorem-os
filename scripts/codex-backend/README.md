@@ -51,16 +51,11 @@ All Cargo targets, logs and binaries stay under `--output`. On success,
 not restarted. Source edits beyond the checked-in patches are preserved and
 rejected, so freeze the adapter patch before running a final build.
 
-New native team runs pin the executable's real path and digest and record
-`agentTeam.transport: native-agent-control`. On certain compatibility or transport
-errors during initial app-server startup, the solver can retry with
-`theoremos_team` host tools. The failed writer must have stopped, and the Lead
-must have no open session, saved thread, started turn or model request, or team
-member. The solver emits `team_transport_fallback` and saves `host-tools` for
-resume. Authentication failures and cancellation follow the normal error path.
-A missing binary can fail earlier during configuration. New teams using the
-direct Westlake Chat profile start with host tools. Checkpoints that predate the
-transport field also use host tools.
+New team runs pin the executable's real path and digest and record
+`agentTeam.transport: native-agent-control`. Startup failures are reported
+through the native backend. Use a compatible provider profile such as the
+Responses gateway. Resume native team checkpoints with their pinned backend.
+Resume historical host-tool team checkpoints with the original TheoremOS build.
 
 After the ordinary headless runtime build, exercise the real binary with fixed
 loopback Responses and independent process/workspace isolation:
@@ -89,10 +84,10 @@ The Web worker Dockerfile builds the same pinned source on Debian Bookworm
 and installs a separate binary at `/opt/theoremos-codex-backend/codex`.
 Ordinary runs keep the stock Codex binary. The worker build probes the native
 app-server's capabilities as the worker user before labeling the image
-`org.theoremos.native-agent-control=v1`. The Web service uses this label to
-offer native teams only with a compatible worker; existing deployments are
-unchanged until their images are rebuilt and selected. A host output symlink
-is not a portable installation.
+`org.theoremos.native-agent-control=v1`. The Web service also checks
+`org.theoremos.native-team-workflow=v1`, which identifies support for native
+team scheduling and initial route approval. It launches the image by its
+verified ID. Rebuild both Web and worker images to roll out this workflow.
 
 Cargo resolves V8 host manifests even though the CLI does not link that runtime.
 The build-local Git helper fetches the exact locked submodule commits without

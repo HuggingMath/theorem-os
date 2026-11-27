@@ -29,11 +29,10 @@ export class MathAgentToolDispatcher {
   private controller?: AbortController;
   private stopped = false;
 
-  constructor(private readonly tools: MathAgentTools, private readonly active: (threadId: string, turnId: string) => boolean,
-    reserved: readonly string[] = []) {
+  constructor(private readonly tools: MathAgentTools, private readonly active: (threadId: string, turnId: string) => boolean) {
     this.definitions = tools.definitions.map(definition => {
       if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/u.test(definition.name) || this.names.has(definition.name) ||
-          reserved.includes(definition.name) || !definition.description || !definition.inputSchema ||
+          !definition.description || !definition.inputSchema ||
           typeof definition.inputSchema !== 'object' || Array.isArray(definition.inputSchema))
         throw new Error('math_agent_tool_definition_invalid');
       this.names.add(definition.name);

@@ -36,3 +36,7 @@ export function solverState(problem: SolverProblem, worktree: string, fields: St
     taskDigest: 'task', buildDigest: 'build', environmentDigest: 'environment', evaluatorDigest: 'evaluator',
     model: 'unused', effort: 'unused', worktree, turns: 0, ...rest };
 }
+
+export function workerAccess(workers: readonly ResearchWorker[], retrievalRoot: string): Map<string, import('../../src/solver/research').WorkerAccess> {
+  return new Map(workers.map(worker => [worker.id, { environment: {}, retrievalRoot }]));
+}

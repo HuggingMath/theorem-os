@@ -24,7 +24,7 @@ await fs.rm(output, { recursive: true, force: true });
 await fs.mkdir(output, { recursive: true });
 const credential = 'sk-local-key-memory-fixture-0123456789';
 const runner: WebRunner = {
-  async readiness() { return { ready: true, message: 'Local key memory fixture; no model or Lean' }; },
+  async readiness() { return { ready: true, nativeTeam: true, message: 'Local key memory fixture; no model or Lean' }; },
   async run(input, send) {
     send({ type: 'result', result: { status: 'incomplete', proof: '', report: input.input.task.includes('reject')
       ? { failure: { kind: 'authentication', reason: 'math_model_authentication_failed' } } : { fixture: true } } });

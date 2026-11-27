@@ -1,3 +1,4 @@
+import { retiredWebRunInputError } from './researchMode';
 import type { WorkerFormalizationAuditInput } from './formalizationAuditTypes';
 import { spawn } from 'node:child_process';
 import { execFile } from 'node:child_process';
@@ -9,7 +10,7 @@ import { promisify } from 'node:util';
 import { z } from 'zod';
 import type { WebConfig } from './config';
 import type { WorkerExplanationInput, WorkerExplanationMessage, WorkerInput, WorkerMessage } from './shared';
-import { webArtifactMaxBytes, webExplanationPhases, webExplanationReason, webFailureKinds, webFailureReason, webPaperLimits } from './shared';
+import { retiredResearchCoordinationCode, webArtifactMaxBytes, webExplanationPhases, webExplanationReason, webFailureKinds, webFailureReason, webPaperLimits } from './shared';
 import { isWebEventDetails } from './moduleTelemetry';
 import { explanationCheckpointSchema, maxExplanationMessageBytes } from './explanationCheckpoint';
 import { isWebAgentActionBody } from './agentActions';
@@ -215,7 +216,7 @@ export function parseFormalizationMessage(line: string): WorkerFormalizationMess
 }
 
 export class DockerWebRunner implements WebRunner {
-  private cached?: { at: number; result: Awaited<ReturnType<WebRunner['readiness']>>; workerControl: boolean };
+  private cached?: { at: number; result: Awaited<ReturnType<WebRunner['readiness']>>; workerControl: boolean; imageId?: string };
   private active = new Set<string>();
   constructor(private readonly config: Pick<WebConfig, 'workerImage'> & Partial<Pick<WebConfig, 'texImage'>>) {}
 
@@ -289,6 +290,7 @@ export class DockerWebRunner implements WebRunner {
   };
 
   async command(id: string, command: WebCommand): Promise<WebCommandResult> {
+    if (command.type !== 'capture' && command.type !== 'plan-approval') throw new Error(retiredResearchCoordinationCode);
     if (!this.active.has(id)) throw new Error('运行环境尚未就绪或已结束。');
     return new Promise((resolve, reject) => {
       const child = spawn('docker', ['exec', '--interactive', `theoremos-web-${id}`,
@@ -427,19 +429,32 @@ export class DockerWebRunner implements WebRunner {
 
   async readiness() {
     if (this.cached && Date.now() - this.cached.at < 10_000) return this.cached.result;
-    const metadata = await execute('docker', ['image', 'inspect', '--format', '{{index .Config.Labels "org.theoremos.native-agent-control"}}|{{index .Config.Labels "org.theoremos.team-profile-preferences"}}|{{index .Config.Labels "org.theoremos.team-expert-cards"}}|{{index .Config.Labels "org.theoremos.worker-control"}}',
+    const metadata = await execute('docker', ['image', 'inspect', '--format', '{{index .Config.Labels "org.theoremos.native-agent-control"}}|{{index .Config.Labels "org.theoremos.team-profile-preferences"}}|{{index .Config.Labels "org.theoremos.team-expert-cards"}}|{{index .Config.Labels "org.theoremos.worker-control"}}|{{index .Config.Labels "org.theoremos.native-team-workflow"}}|{{.Id}}',
       this.config.workerImage], { timeout: 5_000, maxBuffer: 4096 }).catch(() => undefined);
     const ready = Boolean(metadata);
-    const [team, preferences, expertCards, workerControl] = metadata?.stdout.trim().split('|') ?? [];
-    const result = { ready, nativeTeam: team === 'v1', nativeTeamPreferences: team === 'v1' && preferences === 'v1',
-      nativeTeamExpertCards: team === 'v1' && expertCards === 'v1',
+    const [team, preferences, expertCards, workerControl, workflow, id] = metadata?.stdout.trim().split('|') ?? [];
+    const imageId = /^sha256:[a-f0-9]{64}$/u.test(id ?? '') ? id : undefined;
+    const nativeTeam = team === 'v1' && workflow === 'v1' && Boolean(imageId);
+    const result = { ready, nativeTeam, nativeTeamPreferences: nativeTeam && preferences === 'v1',
+      nativeTeamExpertCards: nativeTeam && expertCards === 'v1',
       message: ready ? '运行环境就绪' : '运行镜像尚未就绪，请先构建 theorem-os-worker 镜像。' };
-    this.cached = { at: Date.now(), result, workerControl: workerControl === 'v1' };
+    this.cached = { at: Date.now(), result, workerControl: workerControl === 'v1', imageId };
     return result;
   }
 
   async run(input: WorkerInput, onMessage: (message: WorkerMessage) => void, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
+    if (retiredWebRunInputError(input.input)) throw new Error(retiredResearchCoordinationCode);
+    let workerImage = this.config.workerImage;
+    if (input.input.nativeTeamCapacity) {
+      await this.readiness();
+      const capability = this.cached;
+      if (!capability?.result.nativeTeam || !capability.imageId)
+        throw new Error('当前运行镜像未安装支持原生团队与路线审批的 worker，请更新运行镜像。');
+      // Launch the checked image even if a local tag changes while the run is queued.
+      workerImage = capability.imageId;
+      signal.throwIfAborted();
+    }
     const name = `theoremos-web-${input.id}`;
     const environment = input.input.environment ?? 'standard';
     const mathlib = environment === 'mathlib';
@@ -462,7 +477,7 @@ export class DockerWebRunner implements WebRunner {
       ...(workerControl ? ['--env', 'THEOREMOS_WORKER_CONTROL=1'] : []),
       ...(mathlib ? ['--device=/dev/fuse:/dev/fuse:rw', '--mount', 'type=volume,destination=/var/tmp']
         : ['--tmpfs', '/var/tmp:rw,nosuid,nodev,size=536870912,uid=10001,gid=10001,mode=0700']),
-      this.config.workerImage, environment];
+      workerImage, environment];
     // Create first so cancellation always has a known container to remove.
     try {
       await execute('docker', args, { timeout: 30_000, maxBuffer: 8_192 });

@@ -14,7 +14,7 @@ M3.ready(完整任务图) → host 过滤准备/同步状态 → M5.assign(完�
   → await 后复检 → 创建或延续 assignment → 模型请求前准入
 ```
 
-同一组职责知识散在 [M5 资格筛选](../src/solver/modules/organization.ts)、[nextPeer 与预检复检](../src/solver/cooperation.ts)。它适合深化；Git、Lean 和模型会话仍留在现有执行路径。
+同一组职责知识散在 [M5 资格筛选](../src/solver/modules/organization.ts)、[nextPeer 与预检复检](https://github.com/HuggingMath/theorem-os/blob/ef08987d6f686856c6fe9ecf86676ebbaa632546/src/solver/cooperation.ts)。它适合深化；Git、Lean 和模型会话仍留在现有执行路径。
 
 以下判断保持各自含义：M3 ready 表示现在数学上可尝试；M5 matches 表示 worker 职责匹配；host admission 表示此刻允许实际执行；M2/S3 才决定证明接受。`hasAssignableTask` 判断现在可派发，`researchCanAdvance` 遍历未来依赖是否仍可推进，不能互换。
 

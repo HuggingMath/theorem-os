@@ -7,6 +7,7 @@ import path from 'node:path';
 import type { Page } from 'playwright';
 import { createWebService } from '../apps/web/server';
 import { readWebConfig } from '../apps/web/config';
+import { webAgentTeamPreset } from '../apps/web/researchMode';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRun } from '../apps/web/shared';
 import { mathDigest } from '../src/math/mathRuntimeIo';
@@ -46,8 +47,15 @@ const runner: WebRunner = {
     if (input.input.model === 'fixture-auth-error') { send({ type: 'error', message: 'Fixture key rejected', failure: { kind: 'authentication' } }); return; }
     const fixture = records(input.id); fixtures.set(input.id, fixture);
     if (input.input.model === 'fixture-approval') {
-      fixture.first.observation!.inspection.planApproval = { required: true, status: 'pending', planVersion: 'plan-1', rejections: [], leadRevising: false };
-      send({ type: 'observation', observation: fixture.first.observation! });
+      const observation = fixture.first.observation!;
+      Object.assign(observation.inspection.configuration, {
+        workers: 1, coordination: 'independent', researchMode: 'skill',
+        researchSkill: { name: 'theoremos-research', digest: mathDigest('fixture skill'), loading: 'native' },
+        researchDelegation: { mode: 'team', maxAgents: input.input.nativeTeamCapacity },
+      });
+      observation.plan!.baseVersion = 'plan-1';
+      observation.inspection.planApproval = { required: true, status: 'pending', planVersion: 'plan-1', rejections: [], leadRevising: false };
+      send({ type: 'observation', observation });
       await new Promise<void>(resolve => { if (signal.aborted) resolve(); else signal.addEventListener('abort', () => resolve(), { once: true }); }); return;
     }
     send({ type: 'observation', observation: fixture.first.observation! });
@@ -75,7 +83,8 @@ try {
     const owner = (await context.cookies(origin)).find(cookie => cookie.name === 'theoremos_session')!.value;
     const session = await page.evaluate(async () => (await fetch('/api/session')).json()), provider = session.providers[0], recorded = readingRun();
     const create = (model: string) => service.jobs.create(owner, { providerId: provider.id, apiKey: 'sk-disposable-not-sent', model, effort: 'high',
-      source: recorded.source, task: recorded.task, environment: recorded.environment, maxTurns: 2, maxRunSeconds: 600, workers: 1, coordination: 'cooperative' }, provider);
+      source: recorded.source, task: recorded.task, environment: recorded.environment, maxTurns: 2, maxRunSeconds: 600,
+      ...(model === 'fixture-approval' ? { ...webAgentTeamPreset(), planApproval: true } : { workers: 1, coordination: 'cooperative' }) }, provider);
     phase = `failure-and-recovery-${language}`;
     const failed = create('fixture-auth-error');
     await page.waitForFunction(async id => (await (await fetch(`/api/runs/${id}`)).json()).run.status === 'error', failed.id);

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { bootstrapLeanTask } from '../src/math/leanTask';
 import { MathAgentToolDispatcher } from '../src/runtime/agentTeamTools';
 import { AgentResearchTeam } from '../src/solver/agentTeam';
@@ -27,9 +27,8 @@ function fixture(actor = 'member') {
   const problem = readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath);
   const state = solverState(problem, receipt.workspaceRoot, { runId: 'tool-contract', phase: 'running',
     researchMode: 'skill', researchDelegation: { mode: 'team', maxAgents: 3 },
-    agentTeam: { schema: 'theorem-os.agent-team.v1', workers: ['member', 'peer'].map(id => ({ id, role: 'researcher' as const,
-      worktree: path.join(directory, id), phase: 'prepared' as const, status: 'idle' as const, turns: 0,
-      seedCommit: problem.baseCommit, tasks: [], cursor: 0 })), events: [], deliveries: [], adoptions: [], operations: [] } });
+    agentTeam: { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control',
+      workers: [], events: [], deliveries: [], adoptions: [], operations: [] } });
   const team = new AgentResearchTeam({ state, root: process.cwd(), taskText: 'Offline tool contract fixture.',
     leadAccess: { environment: {}, retrievalRoot: receipt.workspaceRoot }, modules: directSolverModules,
     executable: 'offline-no-model', profile: 'offline-no-credentials', signal: new AbortController().signal,
@@ -49,139 +48,68 @@ function fixture(actor = 'member') {
   return { team, ...client(actor), client, state };
 }
 
-function branch(actor: string, finite: boolean, operation: string): Json {
-  const definition = agentTeamToolDefinition(actor, finite);
+function branch(actor: string, operation: string): Json {
+  const definition = agentTeamToolDefinition(actor);
   const schema = (definition.inputSchema.oneOf as Json[]).find(item => item.properties.operation.enum[0] === operation);
   if (!schema) throw new Error('Missing advertised operation: ' + operation);
   return schema;
 }
 
-describe('operation-specific team tool contracts', () => {
-  it('advertises message recipients and submit identity binding separately', () => {
-    expect(branch('member', false, 'message')).toMatchObject({
-      required: ['operation', 'agentId', 'message'], additionalProperties: false,
+describe('mathematical team tool contracts', () => {
+  it('advertises role-specific math operations and the optional Lead plan gate', () => {
+    const child = agentTeamToolDefinition('member');
+    const lead = agentTeamToolDefinition('lead');
+    const approval = agentTeamToolDefinition('lead', true);
+    expect((child.inputSchema.properties.operation as Json).enum).toEqual([
+      'yield', 'history', 'inspect', 'inspect-research', 'submit', 'route_summary',
+    ]);
+    expect((lead.inputSchema.properties.operation as Json).enum).toEqual([
+      'finish', 'history', 'inspect', 'inspect-research', 'adopt', 'retire_route', 'route_summary',
+    ]);
+    expect((approval.inputSchema.properties.operation as Json).enum).toContain('publish_plan');
+    expect((agentTeamToolDefinition('member', true).inputSchema.properties.operation as Json).enum).not.toContain('publish_plan');
+    expect(branch('member', 'submit')).toMatchObject({ required: ['operation', 'summary', 'declarations'], additionalProperties: false,
+      properties: { declarations: { items: { required: ['file', 'name', 'type'], additionalProperties: false } } },
     });
-    const submit = branch('member', false, 'submit');
-    expect(submit.required).toEqual(['operation', 'summary', 'declarations']);
-    expect(submit.properties).not.toHaveProperty('agentId');
-    expect(submit.properties.declarations.items).toMatchObject({
-      required: ['file', 'name', 'type'], additionalProperties: false,
+    expect(branch('member', 'submit').properties).not.toHaveProperty('agentId');
+    expect(branch('member', 'submit').properties).not.toHaveProperty('objectiveRevision');
+    expect(branch('member', 'history').properties.limit.maximum).toBe(8);
+  });
+
+  it('returns the selected operation contract when a caller supplies another member identity', () => {
+    const args = { operation: 'submit', agentId: 'peer', summary: 'Saved helper.',
+      declarations: [{ file: 'Submission.lean', name: 'helper', type: 'True' }] };
+    const parsed = agentTeamRequestSchema.safeParse(args);
+    if (parsed.success) throw new Error('The malformed request must be rejected.');
+    expect(agentTeamArgumentFeedback('member', args, parsed.error)).toMatchObject({
+      ok: false, error: 'math_team_arguments_invalid', contract: branch('member', 'submit'),
+      hint: expect.stringContaining('other fields forbidden'),
     });
-    expect(branch('member', false, 'wait').required).toEqual(['operation', 'after']);
-    expect(branch('member', false, 'history').properties.limit.maximum).toBe(8);
-    expect(branch('member', false, 'inspect-research').properties.limit.maximum).toBe(16000);
-    for (const actor of ['lead', 'member']) {
-      const description = agentTeamToolDefinition(actor, false).description;
-      expect(description).toContain(`the host fixes the sender as "${actor}"; agentId names the recipient`);
-      expect(description).toContain('Self-addressed messages are rejected.');
-    }
-    expect(agentTeamToolDefinition('member', false).description).toContain('To report to Lead use agentId: "lead"');
   });
 
-  it('keeps role and configured allowance capabilities out of unavailable operation branches', () => {
-    const member = agentTeamToolDefinition('member', false).inputSchema as Json;
-    expect(member.properties.operation.enum).not.toContain('coordinate');
-    expect(member.properties.operation.enum).not.toContain('spawn');
-    expect(member.properties).not.toHaveProperty('decision');
-    expect(member.properties).not.toHaveProperty('budget');
-    const unlimited = agentTeamToolDefinition('lead', false).inputSchema as Json;
-    expect(unlimited.properties.operation.enum).not.toContain('budget');
-    expect(unlimited.properties).not.toHaveProperty('budget');
-    expect(unlimited.properties).not.toHaveProperty('leadReserve');
-    expect(unlimited).not.toHaveProperty('oneOf');
-    const finite = agentTeamToolDefinition('lead', true);
-    expect(finite.inputSchema).not.toHaveProperty('oneOf');
-    expect(finite.inputSchema.properties).toHaveProperty('budget');
-  });
-
-  it.each([false, true])('keeps coordinate off the Lead menu with finite budget = %s while accepting explicit legacy calls', async finite => {
-    const tool = agentTeamToolDefinition('lead', finite);
-    expect((tool.inputSchema as Json).properties.operation.enum).not.toContain('coordinate');
-    expect(tool.inputSchema.properties).not.toHaveProperty('decision');
-    expect(tool.description).not.toContain('coordinate');
-    const invalid = agentTeamRequestSchema.safeParse({ operation: 'coordinate', decision: 'continue' });
-    if (invalid.success) throw new Error('Incomplete legacy operation must remain invalid.');
-    expect(agentTeamArgumentFeedback('lead', finite, { operation: 'coordinate' }, invalid.error).allowedOperations)
-      .not.toContain('coordinate');
-    const f = fixture('lead'), note = { decision: 'continue', reason: 'Checked the interface.', nextStep: 'Explore the bound.' };
-    const result = await f.call({ operation: 'coordinate', ...note }, 'legacy-coordinate');
-    expect(result.value).toMatchObject({ ok: true, advisory: true });
-    expect(f.state.agentTeam?.coordination).toMatchObject({ ...note, revision: 1 });
-  });
-
-  it('returns the exact selected operation contract for a missing recipient or extra identity', () => {
-    for (const args of [{ operation: 'message', message: 'A useful finding.' },
-      { operation: 'submit', agentId: 'member', summary: 'Saved helper.',
-        declarations: [{ file: 'Submission.lean', name: 'helper', type: 'True' }] }]) {
-      const parsed = agentTeamRequestSchema.safeParse(args);
-      expect(parsed.success).toBe(false);
-      if (parsed.success) throw new Error('The malformed request must be rejected.');
-      const feedback = agentTeamArgumentFeedback('member', false, args, parsed.error);
-      expect(feedback).toMatchObject({ ok: false, error: 'math_team_arguments_invalid' });
-      expect(feedback.contract).toEqual(branch('member', false, args.operation));
-      expect(feedback.hint).toContain('other fields forbidden');
-    }
-  });
-
-  it('delivers repair feedback through the real host dispatcher without performing a malformed call', async () => {
+  it('rejects removed collaboration commands and unauthorized math commands without mutating the journal', async () => {
     const f = fixture();
-    const missingRecipient = await f.call({ operation: 'message', message: 'A useful finding.' }, 'missing-recipient');
-    expect(missingRecipient.response.success).toBe(true);
-    expect(missingRecipient.value).toMatchObject({ ok: false, error: 'math_team_arguments_invalid',
-      contract: { required: ['operation', 'agentId', 'message'] } });
-    const extraIdentity = await f.call({ operation: 'submit', agentId: 'member', summary: 'Saved helper.',
-      declarations: [{ file: 'Submission.lean', name: 'helper', type: 'True' }] }, 'extra-identity');
-    expect(extraIdentity.value.contract.properties).not.toHaveProperty('agentId');
+    for (const operation of ['spawn', 'assign', 'amend', 'cancel', 'coordinate', 'message', 'poll', 'wait', 'budget']) {
+      const result = await f.client('lead').call({ operation }, 'removed-' + operation);
+      expect(result.value).toMatchObject({ ok: false, error: 'math_team_arguments_invalid' });
+      expect(result.value.allowedOperations).not.toContain(operation);
+    }
+    const adopt = await f.call({ operation: 'adopt', deliveryId: '0'.repeat(64) }, 'child-adopt');
+    expect(adopt.value).toMatchObject({ ok: false, error: 'math_team_native_operation_required' });
     expect(f.team.archive.events).toHaveLength(0);
     expect(f.team.archive.operations).toHaveLength(0);
-    expect(f.team.archive.workers[0]!.pendingDelivery).toBeUndefined();
   });
 
-  it('preserves bound caller identity and idempotent delivery after correcting the recipient', async () => {
-    const f = fixture(), args = { operation: 'message', agentId: 'lead', message: 'A useful finding.' };
-    const first = await f.call(args, 'corrected-message'), duplicate = await f.call(args, 'corrected-message');
-    expect(first.value).toMatchObject({ ok: true, from: 'member', to: 'lead', delivery: 'saved-inbox' });
+  it('makes Lead finish replay-safe through the host dispatcher', async () => {
+    const f = fixture('lead'), args = { operation: 'finish', summary: 'The candidate is ready for checking.' };
+    const first = await f.call(args, 'finish'), duplicate = await f.client('lead').call(args, 'finish');
+    expect(first.value).toMatchObject({ ok: true, status: 'pending-writer-stop', originalProblemAcceptance: 'not-assessed' });
     expect(duplicate.response).toEqual(first.response);
-    expect(f.team.archive.events).toHaveLength(1);
-    expect(f.team.archive.events[0]).toMatchObject({ from: 'member', to: 'lead', text: args.message });
+    expect(f.team.archive.completionRequested?.summary).toBe(args.summary);
     expect(f.team.archive.operations).toHaveLength(1);
-    const changed = await f.dispatcher.call({ threadId: 'thread', turnId: 'turn', callId: 'corrected-message',
-      tool: 'theoremos_team', arguments: { ...args, message: 'Changed replay.' } });
+    const changed = await f.client('lead').dispatcher.call({ threadId: 'thread', turnId: 'turn', callId: 'finish',
+      tool: 'theoremos_team', arguments: { ...args, summary: 'Changed replay.' } });
     expect(changed).toMatchObject({ success: false });
-    expect(f.team.archive.events).toHaveLength(1);
-    const unauthorized = await f.call({ operation: 'coordinate', decision: 'defer', reason: 'Not allowed.', nextStep: 'Research.' }, 'child-coordinate');
-    expect(unauthorized.value).toMatchObject({ ok: false, error: 'math_team_lead_operation_required' });
+    expect(f.team.archive.completionRequested?.summary).toBe(args.summary);
   });
-
-  it.each(['member', 'lead'])('rejects self-addressed messages from %s without saving or notifying an inbox', async actor => {
-    const f = fixture(actor), notify = vi.spyOn(f.team as any, 'notify');
-    const args = { operation: 'message', agentId: actor, message: 'A useful finding.' };
-    const rejected = await f.call(args, 'self-addressed');
-    expect(rejected.response.success).toBe(true);
-    expect(rejected.value).toMatchObject({ ok: false, error: 'math_team_message_self_addressed', from: actor, to: actor });
-    expect(rejected.value.hint).toContain('agentId names the recipient, not the sender');
-    expect(rejected.value.hint).toContain(actor === 'lead' ? 'Use the intended team member ID.' : 'Use agentId: "lead"');
-    const replay = await f.call(args, 'self-addressed');
-    expect(replay.response).toEqual(rejected.response);
-    expect(f.team.archive.events).toHaveLength(0);
-    expect(notify).not.toHaveBeenCalled();
-    expect(f.team.archive.operations).toHaveLength(1);
-    const recipient = actor === 'lead' ? 'member' : 'lead';
-    const corrected = await f.call({ ...args, agentId: recipient }, 'corrected-recipient');
-    expect(corrected.value).toMatchObject({ ok: true, from: actor, to: recipient, delivery: 'saved-inbox' });
-    expect(f.team.archive.events).toHaveLength(1);
-    expect(notify).toHaveBeenCalledOnce();
-  });
-
-  it.each([{ actor: 'member', recipient: 'peer' }, { actor: 'lead', recipient: 'member' }])(
-    'delivers $actor messages only to the chosen $recipient inbox', async ({ actor, recipient }) => {
-      const f = fixture(actor), args = { operation: 'message', agentId: recipient, message: 'A usable interface.' };
-      const sent = await f.call(args, 'routed-message');
-      expect(sent.value).toMatchObject({ ok: true, from: actor, to: recipient, delivery: 'saved-inbox' });
-      const received = await f.client(recipient).call({ operation: 'poll', after: 0 }, 'recipient-poll');
-      expect(received.value.events).toEqual([expect.objectContaining({ from: actor, to: recipient, text: args.message })]);
-      const senderInbox = await f.call({ operation: 'poll', after: 0 }, 'sender-poll');
-      expect(senderInbox.value.events).toEqual([]);
-      expect(f.team.archive.events).toHaveLength(1);
-    });
 });

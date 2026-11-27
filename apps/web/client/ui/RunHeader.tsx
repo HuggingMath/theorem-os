@@ -30,6 +30,7 @@ export type RunHeaderProps = {
 export type PlanApprovalProps = {
   /** The visible plan is the exact version awaiting this decision. */ reviewable?: boolean;
   /** Tasks in the plan waiting for approval. */ tasks: number;
+  nativeTeam?: boolean;
   /** The Lead is revising the plan after a note from the owner; approving waits for the revised version. */ revising: boolean;
   /** The owner's approval was sent and the run has not answered yet. */ busy: boolean;
   /** Why the owner's last approval did not take effect. */ error?: string;
@@ -163,8 +164,9 @@ function ApprovalBanner({ approval, connected }: { approval: PlanApprovalProps; 
     <div class="run-approval-copy">
       <h3 id="run-approval-heading">{approval.revising ? t('Lead 正在按你的留言修改计划') : t('研究计划等你批准')}</h3>
       <p>{approval.revising ? t('修改完成后可以再看一遍再批准。')
-        : t('Lead 把题目拆成了 {0} 项任务。批准后 Agent 才开始工作；也可以先改计划，或给 Lead 留言让它修改。', approval.tasks)}</p>
-      <p class="run-approval-note">{t('等待确认不计入证明预算；拟定和修改计划正常计时。')}</p>
+        : approval.nativeTeam ? tx('请核对 Lead 的初始路线，批准后团队开始证明。', 'Review the Lead’s initial route, then approve it to start proving.')
+          : t('Lead 把题目拆成了 {0} 项任务。批准后 Agent 才开始工作；也可以先改计划，或给 Lead 留言让它修改。', approval.tasks)}</p>
+      {!approval.nativeTeam && <p class="run-approval-note">{t('等待确认不计入证明预算；拟定和修改计划正常计时。')}</p>}
       {approval.error && <p class="run-approval-error" role="alert">{approval.error}</p>}
       {approval.original && <div data-run-original-plan-approval={approval.original.id}>
         <p>{tx('原批准版本：', 'Original approval version: ')}<code>{approval.original.planVersion}</code></p>
@@ -179,8 +181,10 @@ function ApprovalBanner({ approval, connected }: { approval: PlanApprovalProps; 
         {approval.onReviewCurrent && <button type="button" class="button" data-run-review-current-plan disabled={!connected || approval.checking || approval.revising || approval.reviewable === false} onClick={approval.onReviewCurrent}>
           {tx('已重新核对当前计划', 'I reviewed the current plan again')}</button>}
         <button type="button" class="button" data-action="show-plan"><Icon name="network" />{t('查看计划')}</button>
-        <button type="button" class="button" data-action="edit-plan" disabled={!connected || approval.busy}><Icon name="square-pen" />{t('修改计划')}</button>
-        <button type="button" class="text-button" data-action="guide-lead" disabled={!connected || approval.busy}><Icon name="message-square" />{t('给 Lead 留言')}</button>
+        {!approval.nativeTeam && <>
+          <button type="button" class="button" data-action="edit-plan" disabled={!connected || approval.busy}><Icon name="square-pen" />{t('修改计划')}</button>
+          <button type="button" class="text-button" data-action="guide-lead" disabled={!connected || approval.busy}><Icon name="message-square" />{t('给 Lead 留言')}</button>
+        </>}
       </div>
     </div>
   </section>;

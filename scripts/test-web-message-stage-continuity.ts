@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 // Disposable HTTP sessions and a controlled recorded runner; no model, Lean, mail or production access.
+import { seedCooperativeRun } from './web-cooperative-fixture';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -10,7 +11,6 @@ import { readWebConfig } from '../apps/web/config';
 import { loadWebSample } from '../apps/web/sample';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import type { WebRunner } from '../apps/web/runner';
-import type { WebRun } from '../apps/web/shared';
 import type { ResearchAnnotation, ResearchAnnotationPage, ResearchProjectDetail } from '../apps/web/researchProjectTypes';
 import type { ResearchCollaborationInbox, ResearchIssue } from '../apps/web/researchCollaborationTypes';
 import type { ResearchProblem, ResearchStageConclusion } from '../apps/web/researchProblemTypes';
@@ -63,7 +63,7 @@ try {
     await Promise.all([owner, peer].map(page => page.goto(origin + '/theorems.html')));
     for (const [page, name] of [[owner, 'Stage author'], [peer, 'Stage peer']] as const) await http(page, 'PUT', '/api/research/profile', { requestId: crypto.randomUUID(), expectedRevision: 0, displayName: name, visibility: 'public' });
     const peerSession = await http<{ researcherId: string }>(peer, 'GET', '/api/research/session');
-    const { run } = await http<{ run: WebRun }>(owner, 'POST', '/api/runs', { requestId: crypto.randomUUID(), providerId: 'openai', apiKey: 'sk-disposable-message-fixture', model: 'fixture', effort: 'low', environment: sample.run.environment,
+    const run = await seedCooperativeRun(service, owner.context(), origin, { providerId: 'openai', apiKey: 'sk-disposable-message-fixture', model: 'fixture', effort: 'low', environment: sample.run.environment,
       source: sample.run.source.trim(), task: 'Message and stage workflow', maxTurns: 2, maxRunSeconds: 60, workers: 2, coordination: 'cooperative' });
     await owner.waitForFunction(async id => (await (await fetch(`/api/runs/${id}`)).json()).run.status === 'completed', run.id);
     const problemPath = `/api/research/workspace/problem/${run.id}`, initial = (await http<{ item: ResearchProblem }>(owner, 'GET', problemPath)).item;

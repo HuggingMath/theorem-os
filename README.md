@@ -52,7 +52,7 @@ https://github.com/user-attachments/assets/57562769-aa15-474c-87ff-73265f097ec8
 
 | 网页工作台与人机协同 | 零信任独立 Lean 验收 (`S1` / `S3`) | M1–M5 可替换策略与实验对比 |
 | :--- | :--- | :--- |
-| 内置 [`apps/web`](./apps/web/) 科研工作台，支持自然语言、TeX 与单文件 Lean 输入、后台语义审查、共同推进/自动推进模式与实时 Lean 反馈视图。 | 模型输出“已完成”或局部引理通过**从不替代最终验收**；[`evaluation.ts`](./src/solver/evaluation.ts) 固定完整原题与环境独立重验，[`archive.ts`](./src/solver/archive.ts) 完整保留每轮尝试、报错与用量以便断点续跑。 | 将证明构造、检查反馈、搜索调度、上下文筛选与协作分工拆分为 5 个带版本的 TypeScript 组件，可在不改宿主运行时和验收规则的前提下开展对照消融实验。 |
+| 内置 [`apps/web`](./apps/web/) 科研工作台，支持自然语言、TeX 与单文件 Lean 输入、后台语义审查、Codex 原生团队、可选的首轮路线审批与实时 Lean 反馈视图。 | 模型输出“已完成”或局部引理通过**从不替代最终验收**；[`evaluation.ts`](./src/solver/evaluation.ts) 固定完整原题与环境独立重验，[`archive.ts`](./src/solver/archive.ts) 完整保留每轮尝试、报错与用量以便断点续跑。 | 将证明构造、检查反馈、搜索调度、上下文筛选与协作分工拆分为 5 个带版本的 TypeScript 组件，历史对照消融实验可用各自固定的版本复现。 |
 
 | 仓库 | 定位与内容 | 许可证 |
 | --- | --- | --- |
@@ -115,12 +115,9 @@ docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml up -d --no-b
 ```bash
 bun run math component init --name my-search
 bun run math component check --name my-search
-
-export THEOREMOS_COMPONENT_CASE="$PWD/../theorem-os-runs/my-search"
-bun run math example prepare --dir "$THEOREMOS_COMPONENT_CASE" --component my-search --workers 3
-bun run math example check --dir "$THEOREMOS_COMPONENT_CASE"
-bun run math example resume --dir "$THEOREMOS_COMPONENT_CASE"
 ```
+
+新版协作由 Codex Lead 派工。旧宿主协作的档案继续可查，续跑和 M3 调度对照使用各自固定的历史版本。[续跑说明](./docs/usage.md#4-恢复运行)
 
 </details>
 
@@ -174,7 +171,7 @@ bun run math example resume --dir "$THEOREMOS_COMPONENT_CASE"
 
 ## 五个可替换研究组件与核心文档
 
-系统将“策略决策”与“结果验收”严格隔离（完整契约见 [`docs/solver-modules.md`](./docs/solver-modules.md) 与 [`src/solver/modules/index.ts`](./src/solver/modules/index.ts)）：
+系统将策略决策与结果验收分开。下表也列出了解读历史调度实验所需的 M3 任务排序与 M5 固定角色契约。新版团队的分工由 Codex Lead 决定。[模块说明](./docs/solver-modules.md)
 
 | 组件 / 层级 | 核心职责 | 实现入口 | 文档与示例 |
 | --- | --- | --- | --- |

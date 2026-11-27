@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 // Disposable HTTP/Chromium state with a controlled runner; no real models, Lean or mail.
+import { webAgentTeamPreset } from '../apps/web/researchMode';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -22,13 +23,17 @@ const controls = new Map<string, { observation: WebObservation; emit(): void }>(
 const commands: { id: string; type: string }[] = [], errors: string[] = [], external: string[] = [], checks: object[] = [];
 let compileCalls = 0, prohibited = 0, phase = 'setup', active: Page | undefined, failure: unknown;
 const runner: WebRunner = {
-  async readiness() { return { ready: true, message: 'Controlled inline annotation workflow' }; },
+  async readiness() { return { ready: true, nativeTeam: true, message: 'Controlled inline annotation workflow' }; },
   async check(input) { compileCalls++; return { exitCode: 0, timedOut: false, output: '', checkedTarget: input.candidateTarget?.name }; },
   async run(input, send, signal) {
     const observation = structuredClone(loadWebSample()!.observations.at(-1)!);
     observation.webRunId = input.id; observation.sequence = 1; observation.snapshot.stateDigest = mathDigest(`inline-v1:${input.id}`);
     observation.inspection.problem = { id: 'inline-fixture', statement: 'Prove $\\mathrm{True}$', formalStatement: 'True', assumptions: [], targets: [{ theoremName: 'target', proofPath: 'Main.lean' }] };
-    observation.inspection.configuration.environmentDigest = environmentDigest;
+    Object.assign(observation.inspection.configuration, {
+      environmentDigest, workers: 1, coordination: 'independent', researchMode: 'skill',
+      researchSkill: { name: 'theoremos-research', digest: mathDigest('fixture skill'), loading: 'native' },
+      researchDelegation: { mode: 'team', maxAgents: input.input.nativeTeamCapacity },
+    });
     observation.inspection.tasks = [{ id: 'goal', kind: 'goal', objective: 'Prove True', theorem: 'target', type: 'True', informalStatement: 'The proposition $\\mathrm{True}$ is inhabited.',
       informalProof: 'Use the constructor $\\mathrm{True.intro}$ to close the goal.', group: 'main', status: 'working', control: 'active', version: 'goal-v1', premises: ['No extra assumptions.'], plannedDependencies: [],
       attempts: 0, proof: { status: 'open' }, parkedBy: [], parkedRoutes: {} }];
@@ -47,8 +52,8 @@ const runner: WebRunner = {
   },
   async command(runId, command) {
     if (command.type === 'capture') return { id: 'capture', status: 'captured' };
-    if (command.type === 'guidance-withdraw') return { id: command.id, status: 'rejected', reason: 'fixture_guidance_withdraw_not_simulated' };
-    const id = command.type === 'guidance' ? command.guidance.id : command.type === 'plan-approval' ? command.approval.id : command.proposal.id;
+    if (command.type !== 'plan-approval') throw new Error('Unexpected command: ' + command.type);
+    const id = command.approval.id;
     commands.push({ id, type: command.type });
     const control = controls.get(runId)!;
     if (command.type === 'plan-approval') {
@@ -85,7 +90,7 @@ try {
     await Promise.all([owner, peer].map(page => page.goto(origin + '/theorems.html')));
     const peerSession = await http<{ researcherId: string }>(peer, 'GET', '/api/research/session');
     for (const [page, name] of [[owner, 'Owner'], [peer, 'Peer']] as const) await http(page, 'PUT', '/api/research/profile', { requestId: crypto.randomUUID(), expectedRevision: 0, displayName: name, visibility: 'public' });
-    const { run } = await http<{ run: { id: string } }>(owner, 'POST', '/api/runs', { requestId: crypto.randomUUID(), providerId: 'openai', apiKey: 'sk-disposable-inline-fixture', model: 'fixture', effort: 'low', environment: 'standard', source, task: 'Prove True', maxTurns: 2, maxRunSeconds: 600, workers: 2, coordination: 'cooperative' });
+    const { run } = await http<{ run: { id: string } }>(owner, 'POST', '/api/runs', { providerId: 'openai', apiKey: 'sk-disposable-inline-fixture', model: 'fixture', effort: 'low', environment: 'standard', source, task: 'Prove True', maxTurns: 2, maxRunSeconds: 600, ...webAgentTeamPreset(), planApproval: true });
     await owner.waitForFunction(async id => (await (await fetch(`/api/runs/${id}`)).json()).run.observation, run.id);
     const routeUrl = `${origin}/problem.html?${new URLSearchParams({ run: run.id, tab: 'route', task: 'goal', taskVersion: 'goal-v1' })}`;
     await owner.goto(routeUrl); const inline = owner.locator('[data-research-inline-actions]'); await inline.locator('[data-inline-open]').click(); await inline.locator('[data-inline-approve-plan]').waitFor();
@@ -94,14 +99,11 @@ try {
     assert.equal(await inline.locator('[data-inline-open]').evaluate(node => document.activeElement === node), true);
     await inline.locator('[data-inline-open]').click();
     assert.match(await inline.locator('[data-inline-math-context]').innerText(), /True\.intro/);
-    phase = `personal-plan-and-guidance-${language}-${width}`;
+    phase = `personal-plan-approval-${language}-${width}`;
     assert.equal(await inline.locator('[data-inline-approve-plan]').isDisabled(), true);
     await inline.locator('[data-inline-confirm-plan]').check();
     const approval = mutation(owner, `/api/runs/${run.id}/plan-approval`); await inline.locator('[data-inline-approve-plan]').click(); assert.equal((await approval).status(), 200);
-    await inline.getByText(language === 'zh' ? '对这一步提供指导' : 'Give guidance for this step', { exact: true }).click();
-    await inline.getByLabel(language === 'zh' ? '希望怎样改进这一步或路线' : 'How should this step or route improve?', { exact: true }).fill('Use True.intro explicitly in this task.');
-    await inline.locator('[data-inline-confirm-guidance]').check();
-    const guidance = mutation(owner, `/api/runs/${run.id}/guidance`); await inline.locator('[data-inline-send-guidance]').click(); assert.equal((await guidance).status(), 200);
+    assert.equal(await inline.locator('[data-inline-guidance]').count(), 0);
 
     phase = `personal-math-and-source-annotations-${language}-${width}`;
     const notesPath = `/api/research/runs/${run.id}/annotations`, notes = inline.locator('[data-research-annotations]');
@@ -143,7 +145,7 @@ try {
     await owner.goto(projectUrl); active = owner; const ownerInline = owner.locator('[data-research-inline-actions]'); await ownerInline.locator('[data-inline-open]').click();
     await ownerInline.getByText(language === 'zh' ? '在此审阅对应提交与决定' : 'Review related submissions and decisions here', { exact: true }).click();
     assert.equal(await ownerInline.locator('[data-feedback-scope]').inputValue(), 'task', 'The drawer initially scopes reviews to the selected task');
-    const candidateRow = ownerInline.locator(`#feedback-${candidate.id}`); await candidateRow.locator('[data-candidate-approve]').waitFor();
+    const candidateRow = ownerInline.locator(`#feedback-${candidate.id}`); await candidateRow.locator('[data-candidate-delivery-status="awaiting-review"]').waitFor();
     await candidateRow.getByText(language === 'zh' ? '对公式或源码作精确评审' : 'Review a formula or exact source passage', { exact: true }).click();
     const candidateNotes = candidateRow.locator('[data-research-annotations]'); await candidateNotes.getByText(language === 'zh' ? '添加精确批注' : 'Add a passage comment', { exact: true }).click();
     await candidateNotes.locator('[data-annotation-kind="source"]').click(); await candidateNotes.locator('[data-annotation-line="2"]').click();
@@ -167,11 +169,11 @@ try {
     assert.ok(await drawer.evaluate(node => node.scrollHeight > node.clientHeight && node.scrollWidth <= node.clientWidth + 1), 'Drawer scrolls internally without horizontal overflow');
     await drawer.locator('[data-inline-close]').click(); assert.equal(await owner.locator('[data-inline-open]').evaluate(node => document.activeElement === node), true);
     assert.ok(await owner.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'No page overflow');
-    checks.push({ language, width, initialScopeTask: true, drawerFocusRestored: true, drawerScrollsWithoutOverflow: true, personalPlanApproved: true, personalGuidanceSent: true, sourceAndMathAnchorsValidated: true, replyResolved: true,
+    checks.push({ language, width, initialScopeTask: true, drawerFocusRestored: true, drawerScrollsWithoutOverflow: true, personalPlanApproved: true, sourceAndMathAnchorsValidated: true, replyResolved: true,
       sharedClaimAndCandidateInline: true, exactReviewJoinsRevisionFlow: true, outdatedAnchorRetained: true });
     await Promise.all(actors.map(actor => actor.close()));
   }
-  assert.deepEqual(errors, []); assert.deepEqual(external, []); assert.equal(prohibited, 0); assert.equal(compileCalls, 2);
+  assert.deepEqual(errors, []); assert.deepEqual(external, []); assert.equal(prohibited, 0); assert.equal(compileCalls, 2); assert.equal(commands.length, 2);
 } catch (error) {
   failure = error; if (active && !active.isClosed()) await active.screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => {});
 } finally {

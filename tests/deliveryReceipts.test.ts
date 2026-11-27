@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CooperativeResearch } from '../src/solver/cooperation';
+
 import { deliveryReceiptFeedback, deliveryReceiptSchema, rejectedDeliveryReceipt, type DeliveryReceipt } from '../src/solver/deliveryReceipts';
 import { assignmentDeliveryFile, taskVersion, type CooperativeAction, type CooperativeTask } from '../src/solver/tasks';
 
@@ -39,32 +39,4 @@ describe('delivery receipt correction chains', () => {
       .replacesReceipt).toBeUndefined();
   });
 
-  it('resolves only a verified correction chain and leaves independent or foreign rejections pending', () => {
-    const first = reject({ summary: 'Original rejection' });
-    const second = reject({ kind: 'research', finding: { summary: 'Rejected correction', replacesReceipt: first.id } }, [first]);
-    const independent = reject({ summary: 'Independent rejection' });
-    const foreign = { ...reject({ summary: 'Foreign rejection' }), workerId: 'other-writer' };
-    const stale = { ...reject({ summary: 'Wrong seed rejection' }), seedCommit: 'b'.repeat(40) };
-    // A restored link outside the dispatch must never be followed by the resolver.
-    first.replacesReceipt = foreign.id;
-    const node = { task, feedback: deliveryReceiptFeedback(second) };
-    const receipts = JSON.parse(JSON.stringify([first, second, independent, foreign, stale])) as DeliveryReceipt[];
-    const cooperative = Object.create(CooperativeResearch.prototype) as any;
-    Object.assign(cooperative, { archive: { tasks: [node], deliveryReceipts: receipts },
-      input: { state: { environmentDigest: 'environment' } } });
-    cooperative.resolveDeliveryReceipts({ id: 'writer' }, action, second.id);
-    expect(receipts.map(receipt => receipt.status)).toEqual(['recorded', 'recorded', 'needs-correction', 'needs-correction', 'needs-correction']);
-    expect(node.feedback).toBe(deliveryReceiptFeedback(independent));
-    expect(receipts[0].assignmentKey).toBe(assignmentDeliveryFile(action.assignment));
-  });
-
-  it('tells a gap correction to retain required fields and select only a scoped original goal', () => {
-    const receipt = reject({ summary: 'Gap rejection' });
-    receipt.issues = [{ path: 'mathematicalGap.previousDeliveryId', message: 'Invalid prior gap' }];
-    const feedback = deliveryReceiptFeedback(receipt);
-    expect(feedback).toContain('keeping required consumer, previousGap, reduced, remaining, evidenceScope and reconsiderWhen');
-    expect(feedback).toContain('kind:"goal"');
-    expect(feedback).toContain('mathematicalGaps[].deliveryId');
-    expect(feedback).toContain('omit only previousDeliveryId');
-  });
 });

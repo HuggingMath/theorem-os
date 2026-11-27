@@ -58,7 +58,7 @@ async function main(): Promise<number> {
     component: { type: 'string' }, workers: { type: 'string' }, help: { type: 'boolean' },
   } });
   if (values.help) {
-    console.log(`Usage: theorem-os example prepare|check|solve|resume|replay --dir DIR [--component NAME] [--workers 1..${MAX_RESEARCH_WORKERS}] [--model MODEL] [--effort LEVEL] [--codex FILE]\nprepare: create a small Lean-only problem and freeze the build and configuration.\ncheck: run the startup preflight without a model.\nsolve / resume: use the saved configuration (default: single agent, unlimited dispatches, time and tokens).\nreplay: prepare a NEW directory and check two preset candidates with real Lean; no model or provider connection.\n--component uses src/components/NAME.ts; M3.ready ordering is exercised by cooperative model runs with at least 3 workers.\nInstall leanprover/lean4:v4.33.0 first. Keep the same build and environment when resuming.`);
+    console.log(`Usage: theorem-os example prepare|check|solve|resume|replay --dir DIR [--model MODEL] [--effort LEVEL] [--codex FILE]\nprepare: create a small Lean-only problem and freeze the build and configuration.\ncheck: run the startup preflight without a model.\nsolve / resume: use the saved configuration (default: single agent, unlimited dispatches, time and tokens).\nreplay: prepare a NEW directory and check two preset candidates with real Lean; no model or provider connection.\nUse the pinned historical revision to prepare cooperative or custom-component examples.\nInstall leanprover/lean4:v4.33.0 first. Keep the same build and environment when resuming.`);
     return 0;
   }
   const action = positionals[0];
@@ -77,6 +77,8 @@ async function main(): Promise<number> {
     assertMathCanonicalPath(file);
     fs.accessSync(file, fs.constants.R_OK);
   }
+  if (action === 'prepare' && (workers > 1 || values.component))
+    throw new Error('Prepare cooperative or custom-component examples from their pinned historical TheoremOS revision.');
   if (action === 'prepare' || action === 'replay') await prepare(directory, {
     mode: action === 'replay' ? 'replay' : 'model', component: values.component, workers,
     model: values.model || 'deepseek-flash', effort: values.effort || 'high', codex: values.codex,
@@ -99,6 +101,8 @@ async function main(): Promise<number> {
     args.push('--startup-only');
     if (fs.existsSync(`${output}.runtime/state.json`)) args.push('--resume');
   } else if (action === 'resume') args.push('--resume');
+  if (config.mode === 'model' && !args.includes('--resume') && (config.workers > 1 || config.component))
+    throw new Error('Start this prepared example from its pinned historical TheoremOS revision.');
   const custom = config.component ? (await import(pathToFileURL(componentPaths(root, config.component).source).href)).modules as SolverModules : undefined;
   if (config.component && typeof custom?.M3?.ready !== 'function') throw new Error('The component must export modules with M3.ready.');
   const stateFile = `${output}.runtime/state.json`;

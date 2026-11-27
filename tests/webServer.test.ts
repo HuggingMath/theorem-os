@@ -12,7 +12,7 @@ import { loadWebSample } from '../apps/web/sample';
 import { decodeTaskDraft } from '../apps/web/client/draft';
 import { readWebArchiveObservations, type StoredWebArchiveV2 } from '../apps/web/storage';
 import type { WebRunner } from '../apps/web/runner';
-import { webLimits, webSampleRunId, type WebResult, type WebRun, type WebRunInput, type WebSession, type WorkerInput, type WorkerMessage } from '../apps/web/shared';
+import { retiredResearchCoordinationCode, webLimits, webSampleRunId, type WebResult, type WebRun, type WebRunInput, type WebSession, type WorkerInput, type WorkerMessage } from '../apps/web/shared';
 import type { WebObservation } from '../apps/web/collaboration';
 
 const key = 'sk-http-test-never-publish';
@@ -25,7 +25,8 @@ type Call = { value: WorkerInput; signal: AbortSignal; send(message: WorkerMessa
 class HttpTestRunner implements WebRunner {
   calls: Call[] = [];
   ready = true;
-  async readiness() { return { ready: this.ready, message: this.ready ? 'Test worker ready' : 'Test worker unavailable' }; }
+  nativeTeam = false;
+  async readiness() { return { ready: this.ready, nativeTeam: this.nativeTeam, message: this.ready ? 'Test worker ready' : 'Test worker unavailable' }; }
   async run(value: WorkerInput, send: (message: WorkerMessage) => void, signal: AbortSignal) {
     await new Promise<void>((resolve, reject) => {
       this.calls.push({ value, signal, send, fail: reject,
@@ -117,7 +118,7 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     const replay = await request('/api/runs', alice, { body: { ...input(), apiKey: '' }, headers: { 'Idempotency-Key': 'http-retry' } });
     expect(replay.status).toBe(200); expect((await replay.json()).run.id).toBe(runs[0].id);
   });
-  it('creates and replays Skill research, preserving cooperation and single-run control limits', async () => {
+  it('creates and replays solo Skill research and keeps its control limits', async () => {
     const client = await session(), submitted = { ...input(), requestId: 'skill-http', researchMode: 'skill', coordination: 'independent' };
     const response = await request('/api/runs', client, { body: submitted });
     expect(response.status).toBe(201);
@@ -130,11 +131,8 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     expect((await request('/api/runs', client, { body: { ...submitted, skillLoading: 'file' } })).status).toBe(409);
     const cooperative = await request('/api/runs', client, { body: { ...submitted, requestId: 'cooperative-skill', workers: 3,
       coordination: 'cooperative', planApproval: true, modulePlan: { scheduler: 'critical-path', context: 'essential', custom: [] } } });
-    expect(cooperative.status).toBe(201);
-    const cooperating = (await cooperative.json()).run;
-    expect(cooperating).toMatchObject({ researchMode: 'skill', workers: 3, coordination: 'cooperative', planApproval: true,
-      moduleConfiguration: { selection: { scheduler: 'critical-path', context: 'essential' } } });
-    expect((await request('/api/runs', client, { body: { ...submitted, requestId: 'invalid-plan', planApproval: true } })).status).toBe(400);
+    expect(cooperative.status).toBe(400);
+    expect((await request('/api/runs', client, { body: { ...submitted, requestId: 'unsupported-plan', planApproval: true } })).status).toBe(503);
     expect((await request('/api/runs', client, { body: { ...input(), requestId: 'invalid-loading', skillLoading: 'file' } })).status).toBe(400);
     const controls = [
       ['guidance', { id: 'unsupported-guidance', recipient: { kind: 'lead' }, text: 'An unsupported control.', observationRef: { sequence: 1, stateDigest: 'a'.repeat(64) } }],
@@ -144,7 +142,10 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     ] as const;
     for (const [operation, body] of controls) {
       const rejected = await request(`/api/runs/${run.id}/${operation}`, client, { body });
-      expect(rejected.status).toBe(409); expect((await rejected.json()).error).toMatch(/此研究安排不支持/);
+      expect(rejected.status).toBe(409);
+      const error = await rejected.json();
+      if (operation === 'plan-approval') expect(error.error).toMatch(/此研究安排不支持/);
+      else expect(error.code).toBe(retiredResearchCoordinationCode);
     }
     expect((await request(`/api/runs/${run.id}`, client)).status).toBe(200);
     const conversation = (await (await request('/api/conversations', client, { body: { runId: run.id } })).json()).conversation;
@@ -152,6 +153,54 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     expect(blockedDiscussionGuidance.status).toBe(409);
     const retained = (await (await request(`/api/conversations/${conversation.id}`, client)).json()).conversation;
     expect(retained.messages).toHaveLength(conversation.messages.length);
+  });
+
+  it('defaults new Codex jobs to native teams, supports opt-in approval, and replays a saved legacy receipt', async () => {
+    runner.nativeTeam = true;
+    const client = await session(), owner = client.cookie.slice('theoremos_session='.length);
+    const legacy = { ...input(), maxTotalTokens: 0, workers: 2, environment: 'standard' as const };
+    const provider = config.providers.find(item => item.id === legacy.providerId)!;
+    const saved = service.jobs.create(owner, legacy, provider, undefined, 'legacy-request');
+    const historical = await request('/api/runs', client, { body: { ...legacy, requestId: 'legacy-request' } });
+    expect(historical.status).toBe(200);
+    expect((await historical.json()).run).toMatchObject({ id: saved.id, workers: 2, coordination: 'cooperative' });
+    const prefix = `/api/runs/${saved.id}`;
+    service.storage.saveCommand(owner, saved.id, 'saved-edit', { id: 'saved-edit', status: 'applied' });
+    for (const operation of ['guidance', 'edits', 'edits/preview']) {
+      const response = await request(`${prefix}/${operation}`, client, { body: {} });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: retiredResearchCoordinationCode });
+    }
+    const receipt = await request(`${prefix}/commands/saved-edit`, client);
+    expect(receipt.status).toBe(200);
+    expect(await receipt.json()).toEqual({ receipt: { id: 'saved-edit', status: 'applied' } });
+    const refused = await request('/api/runs', client, { body: { ...legacy, requestId: 'new-legacy-request' } });
+    expect(refused.status).toBe(400);
+    expect(await refused.json()).toMatchObject({ code: retiredResearchCoordinationCode });
+    await tick(); runner.calls[0].finish(); await tick();
+
+    const scout = await request('/api/runs', client, { body: { ...input(), requestId: 'old-scout',
+      portfolioExploration: true, portfolioSeconds: 45 } });
+    expect(scout.status).toBe(400);
+    expect(await scout.json()).toMatchObject({ code: retiredResearchCoordinationCode, error: expect.stringContaining('路线探索') });
+
+    for (const planApproval of [undefined, true]) {
+      const body = { ...input(), requestId: planApproval ? 'guided-native' : 'autonomous-native', planApproval };
+      const response = await request('/api/runs', client, { body });
+      expect(response.status).toBe(201);
+      const run = (await response.json()).run;
+      expect(run).toMatchObject({ researchMode: 'skill', skillLoading: 'native', workers: 1,
+        coordination: 'independent', nativeTeamCapacity: 3 });
+      expect(run.planApproval).toBe(planApproval);
+      await tick();
+      const call = runner.calls.at(-1)!;
+      expect(call.value.input).toMatchObject({ nativeTeamCapacity: 3 });
+      expect(call.value.input.planApproval).toBe(planApproval);
+      const replay = await request('/api/runs', client, { body });
+      expect(replay.status).toBe(200);
+      expect((await replay.json()).run.id).toBe(run.id);
+      call.finish(); await tick();
+    }
   });
   it('selects only an operator-configured native harness and omits private launch configuration from HTTP records', async () => {
     const provider = { id: 'claude', name: 'Native Claude', baseUrl: 'https://anthropic.example.test/v1',
@@ -161,11 +210,11 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     expect(client.session.providers.find(item => item.id === provider.id)).toEqual({
       id: provider.id, name: provider.name, baseUrl: provider.baseUrl, harness: provider.harness });
     const submitted = { ...input(), providerId: provider.id, model: 'claude-fixture', effort: 'high',
-      workers: 3, coordination: 'cooperative', requestId: 'native-http' };
+      workers: 1, coordination: 'independent', requestId: 'native-http' };
     const response = await request('/api/runs', client, { body: submitted });
     expect(response.status).toBe(201);
     const created = (await response.json()).run;
-    expect(created).toMatchObject({ harness: 'claude-code', researchMode: 'skill', skillLoading: 'file', workers: 3 });
+    expect(created).toMatchObject({ harness: 'claude-code', researchMode: 'skill', skillLoading: 'file', workers: 1 });
     expect(created.harnessConfigurationDigest).toMatch(/^[a-f0-9]{64}$/u);
     expect(JSON.stringify(created)).not.toContain(provider.execution.executable);
     expect((await request('/api/runs', client, { body: submitted })).status).toBe(200);
@@ -527,7 +576,9 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
       expect(await response.text()).not.toContain(key);
     }
     expect(runner.calls).toHaveLength(0);
-    const atLimits = await request('/api/runs', alice, { body: { ...input(), maxTurns: 20, maxRunSeconds: 900, workers: 4, maxTotalTokens: 100_000_000 } });
+    runner.nativeTeam = true;
+    const atLimits = await request('/api/runs', alice, { body: { ...input(), maxTurns: 20, maxRunSeconds: 900,
+      researchMode: 'skill', coordination: 'independent', nativeTeamCapacity: 8, maxTotalTokens: 100_000_000 } });
     expect(atLimits.status).toBe(201);
     await tick();
     expect(runner.calls[0].value.input.maxTotalTokens).toBe(100_000_000);

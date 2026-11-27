@@ -27,7 +27,7 @@ const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-chat-mathem
 const forbiddenCalls: string[] = [], writes: string[] = [], external: string[] = [], errors: string[] = [], reads: string[] = [];
 const forbidden = (name: string): never => { forbiddenCalls.push(name); throw new Error(`Read-only mathematics cannot invoke runner.${name}`); };
 const runner: WebRunner = {
-  async readiness() { return { ready: true, message: 'Local mathematics display fixture' }; },
+  async readiness() { return { ready: true, nativeTeam: true, message: 'Local mathematics display fixture' }; },
   async run() { return forbidden('run'); }, async formalize() { return forbidden('formalize'); },
   async check() { return forbidden('check'); }, async command() { return forbidden('command'); }, async explain() { return forbidden('explain'); },
 };
@@ -349,7 +349,7 @@ try {
     const participation = page.locator('[data-chat-participation]'), input = page.locator('#formalize-original');
     await participation.waitFor({ state: 'attached', timeout: 15_000 });
     assert.equal(await participation.isVisible(), false);
-    assert.equal(await participation.locator('input[value="guided"]').isChecked(), true);
+    assert.equal(await participation.locator('input[value="automatic"]').isChecked(), true);
     assert.equal(await participation.evaluate(element => element.closest('#formalize-settings') !== null), true);
     assert.equal(await input.evaluate(element => !!(element.compareDocumentPosition(document.querySelector('[data-chat-participation]')!) & Node.DOCUMENT_POSITION_FOLLOWING)), true);
     const inputBox = await input.boundingBox(); assert.ok(inputBox && inputBox.y >= 0 && inputBox.y < 1000, 'the task input is immediately visible');
@@ -367,7 +367,7 @@ try {
     for (const selector of budgetInputs) { assert.equal(await page.locator(selector).inputValue(), ''); assert.equal(await page.locator(selector).getAttribute('placeholder'), '不限'); }
     await fit(page); await screenshot(page, `${width}-unlimited-settings.png`);
     await advanced.locator(':scope > summary').click({ timeout: 15_000 });
-    mark(`${width}: visible task input, collapsed guided participation and empty unlimited budgets`);
+    mark(`${width}: visible task input, collapsed participation with automatic mode selected and empty unlimited budgets`);
     const modelMenu = page.locator('#chat-model-settings > summary');
     await modelMenu.click();
     for (const selector of ['#formalize-provider', '#formalize-model', '#formalize-effort'])

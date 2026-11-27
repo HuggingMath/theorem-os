@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createWebService } from '../apps/web/server';
 import { readWebConfig } from '../apps/web/config';
 import { isAcceptedRun } from '../apps/web/presentation';
+import { webAgentTeamPreset } from '../apps/web/researchMode';
 import { WebJobs } from '../apps/web/jobs';
 import { readWebArchiveObservations, WebStorage } from '../apps/web/storage';
 import type { WebCommand, WebCommandResult, WebObservation } from '../apps/web/collaboration';
@@ -20,6 +21,7 @@ const key = 'sk-collaboration-offline-test';
 const input = (): WebRunInput => ({ providerId: 'openai', apiKey: key, model: 'fixture', effort: 'high',
   source: 'theorem example : True := by sorry', task: 'Offline collaboration fixture', workers: 2,
   maxRunSeconds: 60, maxTurns: 2, coordination: 'cooperative', environment: 'standard' });
+const approvalInput = (): WebRunInput => ({ ...input(), ...webAgentTeamPreset(), planApproval: true });
 const provider = { id: 'openai', name: 'Fixture', baseUrl: 'https://api.openai.com/v1' };
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 
@@ -56,11 +58,22 @@ function observation(webRunId: string, sequence = 1): WebObservation {
   };
 }
 
+function approvalObservation(runId: string, sequence = 1): WebObservation {
+  const observed = observation(runId, sequence);
+  const configuration = observed.inspection.configuration;
+  Object.assign(configuration, {
+    workers: 1, coordination: 'independent', researchMode: 'skill',
+    researchSkill: { name: 'theoremos-research', digest: mathDigest('fixture skill'), loading: 'native' },
+    researchDelegation: { mode: 'team', maxAgents: approvalInput().nativeTeamCapacity },
+  });
+  observed.inspection.planApproval = { required: true, status: 'pending', planVersion: 'plan-1', rejections: [], leadRevising: false };
+  return observed;
+}
+
 class FixtureRunner implements WebRunner {
   calls: { value: WorkerInput; send: (message: WorkerMessage) => void; finish: () => void }[] = [];
   commands: WebCommand[] = [];
   failCommands = false;
-  commandObservation?: WebObservation;
   commandResult?: (command: WebCommand) => WebCommandResult;
   async readiness() { return { ready: true, message: 'Offline test worker' }; }
   async run(value: WorkerInput, send: (message: WorkerMessage) => void, signal: AbortSignal) {
@@ -76,15 +89,8 @@ class FixtureRunner implements WebRunner {
     if (this.commandResult) return this.commandResult(command);
     if (this.failCommands) throw new Error('Fixture receipt timed out');
     if (command.type === 'capture') return { id: 'capture', status: 'captured' };
-    if (command.type === 'guidance') {
-      const now = new Date().toISOString();
-      return { id: command.guidance.id, status: 'queued', guidance: { ...command.guidance, status: 'queued', createdAt: now, updatedAt: now },
-        ...(this.commandObservation ? { observation: this.commandObservation } : {}) };
-    }
-    if (command.type === 'plan-approval') return { id: command.approval.id, status: 'queued', planVersion: command.approval.planVersion,
-      ...(this.commandObservation ? { observation: this.commandObservation } : {}) };
-    return { id: command.proposal.id, status: command.type === 'edit-preview' ? 'validated' : 'queued',
-      baseVersion: command.proposal.baseVersion, affectedTaskIds: ['helper'] };
+    if (command.type === 'plan-approval') return { id: command.approval.id, status: 'queued', planVersion: command.approval.planVersion };
+    throw new Error('Unexpected fixture command');
   }
 }
 
@@ -116,49 +122,43 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
     runner.calls[0].finish(); await tick();
   });
 
-  it('coalesces identical commands, rejects reused IDs, and queries uncertain writes without resending', async () => {
+  it('coalesces identical approvals, rejects reused IDs and queries uncertain writes without resending', async () => {
     const runner = new FixtureRunner(), jobs = new WebJobs(runner, { concurrency: 1, queueLimit: 2 }); closing.push(() => jobs.close());
-    const run = jobs.create('alice', input(), provider); await tick();
-    const observed = observation(run.id); runner.calls[0].send({ type: 'observation', observation: observed });
-    const proposal = { ...observed.plan!, id: 'edit-one' };
-    expect((await jobs.command('alice', run.id, { type: 'edit-preview', proposal })).status).toBe('validated');
-    expect(jobs.storage.getCommand('alice', run.id, proposal.id)).toBeUndefined();
-    const command = { type: 'edit' as const, proposal };
+    const run = jobs.create('alice', approvalInput(), provider); await tick();
+    const observed = approvalObservation(run.id); runner.calls[0].send({ type: 'observation', observation: observed });
+    const command = { type: 'plan-approval' as const, approval: { id: 'approve-once', planVersion: 'plan-1' } };
     const first = jobs.command('alice', run.id, command), duplicate = jobs.command('alice', run.id, command);
-    expect(await first).toEqual(await duplicate);
-    expect(runner.commands.filter(item => item.type === 'edit')).toHaveLength(1);
-    await jobs.command('alice', run.id, command);
-    expect(runner.commands.filter(item => item.type === 'edit')).toHaveLength(1);
-    await expect(jobs.command('alice', run.id, { ...command, proposal: { ...proposal, baseVersion: 'other' } })).rejects.toThrow(/命令 ID/);
+    const receipt = await first;
+    expect(await duplicate).toEqual(receipt);
+    expect(receipt.commandDigest).toBe(mathDigest(canonicalMathJson(command)));
+    expect(runner.commands).toHaveLength(1);
+    expect(await jobs.command('alice', run.id, command)).toEqual(receipt);
+    expect(runner.commands).toHaveLength(1);
+    await expect(jobs.command('alice', run.id, { ...command, approval: { ...command.approval, planVersion: 'other' } })).rejects.toThrow(/命令 ID/);
     runner.failCommands = true;
-    const uncertain = { type: 'edit' as const, proposal: { ...proposal, id: 'edit-timeout' } };
-    expect((await jobs.command('alice', run.id, uncertain)).status).toBe('unknown');
-    await jobs.command('alice', run.id, uncertain);
-    expect(runner.commands.filter(item => item.type === 'edit')).toHaveLength(2);
-    runner.failCommands = false;
-    await jobs.command('alice', run.id, { type: 'guidance', guidance: { id: 'guidance-one', recipient: { kind: 'lead' }, text: 'Check the quantifier.',
-      observationRef: { sequence: 1, stateDigest: observed.snapshot.stateDigest } } });
-    expect(jobs.guidance('alice', run.id, 'guidance-one')?.status).toBe('queued');
-    expect(run.observation?.plan?.baseVersion).toBe('plan-1');
+    const uncertain = { ...command, approval: { ...command.approval, id: 'approval-timeout' } };
+    const unknown = await jobs.command('alice', run.id, uncertain);
+    expect(unknown.status).toBe('unknown');
+    expect(jobs.commandReceipt('alice', run.id, uncertain.approval.id)).toEqual(unknown);
+    expect(await jobs.command('alice', run.id, uncertain)).toEqual(unknown);
+    expect(runner.commands).toHaveLength(2);
     runner.calls[0].finish(); await tick();
   });
 
-  it.each(['queued', 'rejected'] as const)('keeps a saved %s command receipt when saving its activity event fails', async status => {
+  it('keeps a saved approval receipt when saving its activity event fails', async () => {
     const runner = new FixtureRunner(), jobs = new WebJobs(runner, { concurrency: 1, queueLimit: 2 }); closing.push(() => jobs.close());
-    const run = jobs.create('alice', input(), provider); await tick();
-    const proposal = { ...observation(run.id).plan!, id: `event-failure-${status}` }, command = { type: 'edit' as const, proposal };
-    runner.commandResult = () => ({ id: proposal.id, status, ...(status === 'rejected' ? { reason: 'math_edit_version_conflict' } : {}) });
+    const run = jobs.create('alice', approvalInput(), provider); await tick();
+    const approval = { id: 'event-failure', planVersion: 'plan-1' }, command = { type: 'plan-approval' as const, approval };
     const save = vi.spyOn(jobs.storage, 'saveRun').mockImplementationOnce(() => { throw new Error(`disk unavailable ${key}`); });
     try {
       const receipt = await jobs.command('alice', run.id, command);
-      expect(receipt.status).toBe(status);
-      expect(receipt.reason).toBe(status === 'rejected' ? 'math_edit_version_conflict' : undefined);
-      expect(jobs.storage.getCommand('alice', run.id, proposal.id)).toMatchObject({ status, commandDigest: receipt.commandDigest });
-      expect(jobs.commandReceipt('alice', run.id, proposal.id)).toEqual(receipt);
+      expect(receipt.status).toBe('queued');
+      expect(jobs.storage.getCommand('alice', run.id, approval.id)).toMatchObject({ status: 'queued', commandDigest: receipt.commandDigest });
+      expect(jobs.commandReceipt('alice', run.id, approval.id)).toEqual(receipt);
       const sent = runner.commands.length;
       expect(await jobs.command('alice', run.id, command)).toEqual(receipt);
       expect(runner.commands).toHaveLength(sent);
-      expect(JSON.stringify([run, receipt, jobs.storage.getCommand('alice', run.id, proposal.id)])).not.toContain(key);
+      expect(JSON.stringify([run, receipt, jobs.storage.getCommand('alice', run.id, approval.id)])).not.toContain(key);
       runner.calls[0]!.finish(); await tick();
     } finally { save.mockRestore(); }
   });
@@ -166,7 +166,7 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
   it.each(['receipt', 'failure'] as const)('redacts a late command %s after the worker has cleared its credential', async outcome => {
     const runner = new FixtureRunner(), jobs = new WebJobs(runner, { concurrency: 1, queueLimit: 2 });
     closing.push(() => jobs.close());
-    const run = jobs.create('alice', input(), provider); await tick();
+    const run = jobs.create('alice', approvalInput(), provider); await tick();
     const response = Promise.withResolvers<WebCommandResult>();
     runner.command = () => response.promise;
     const command = { type: 'plan-approval' as const, approval: { id: 'late-approval', planVersion: 'plan-1' } };
@@ -190,7 +190,7 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-deleted-command-')); roots.push(root);
     const storage = new WebStorage(root), runner = new FixtureRunner();
     const jobs = new WebJobs(runner, { concurrency: 1, queueLimit: 2 }, { storage }); closing.push(() => jobs.close());
-    const run = jobs.create('alice', input(), provider); await tick();
+    const run = jobs.create('alice', approvalInput(), provider); await tick();
     const response = Promise.withResolvers<WebCommandResult>();
     runner.command = () => response.promise;
     const command = { type: 'plan-approval' as const, approval: { id: 'deleted-approval', planVersion: 'plan-1' } };
@@ -199,7 +199,7 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
     if (removed === 'run') expect(jobs.remove('alice', run.id)).toBe('deleted');
     else { jobs.forget('alice'); storage.deleteOwner('alice'); }
     const settled = expect(pending).rejects.toThrow(/不存在|不属于/);
-    if (outcome === 'receipt') response.resolve({ id: command.approval.id, status: 'queued', observation: observation(run.id) });
+    if (outcome === 'receipt') response.resolve({ id: command.approval.id, status: 'queued', observation: approvalObservation(run.id) });
     else response.reject(new Error('Late transport failure'));
     await settled;
     expect(jobs.list('alice')).toEqual([]);
@@ -250,10 +250,9 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
 
   it('settles a plan approval from the observed solver record and keeps a known rejection', async () => {
     const runner = new FixtureRunner(), jobs = new WebJobs(runner, { concurrency: 1, queueLimit: 2 }); closing.push(() => jobs.close());
-    const run = jobs.create('alice', { ...input(), planApproval: true }, provider); await tick();
+    const run = jobs.create('alice', approvalInput(), provider); await tick();
     expect(runner.calls[0].value.input.planApproval).toBe(true);
-    const pending = observation(run.id);
-    pending.inspection.planApproval = { required: true, status: 'pending', planVersion: 'plan-1', rejections: [], leadRevising: false };
+    const pending = approvalObservation(run.id);
     runner.calls[0].send({ type: 'observation', observation: pending });
     const command = { type: 'plan-approval' as const, approval: { id: 'approve-one', planVersion: 'plan-1' } };
     expect(await jobs.command('alice', run.id, command)).toMatchObject({ id: 'approve-one', status: 'queued', planVersion: 'plan-1' });
@@ -266,49 +265,13 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
     expect(await jobs.command('alice', run.id, stale)).toMatchObject({ status: 'rejected', reason: 'math_plan_approval_version_conflict' });
     expect(run.events.filter(item => item.type === 'plan_approval_queued')).toHaveLength(1);
 
-    const approved = observation(run.id, 2);
+    const approved = approvalObservation(run.id, 2);
     approved.inspection.planApproval = { required: true, status: 'approved', planVersion: 'plan-1', approvedId: 'approve-one',
       approvedVersion: 'plan-1', approvedAt: 5, rejections: [], leadRevising: false };
     runner.calls[0].send({ type: 'observation', observation: approved });
     expect(jobs.commandReceipt('alice', run.id, 'approve-one')).toMatchObject({ status: 'approved', planVersion: 'plan-1' });
     expect(jobs.commandReceipt('alice', run.id, 'approve-stale')).toMatchObject({ status: 'rejected',
       reason: 'math_plan_approval_version_conflict' });
-    runner.calls[0].finish(); await tick();
-  });
-
-  it('uses one edit digest for preview, submission and queried receipts without applying or saving the preview', async () => {
-    const runner = new FixtureRunner(), jobs = new WebJobs(runner, { concurrency: 1, queueLimit: 2 }); closing.push(() => jobs.close());
-    const run = jobs.create('alice', input(), provider); await tick();
-    const initial = observation(run.id); runner.calls[0].send({ type: 'observation', observation: initial });
-    const proposal = { ...initial.plan!, id: 'digest-consistent-edit' }, command = { type: 'edit' as const, proposal };
-    const canonicalDigest = mathDigest(canonicalMathJson(command)), workerDigest = 'd'.repeat(64);
-    const workerReceipts: WebCommandResult[] = [];
-    let applied = 0;
-    runner.commandResult = requested => {
-      if (requested.type === 'capture' || requested.type === 'guidance') throw new Error('Unexpected fixture command');
-      if (requested.type === 'edit') {
-        applied++;
-        const next = observation(run.id, initial.sequence + 1);
-        next.inspection.edits = [{ id: proposal.id, status: 'applied', baseVersion: proposal.baseVersion,
-          planVersion: 'plan-2', affectedTasks: ['helper'] }];
-        runner.calls[0].send({ type: 'observation', observation: next });
-      }
-      const receipt = { id: proposal.id, status: requested.type === 'edit-preview' ? 'validated' : 'queued', commandDigest: workerDigest };
-      workerReceipts.push(receipt); return receipt;
-    };
-    const preview = await jobs.command('alice', run.id, { type: 'edit-preview', proposal });
-    expect(preview.status).toBe('validated'); expect(preview.commandDigest).toBe(canonicalDigest);
-    expect(preview.commandDigest).not.toBe(workerDigest); expect(applied).toBe(0);
-    expect(run.observation).toEqual(initial); expect(jobs.commandReceipt('alice', run.id, proposal.id)).toBeUndefined();
-    expect(jobs.storage.listCommands('alice', run.id)).toEqual([]);
-    expect(runner.commands.map(item => item.type)).toEqual(['edit-preview']);
-    const submitted = await jobs.command('alice', run.id, command);
-    expect(submitted.status).toBe('applied'); expect(submitted.commandDigest).toBe(preview.commandDigest);
-    expect(jobs.commandReceipt('alice', run.id, proposal.id)).toEqual(submitted);
-    expect(jobs.storage.getCommand('alice', run.id, proposal.id)?.commandDigest).toBe(canonicalDigest);
-    expect(await jobs.command('alice', run.id, command)).toEqual(submitted);
-    expect(applied).toBe(1); expect(runner.commands.map(item => item.type)).toEqual(['edit-preview', 'edit']);
-    expect(workerReceipts.map(receipt => receipt.commandDigest)).toEqual([workerDigest, workerDigest]);
     runner.calls[0].finish(); await tick();
   });
 
@@ -326,28 +289,23 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
     const request = (route: string, body?: unknown) => fetch(base + route, { method: body ? 'POST' : 'GET',
       headers: { Cookie: cookie, 'X-CSRF-Token': csrf, ...(body ? { 'Content-Type': 'application/json' } : {}) },
       body: body ? JSON.stringify(body) : undefined });
-    const run = (await (await request('/api/runs', input())).json()).run; await tick();
+    const run = service.jobs.create(cookie.slice('theoremos_session='.length), input(), provider); await tick();
     const prefix = '/api/runs/' + run.id, initial = observation(run.id);
     runner.calls[0].send({ type: 'observation', observation: initial });
     const proposals = ['http-applied', 'http-rejected', 'http-unconfirmed'].map(id => ({ ...initial.plan!, id }));
-    runner.failCommands = true;
-    const uncertain: WebCommandResult[] = [];
-    for (const proposal of proposals) {
-      const response = await request(prefix + '/edits', proposal); expect(response.status).toBe(200);
-      const receipt = (await response.json()).receipt;
-      expect(receipt.status).toBe('unknown'); expect(receipt.reason).toBe('Fixture receipt timed out');
-      expect(receipt.commandDigest).toMatch(/^[a-f0-9]{64}$/u); uncertain.push(receipt);
-    }
+    const uncertain = proposals.map(proposal => ({ id: proposal.id, status: 'unknown', reason: 'Fixture receipt timed out',
+      commandDigest: mathDigest(canonicalMathJson({ type: 'edit', proposal })) }));
+    for (const record of uncertain) service.storage.saveCommand(owner, run.id, record.id, record);
     const receipt = async (id: string): Promise<WebCommandResult> => {
       const response = await request(prefix + '/commands/' + id); expect(response.status).toBe(200);
       return (await response.json()).receipt;
     };
     expect(await receipt(proposals[0].id)).toEqual({ ...uncertain[0], observation: initial });
-    runner.failCommands = false;
-    runner.commandObservation = initial;
     const guidance = { id: 'http-guidance', recipient: { kind: 'lead' as const }, text: 'Check the quantifier.',
       observationRef: { sequence: initial.sequence, stateDigest: initial.snapshot.stateDigest } };
-    expect((await request(prefix + '/guidance', guidance)).status).toBe(200);
+    service.storage.saveCommand(owner, run.id, guidance.id, { id: guidance.id, status: 'queued',
+      guidance: { ...guidance, status: 'queued', createdAt: initial.observedAt, updatedAt: initial.observedAt } });
+    expect((await request(prefix + '/guidance', guidance)).status).toBe(409);
     const queued = await receipt(guidance.id); expect(queued.status).toBe('queued');
     expect(queued.observation).toEqual(initial);
     const savedCommands = service.storage.listCommands(owner, run.id), sentCommands = runner.commands.length;
@@ -366,7 +324,7 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
       edit: next.inspection.edits[1], observation: next });
     expect(await receipt(proposals[2].id)).toEqual({ ...uncertain[2], observation: next });
     expect(await receipt(guidance.id)).toEqual({ ...queued, status: 'delivered', guidance: next.guidance[0], observation: next });
-    expect((await (await request(prefix + '/edits', proposals[0])).json()).receipt).toEqual(applied);
+    expect((await request(prefix + '/edits', proposals[0])).status).toBe(409);
     expect(runner.commands).toHaveLength(sentCommands);
     expect(service.storage.listCommands(owner, run.id)).toEqual(savedCommands);
     const bob = await fetch(base + '/api/session'), bobCookie = bob.headers.get('set-cookie')!.split(';')[0];
@@ -394,15 +352,15 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
         headers: { Cookie: cookie, 'X-CSRF-Token': csrf, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined }) };
     };
     const { owner, request: alice } = await login(), { request: bob } = await login();
-    const first = (await (await alice('/api/runs', input())).json()).run; await tick();
+    const first = service.jobs.create(owner, input(), provider); await tick();
     runner.calls[0].send({ type: 'observation', observation: observation(first.id) });
     runner.calls[0].finish();
     const from = { runId: first.id, taskId: 'helper', commit: 'a'.repeat(40), label: 'Conditional fixture helper · 第 1 次' };
-    expect((await alice('/api/runs', { ...input(), continueFrom: { ...from, commit: 'f'.repeat(40) } })).status).toBe(404);
-    expect((await bob('/api/runs', { ...input(), continueFrom: from })).status).toBe(404);
-    expect((await alice('/api/runs', { ...input(), continueFrom: { ...from, source: 'theorem forged : False := sorry' } })).status).toBe(400);
-    expect((await alice('/api/runs', { ...input(), continueFrom: { ...from, label: 'line\nbreak' } })).status).toBe(400);
-    const response = await alice('/api/runs', { ...input(), continueFrom: from });
+    expect((await alice('/api/runs', { ...input(), workers: 1, continueFrom: { ...from, commit: 'f'.repeat(40) } })).status).toBe(404);
+    expect((await bob('/api/runs', { ...input(), workers: 1, continueFrom: from })).status).toBe(404);
+    expect((await alice('/api/runs', { ...input(), workers: 1, continueFrom: { ...from, source: 'theorem forged : False := sorry' } })).status).toBe(400);
+    expect((await alice('/api/runs', { ...input(), workers: 1, continueFrom: { ...from, label: 'line\nbreak' } })).status).toBe(400);
+    const response = await alice('/api/runs', { ...input(), workers: 1, continueFrom: from });
     expect(response.status).toBe(201);
     const next = (await response.json()).run;
     const frozen = { ...from, taskVersion: 'version-1', sourceDigest: 'b'.repeat(64), environmentDigest: 'env', file: 'Submission.lean' };
@@ -449,7 +407,7 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
         headers: { Cookie: cookie, 'X-CSRF-Token': csrf, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) };
     };
     const { owner, request: alice } = await login(), { request: bob } = await login();
-    const run = (await (await alice('/api/runs', input())).json()).run; await tick();
+    const run = service.jobs.create(owner, input(), { ...provider, baseUrl: `http://127.0.0.1:${(upstream.address() as net.AddressInfo).port}/v1` }); await tick();
     const failed = observation(run.id);
     const firstAt = Date.parse(failed.observedAt), secondAt = firstAt + 1;
     failed.checks[0]!.record = { passed: false, status: 'failed', theoremName: 'helper', checkedAt: firstAt,
@@ -515,31 +473,20 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
     for (const text of ['Why did it fail?', 'Nat.zero_add', 'Earlier answer.', key]) expect(stored).not.toContain(text);
   });
 
-  it.each(['queued', 'unknown', 'receipt-error'] as const)('keeps host outcomes that arrive before a %s worker receipt', async transport => {
+  it.each(['queued', 'unknown', 'receipt-error'] as const)('keeps host approval outcomes that arrive before a %s worker receipt', async transport => {
     const runner = new FixtureRunner(), jobs = new WebJobs(runner, { concurrency: 1, queueLimit: 2 }); closing.push(() => jobs.close());
-    const run = jobs.create('alice', input(), provider); await tick();
-    let current = observation(run.id);
+    const run = jobs.create('alice', approvalInput(), provider); await tick();
+    let current = approvalObservation(run.id);
     runner.calls[0].send({ type: 'observation', observation: current });
-    for (const outcome of ['applied', 'rejected', 'delivered'] as const) {
+    for (const outcome of ['rejected', 'approved'] as const) {
       const id = `${outcome}-${transport}`, before = current;
-      const command = outcome === 'delivered'
-        ? { type: 'guidance' as const, guidance: { id, recipient: { kind: 'lead' as const }, text: 'Check the quantifier.',
-          observationRef: { sequence: before.sequence, stateDigest: before.snapshot.stateDigest } } }
-        : { type: 'edit' as const, proposal: { ...before.plan!, id } };
+      const planVersion = 'plan-1';
+      const command = { type: 'plan-approval' as const, approval: { id, planVersion } };
       runner.commandResult = () => {
-        current = observation(run.id, before.sequence + 1);
-        current.inspection.edits = [...before.inspection.edits]; current.guidance = [...before.guidance];
-        if (command.type === 'guidance') {
-          current.guidance.push({ ...command.guidance, status: 'delivered', deliveredTo: ['engineer'],
-            createdAt: before.observedAt, updatedAt: current.observedAt });
-        } else {
-          current.inspection.edits.push(outcome === 'applied'
-            ? { id, status: 'applied', baseVersion: before.plan!.baseVersion, planVersion: 'plan-2', affectedTasks: ['helper'],
-              recheck: { status: 'complete', tasks: [{ taskId: 'helper', taskDigest: 'version-1', status: 'conditional',
-                lastCheck: { commit: 'a'.repeat(40), sourceDigest: 'b'.repeat(64), environmentDigest: 'env',
-                  passed: true, conditional: true, receiptIds: ['fixture-check'] } }] } }
-            : { id, status: 'rejected', baseVersion: before.plan!.baseVersion, reason: 'math_edit_version_conflict' });
-        }
+        current = approvalObservation(run.id, before.sequence + 1);
+        const approval = current.inspection.planApproval!;
+        if (outcome === 'rejected') approval.rejections = [{ id, planVersion, reason: 'math_plan_approval_version_conflict', at: 5 }];
+        else Object.assign(approval, { status: 'approved', approvedId: id, approvedVersion: planVersion, approvedAt: 5 });
         runner.calls[0].send({ type: 'observation', observation: current });
         if (transport === 'receipt-error') throw new Error('Fixture receipt timed out');
         return { id, status: transport, reason: 'Worker has not confirmed the host outcome', observation: before };
@@ -547,73 +494,14 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
       const first = jobs.command('alice', run.id, command), duplicate = jobs.command('alice', run.id, command);
       const result = await first;
       expect(await duplicate).toEqual(result); expect(result.status).toBe(outcome);
-      expect(result.reason).toBe(outcome === 'rejected' ? 'math_edit_version_conflict' : undefined);
-      expect(result.observation).toEqual(current); expect(result.commandDigest).toMatch(/^[a-f0-9]{64}$/u);
-      if (command.type === 'guidance') expect(result.guidance).toEqual(current.guidance.at(-1));
-      else expect(result.edit).toEqual(current.inspection.edits.at(-1));
+      expect(result.reason).toBe(outcome === 'rejected' ? 'math_plan_approval_version_conflict' : undefined);
+      expect(result.observation).toEqual(current); expect(result.commandDigest).toBe(mathDigest(canonicalMathJson(command)));
       expect(result).toEqual(jobs.commandReceipt('alice', run.id, id));
       expect(jobs.storage.getCommand('alice', run.id, id)?.status).toBe(transport === 'receipt-error' ? 'unknown' : transport);
       const sentCommands = runner.commands.length;
       expect(await jobs.command('alice', run.id, command)).toEqual(result); expect(runner.commands).toHaveLength(sentCommands);
       expect(jobs.commandReceipt('alice', run.id, id + '-other')).toBeUndefined();
       expect(run.result).toBeUndefined(); expect(isAcceptedRun(run)).toBe(false);
-    }
-    const saved = jobs.storage.listCommands('alice', run.id), beforePreview = current;
-    runner.commandResult = undefined;
-    const preview = await jobs.command('alice', run.id, { type: 'edit-preview', proposal: { ...current.plan!, id: `applied-${transport}` } });
-    expect(preview.status).toBe('validated'); expect(preview.edit).toBeUndefined();
-    expect(jobs.storage.listCommands('alice', run.id)).toEqual(saved); expect(run.observation).toEqual(beforePreview);
-    runner.calls[0].finish(); await tick();
-  });
-
-  it('returns observed outcomes and full rechecks in POST receipts even when worker acknowledgements lag or fail', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-command-race-http-')); roots.push(root);
-    const reservation = net.createServer(); await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve));
-    const port = (reservation.address() as net.AddressInfo).port;
-    await new Promise<void>(resolve => reservation.close(() => resolve()));
-    const base = `http://127.0.0.1:${port}`, runner = new FixtureRunner();
-    const service = createWebService({ ...readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: base }),
-      staticRoot: root }, runner); closing.push(() => service.close());
-    await new Promise<void>(resolve => service.server.listen(port, '127.0.0.1', resolve));
-    const session = await fetch(base + '/api/session'), cookie = session.headers.get('set-cookie')!.split(';')[0];
-    const owner = cookie.slice('theoremos_session='.length), csrf = (await session.json()).csrfToken;
-    const request = (route: string, body?: unknown) => fetch(base + route, { method: body ? 'POST' : 'GET',
-      headers: { Cookie: cookie, 'X-CSRF-Token': csrf, ...(body ? { 'Content-Type': 'application/json' } : {}) },
-      body: body ? JSON.stringify(body) : undefined });
-    const run = (await (await request('/api/runs', input())).json()).run; await tick();
-    const prefix = '/api/runs/' + run.id;
-    let current = observation(run.id);
-    runner.calls[0].send({ type: 'observation', observation: current });
-    for (const outcome of ['applied', 'rejected', 'delivered', 'unknown'] as const) {
-      const id = `http-race-${outcome}`, before = current;
-      const body = outcome === 'delivered' ? { id, recipient: { kind: 'lead' }, text: 'Inspect the conditional premise.',
-        observationRef: { sequence: before.sequence, stateDigest: before.snapshot.stateDigest } } : { ...before.plan!, id };
-      const route = prefix + (outcome === 'delivered' ? '/guidance' : '/edits');
-      runner.commandResult = command => {
-        current = observation(run.id, before.sequence + 1);
-        current.inspection.edits = [...before.inspection.edits]; current.guidance = [...before.guidance];
-        if (command.type === 'guidance') current.guidance.push({ ...command.guidance, status: 'delivered',
-          deliveredTo: ['engineer'], createdAt: before.observedAt, updatedAt: current.observedAt });
-        else current.inspection.edits.push(outcome === 'rejected'
-          ? { id, status: 'rejected', baseVersion: 'plan-1', reason: 'math_edit_version_conflict' }
-          : { id: outcome === 'unknown' ? id + '-other' : id, status: 'applied', baseVersion: 'plan-1', planVersion: 'plan-2',
-            affectedTasks: ['helper'], recheck: { status: 'complete', tasks: [{ taskId: 'helper', taskDigest: 'version-1', status: 'conditional' }] } });
-        runner.calls[0].send({ type: 'observation', observation: current });
-        if (outcome === 'delivered') throw new Error('Fixture receipt timed out');
-        return { id, status: outcome === 'applied' ? 'queued' : 'unknown', observation: before };
-      };
-      const submitted = await request(route, body); expect(submitted.status).toBe(200);
-      const result = (await submitted.json()).receipt;
-      expect(result.status).toBe(outcome); expect(result.observation).toEqual(current);
-      if (outcome === 'applied' || outcome === 'rejected') expect(result.edit).toEqual(current.inspection.edits.at(-1));
-      if (outcome === 'delivered') expect(result.guidance).toEqual(current.guidance.at(-1));
-      if (outcome === 'unknown') expect(result.edit).toBeUndefined();
-      const savedCommands = service.storage.listCommands(owner, run.id), sentCommands = runner.commands.length;
-      const queried = await request(prefix + '/commands/' + id); expect(queried.status).toBe(200);
-      expect((await queried.json()).receipt).toEqual(result);
-      expect((await (await request(route, body)).json()).receipt).toEqual(result);
-      expect(service.storage.listCommands(owner, run.id)).toEqual(savedCommands); expect(runner.commands).toHaveLength(sentCommands);
-      expect((await request(prefix + '/commands/' + id + '-other')).status).toBe(404);
     }
     runner.calls[0].finish(); await tick();
   });
@@ -656,8 +544,7 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
     expect(crossOwner.status).toBe(200); expect((await crossOwner.json()).runs).toEqual([]);
     expect((await fetch(base + '/api/runs', { headers: { 'If-None-Match': initialTag } })).status).toBe(401);
 
-    const created = await write(alice, '/api/runs', input()); expect(created.status).toBe(201);
-    const run = (await created.json()).run; await tick();
+    const run = service.jobs.create(alice.cookie.slice('theoremos_session='.length), input(), provider); await tick();
     let current = await changed(alice.cookie, initialTag);
     expect(current.runs.map((item: { id: string }) => item.id)).toEqual([run.id]);
     await unchanged(bob.cookie, bobInitialTag);
@@ -669,8 +556,7 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
     runner.calls[0].send({ type: 'observation', observation: structuredClone(newer) });
     await unchanged(alice.cookie, current.etag);
 
-    const bobCreated = await write(bob, '/api/runs', input()); expect(bobCreated.status).toBe(201);
-    const bobRun = (await bobCreated.json()).run; await tick();
+    const bobRun = service.jobs.create(bob.cookie.slice('theoremos_session='.length), input(), provider); await tick();
     const bobCurrent = await changed(bob.cookie, bobInitialTag);
     expect(bobCurrent.runs.map((item: { id: string }) => item.id)).toEqual([bobRun.id]);
     await unchanged(alice.cookie, current.etag);
@@ -723,16 +609,16 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
     const request = (route: string, body?: unknown) => fetch(base + route, { method: body ? 'POST' : 'GET',
       headers: { Cookie: cookie, 'X-CSRF-Token': csrf, ...(body ? { 'Content-Type': 'application/json' } : {}) },
       body: body ? JSON.stringify(body) : undefined });
-    const run = (await (await request('/api/runs', input())).json()).run; await tick();
+    const run = service.jobs.create(cookie.slice('theoremos_session='.length), input(), provider); await tick();
     runner.calls[0].send({ type: 'observation', observation: observation(run.id) });
     const prefix = '/api/runs/' + run.id;
     expect((await (await request(prefix + '/observation')).json()).observation.solverRunId).toBe('solver-fixture');
     expect((await fetch(base + prefix + '/observation')).status).toBe(401);
     const bob = await fetch(base + '/api/session'), bobCookie = bob.headers.get('set-cookie')!.split(';')[0];
     expect((await fetch(base + prefix + '/checks/fixture-check', { headers: { Cookie: bobCookie } })).status).toBe(404);
-    expect((await request(prefix + '/edits/preview', { ...observation(run.id).plan!, id: 'http-edit' })).status).toBe(200);
+    expect((await request(prefix + '/edits/preview', { ...observation(run.id).plan!, id: 'http-edit' })).status).toBe(409);
     expect((await fetch(base + prefix + '/guidance', { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: '{}' })).status).toBe(403);
-    expect((await request(prefix + '/guidance', {})).status).toBe(400);
+    expect((await request(prefix + '/guidance', {})).status).toBe(409);
     runner.calls[0].finish(); await tick();
     const archived = await request(prefix + '/archive', {});
     expect(archived.status).toBe(200); const archive = (await archived.json()).archive;

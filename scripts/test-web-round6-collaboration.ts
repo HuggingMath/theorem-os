@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 // Real Chromium collaboration regression using disposable loopback data and controlled checks only.
+import { seedCooperativeRun } from './web-cooperative-fixture';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -12,7 +13,7 @@ import type { WebRunner } from '../apps/web/runner';
 import type { WebRunInput, WorkerMessage } from '../apps/web/shared';
 import type { WebObservation, WebInspection } from '../apps/web/collaboration';
 import type { ResearchCandidateReview, ResearchFeedback, ResearchProjectDetail } from '../apps/web/researchProjectTypes';
-import { freePort, postRun, preferFullCollaboration, startBrowser } from './web-scenario';
+import { freePort, preferFullCollaboration, startBrowser } from './web-scenario';
 import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -182,7 +183,7 @@ try {
     savedVersion: v2, cardNavigation: true, timelineNavigation: true, projectWideDiscussion: true, draftRetained: true });
 
   phase = 'submit-candidate-through-ui';
-  const run = await postRun({ page: owner }, runInput); assert.ok(controls.has(run.id));
+  const run = await seedCooperativeRun(service, owner.context(), origin, runInput); assert.ok(controls.has(run.id));
   project = (await http<{ item: ResearchProjectDetail }>(owner, 'GET', route)).item;
   project = (await http<{ item: ResearchProjectDetail }>(owner, 'POST', route + '/runs', {
     requestId: crypto.randomUUID(), expectedRevision: project.revision, statementVersionId: v1, runId: run.id,
@@ -199,7 +200,7 @@ try {
   const candidateReply = await candidateResponse; assert.equal(candidateReply.status(), 201);
   const candidate: ResearchFeedback = (await candidateReply.json()).item;
   assert.equal(candidate.proofCheck?.status, 'checked'); assert.equal(candidate.decision.status, 'pending');
-  assert.equal(checkerCalls, 1); assert.equal(guidanceCalls, 1);
+  assert.equal(checkerCalls, 1); assert.equal(guidanceCalls, 0);
   const visitorId = (await http<{ researcherId: string }>(visitor, 'GET', '/api/research/session')).researcherId;
   project = (await http<{ item: ResearchProjectDetail }>(owner, 'GET', route)).item;
   project = (await http<{ item: ResearchProjectDetail }>(owner, 'PUT', route + '/members/' + visitorId,
@@ -240,7 +241,7 @@ try {
   await review.getByRole('button', { name: '提交基准', exact: true }).click();
   await review.locator('[data-candidate-baseline]').waitFor();
   assert.equal(await review.locator('[data-candidate-baseline]').textContent(), source);
-  assert.equal(checkerCalls, 1); assert.equal(guidanceCalls, 1);
+  assert.equal(checkerCalls, 1); assert.equal(guidanceCalls, 0);
   checks.push({ name: 'Reload after task/source advances preserves the historical baseline and check, without rerunning either', currentTaskVersion: 'goal-v2', frozenTaskVersion: originalReview.target.taskRef?.version });
 
   phase = 'review-request-error-can-retry';

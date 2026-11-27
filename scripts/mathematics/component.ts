@@ -9,7 +9,7 @@ async function main(): Promise<number> {
     name: { type: 'string' }, help: { type: 'boolean' },
   } });
   if (values.help) {
-    console.log('Usage: theorem-os component init|check --name my-search\ninit creates src/components/my-search.ts and scripts/components/my-search.ts without overwriting files.\ncheck checks ordering, dependency and route gates with a small local fixture; no model or Lean calls.\nEdit the ready function, update its version, then build and use a new problem case.');
+    console.log('Usage: theorem-os component init|check --name my-search\ninit creates src/components/my-search.ts and scripts/components/my-search.ts without overwriting files.\ncheck checks ordering, dependency and route gates with a small local fixture; no model or Lean calls.\nStart component scheduling experiments from a pinned historical TheoremOS revision.');
     return 0;
   }
   if (positionals.length !== 1 || !['init', 'check'].includes(positionals[0]) || !values.name)
