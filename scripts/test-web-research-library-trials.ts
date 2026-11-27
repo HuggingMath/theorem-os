@@ -258,7 +258,12 @@ try {
     await frozenEvidence.getByText('namespace Shared', { exact: false }).waitFor();
     assert.equal(await peer.evaluate(async id => (await fetch(`/api/research/library-trials/${id}`)).status, new URL(libraryReturn).searchParams.get('trial')), 404,
       'A project member reviews the shared snapshot without access to the author’s private trial');
-    await peerFeedback.locator('[data-candidate-approve]').click(); await peerFeedback.locator('[data-candidate-delivery-status="approved"]').waitFor();
+    const decision = peerFeedback.locator('[data-feedback-decision]');
+    await decision.locator('summary').click();
+    await decision.locator('[data-decision-status]').selectOption('accepted');
+    await decision.getByLabel(language === 'zh' ? '理由' : 'Reason', { exact: true }).fill('The reviewed trial supports a new attempt with this fixed library.');
+    await decision.locator('[data-save-decision]').click();
+    await peerFeedback.locator('[data-candidate-delivery-status="approved"]').waitFor();
     assert.equal(commandCalls, beforeCommands, 'Human approval for a new attempt never dispatches to the completed run');
     await page.reload(); await ownerFeedback.locator('[data-prepare-library-attempt]').waitFor();
     const workersAtPreparation = workerCalls;

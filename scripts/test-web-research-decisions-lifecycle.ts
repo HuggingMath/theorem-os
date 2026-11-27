@@ -91,53 +91,16 @@ try {
     const run = await seedCooperativeRun(service, page.context(), origin, { providerId: 'openai', apiKey: 'sk-disposable-audit-fixture', model: 'fixture', effort: 'low', environment: 'standard', source, task: 'Prove True', maxTurns: 2, maxRunSeconds: 600, workers: 2, coordination: 'cooperative' });
     await waitForRun({page},run.id,item=>Boolean(item.observation));
 
-    phase = `personal-guidance-unknown-${language}-${width}`;
-    const route = `${origin}/problem.html?run=${run.id}&tab=route`;
-    const sent: any[] = [];
-    page.on('request', request => { if (request.method() === 'POST' && new URL(request.url()).pathname === `/api/runs/${run.id}/guidance`) sent.push(request.postDataJSON()); });
-    await page.goto(route); await page.locator('[data-inline-open]').click();
-    const note = language === 'zh' ? '请先核对归纳基，再按 n 到 n+1 的顺序处理归纳步。' : 'Check the induction base before deriving the step from n to n+1.';
-    await page.locator('[data-inline-guidance] > summary').click();
-    const guide = page.locator('[data-inline-guidance]');
-    await guide.getByLabel(language === 'zh' ? '希望怎样改进这一步或路线' : 'How should this step or route improve?', { exact: true }).fill(note);
-    await guide.locator('[data-inline-confirm-guidance]').check(); await guide.locator('[data-inline-send-guidance]').click();
-    await guide.locator('[data-inline-command-status="unknown"]').waitFor();
-    const original = structuredClone(sent[0]);
-    await page.reload(); await page.locator('[data-inline-open]').click(); await guide.locator('[data-inline-pending-guidance]').waitFor();
-    assert.equal(await guide.getByLabel(language === 'zh' ? '希望怎样改进这一步或路线' : 'How should this step or route improve?', { exact: true }).inputValue(), note);
-    assert.equal(sent.length, 1); assert.equal(await guide.locator('[data-inline-send-guidance]').isDisabled(), true);
-    await guide.locator('[data-inline-retry-command]').click(); await settled(page); assert.equal(sent.length, 1);
-    // Receipt absent on the server: only an explicit retry may POST the original command.
-    let missing = true, resolved = false, hold = false, release: (() => void) | undefined;
-    await page.route(`**/api/runs/${run.id}/commands/${original.id}`, async route => {
-      if (hold) await new Promise<void>(resolve => { release = resolve; });
-      if (resolved) await route.fulfill({ json: { receipt: { id: original.id, status: 'delivered' } } });
-      else if (missing) await route.fulfill({ status: 404, json: { error: 'Fixture receipt absent' } });
-      else await route.continue();
-    });
-    await page.reload(); await page.locator('[data-inline-open]').click(); await guide.locator('[data-inline-pending-guidance]').waitFor();
-    await settled(page); assert.equal(sent.length, 1);
-    await guide.locator('[data-inline-retry-command]').click(); await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>('[data-inline-retry-command]')?.disabled);
-    assert.equal(sent.length, 2); assert.deepEqual(sent[1], original);
-    const revised = note + ' NEW UNSUBMITTED DETAIL';
-    await guide.getByLabel(language === 'zh' ? '希望怎样改进这一步或路线' : 'How should this step or route improve?', { exact: true }).fill(revised);
-    controls.get(run.id)!.observation.inspection.planVersion = 'plan-v2'; controls.get(run.id)!.observation.sequence++; controls.get(run.id)!.emit();
-    await waitForRun({page},run.id,item=>item.observation?.inspection.planVersion==='plan-v2');
-    await page.reload(); await page.locator('[data-inline-open]').click(); await guide.locator('[data-inline-pending-guidance]').waitFor(); await settled(page);
-    assert.equal(await guide.locator('[data-inline-retry-command]').count(), 0); assert.equal(sent.length, 2);
-    assert.equal(await guide.getByLabel(language === 'zh' ? '希望怎样改进这一步或路线' : 'How should this step or route improve?', { exact: true }).inputValue(), revised);
-    await page.locator('[data-inline-drawer]').screenshot({path:path.join(output, `guidance-changed-target-${language}-${width}.png`)});
-    missing = false; resolved = true; hold = true;
-    await guide.locator('[data-inline-query-command]').click();
-    for(let i=0;i<50&&!release;i++)await page.waitForTimeout(20);
-    const newer = revised + ' WHILE WAITING';
-    await guide.getByLabel(language === 'zh' ? '希望怎样改进这一步或路线' : 'How should this step or route improve?', { exact: true }).fill(newer);
-    assert.ok(release); release!(); hold = false;
-    await guide.locator('[data-inline-command-status="delivered"]').waitFor();
-    assert.equal(await guide.getByLabel(language === 'zh' ? '希望怎样改进这一步或路线' : 'How should this step or route improve?', { exact: true }).inputValue(), newer);
-    await page.reload(); await page.locator('[data-inline-open]').click(); await guide.waitFor(); await settled(page);
-    assert.equal(await guide.locator('[data-inline-pending-guidance]').count(), 0); assert.equal(sent.length, 2);
-    checks.push({id:'guidance-original-id-refresh-retry-version-change-late-result',language,width,requestIds:sent.map(x=>x.id),preservedDraft:newer});
+    phase = `historical-guidance-cannot-dispatch-${language}-${width}`;
+    await page.goto(`${origin}/problem.html?run=${run.id}&tab=route`);
+    await page.locator('[data-inline-open]').click();
+    await page.locator('[data-inline-drawer][open]').waitFor();
+    assert.equal(await page.locator('[data-inline-guidance]').count(), 0);
+    await assert.rejects(http(page, 'POST', `/api/runs/${run.id}/guidance`, {
+      id: 'retired-guidance', text: 'Check the induction base.', recipient: { kind: 'lead' },
+    }), /409/);
+    assert.deepEqual(commands, []);
+    checks.push({id:'historical-guidance-cannot-dispatch',language,width});
 
     phase = `solo-candidate-review-${language}-${width}`;
     let project = (await http<{item:ResearchProjectDetail}>(page,'POST','/api/research/theorems',{requestId:crypto.randomUUID(),title:'Solo reviewed candidate',visibility:'members',candidateDeliveryPolicy:'reviewed'})).item;

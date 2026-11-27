@@ -169,14 +169,14 @@ try {
   await page.locator('#composer-settings').click(); await page.locator('#model').fill('lean-draft-model');
   await page.locator('[data-settings-section="settings-execution"]').click();
   await page.locator('#max-turns').fill('7'); await page.locator('#max-seconds').fill('600');
-  await page.locator('#research-mode').selectOption('native-team');
+  assert.match(await page.locator('#current-research-mode').innerText(), /Codex 原生团队/u);
   await page.locator('#native-team-capacity').selectOption('5');
   await closeSettings(page); const lean = await save(page, 'Lean 待完成版本'); assert.equal(lean.version.value.mode, 'lean');
   await chooseVersion(other, lean); await other.locator('body[data-entry=lean]').waitFor({ state: 'attached' });
   assert.equal(await other.locator('#source').inputValue(), leanSource); assert.equal(await other.locator('#task').inputValue(), '保留这一份未完成证明与预算。');
   assert.equal(await other.locator('#model').inputValue(), 'lean-draft-model'); assert.equal(await other.locator('#max-turns').inputValue(), '7');
   assert.equal(await other.locator('#max-seconds').inputValue(), '600');
-  assert.equal(await other.locator('#research-mode').inputValue(), 'native-team');
+  assert.match(await other.locator('#current-research-mode').textContent() ?? '', /Native Codex team/u);
   assert.equal(await other.locator('#native-team-capacity').inputValue(), '5');
   assert.equal(await other.locator('#api-key').inputValue(), '');
   await other.goto(`${origin}/?accountDraft=${lean.draft.id}&draftVersion=${lean.version.id}`);

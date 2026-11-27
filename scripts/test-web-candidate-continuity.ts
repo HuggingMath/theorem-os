@@ -13,7 +13,7 @@ import { mathDigest } from '../src/math/mathRuntimeIo';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebObservation } from '../apps/web/collaboration';
 import type { ResearchFeedback, ResearchProjectDetail } from '../apps/web/researchProjectTypes';
-import { freePort, startBrowser, preferFullCollaboration, settled } from './web-scenario';
+import { freePort, startBrowser, preferFullCollaboration } from './web-scenario';
 
 const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/product-continuity/candidate-continuity');
 await fs.mkdir(output, { recursive: true });
@@ -107,9 +107,9 @@ try {
     assert.equal(candidate.proofCheck?.status, 'checked'); assert.equal(candidate.candidateDelivery?.status, 'awaiting-review');
     assert.equal(commands.length, commandsBefore, 'Checking must not dispatch a candidate that needs human review');
     await reviewer.goto(`${href}#feedback-${candidate.id}`);
-    let row = reviewer.locator(`#feedback-${candidate.id}`); await row.locator('[data-candidate-approve]').waitFor();
+    let row = reviewer.locator(`#feedback-${candidate.id}`); await row.locator('[data-candidate-delivery-status="awaiting-review"]').waitFor();
     await author.goto(`${href}#feedback-${candidate.id}`);
-    assert.equal(await author.locator(`#feedback-${candidate.id} [data-candidate-approve]`).count(), 0, 'The author cannot approve their own candidate');
+    await author.locator(`#feedback-${candidate.id} [data-decision-peer-required]`).waitFor();
     await reviewer.screenshot({ path: path.join(output, `awaiting-review-${language}-${width}.png`), fullPage: true });
     phase = `review-and-revise-${language}-${width}`;
     await row.locator('[data-review-comment]').fill('Please spell out the constructor used to close True.');
@@ -137,12 +137,18 @@ try {
     await row.locator('[data-candidate-revision] > summary').click(); await row.locator('[data-candidate-revision-diff]').waitFor();
     assert.match(await row.locator('[data-candidate-revision]').innerText(), /True\.intro/);
     await reviewer.screenshot({ path: path.join(output, `revision-${language}-${width}.png`), fullPage: true });
-    phase = `approve-once-${language}-${width}`;
-    const approvedResponse = mutation(reviewer, `${projectPath}/feedback/${candidate.id}/candidate-delivery`);
-    await row.locator('[data-candidate-approve]').click(); assert.equal((await approvedResponse).status(), 200);
-    await settled(reviewer); assert.equal(commands.length, commandsBefore + 1);
+    phase = `human-adoption-does-not-dispatch-${language}-${width}`;
+    assert.equal(await row.locator('[data-candidate-approve], [data-candidate-withdraw]').count(), 0);
+    const decision = row.locator('[data-feedback-decision]');
+    await decision.locator('summary').click();
+    await decision.locator('[data-decision-status]').selectOption('accepted');
+    await decision.getByLabel(language === 'zh' ? '理由' : 'Reason', { exact: true }).fill('The explicit constructor proves the reviewed statement.');
+    const adoptionResponse = mutation(reviewer, `${projectPath}/feedback/${candidate.id}/decision`);
+    await decision.locator('[data-save-decision]').click(); assert.equal((await adoptionResponse).status(), 200);
     candidate = (await http<{ item: ResearchFeedback }>(reviewer, 'GET', `${projectPath}/feedback/${candidate.id}`)).item;
-    assert.equal(candidate.candidateDelivery?.status, 'dispatched');
+    assert.equal(candidate.decision.status, 'accepted');
+    assert.equal(candidate.delivery.status, 'not-sent');
+    assert.equal(commands.length, commandsBefore);
     phase = `continue-work-after-plan-change-${language}-${width}`;
     project = (await http<{ item: ResearchProjectDetail }>(author, 'GET', projectPath)).item;
     await http(author, 'POST', `${projectPath}/assignments`, { requestId: crypto.randomUUID(), expectedRevision: project.revision, target, status: 'claimed' });
@@ -167,9 +173,9 @@ try {
     project = (await http<{ item: ResearchProjectDetail }>(author, 'GET', projectPath)).item;
     assert.ok(project.assignments.some(item => item.author.id === authorSession.researcherId && item.target.taskRef?.version === 'goal-v1' && item.status === 'released'));
     assert.ok(project.assignments.some(item => item.author.id === authorSession.researcherId && item.target.taskRef?.version === 'goal-v2' && item.status === 'claimed'));
-    assert.equal(commands.length, commandsBefore + 1, 'Moving a claim does not submit another proof or rerun research');
+    assert.equal(commands.length, commandsBefore, 'Moving a claim does not submit another proof or rerun research');
     await author.screenshot({ path: path.join(output, `continued-work-${language}-${width}.png`), fullPage: true });
-    checks.push({ language, width, checkedBeforeReview: true, authorCannotApprove: true, revisionRetainsEvidenceAndResponses: true, supersededCandidateNotDispatched: true, approvedDispatchesOnce: true, claimContinuesWithHistory: true });
+    checks.push({ language, width, checkedBeforeReview: true, authorCannotApprove: true, revisionRetainsEvidenceAndResponses: true, supersededCandidateNotDispatched: true, humanDecisionWithoutDispatch: true, claimContinuesWithHistory: true });
     assert.ok(await reviewer.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'No page overflow');
     await Promise.all(actors.map(actor => actor.close()));
   }

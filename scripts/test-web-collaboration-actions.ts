@@ -10,7 +10,7 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebObservation } from '../apps/web/collaboration';
-import type { ResearchProjectDetail } from '../apps/web/researchProjectTypes';
+import type { ResearchFeedback, ResearchProjectDetail } from '../apps/web/researchProjectTypes';
 import type { ResearchCollaborationInbox, ResearchIssue } from '../apps/web/researchCollaborationTypes';
 import { freePort, startBrowser, preferFullCollaboration, settled } from './web-scenario';
 import { mathDigest } from '../src/math/mathRuntimeIo';
@@ -21,7 +21,7 @@ const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-collaboratio
 const source = 'theorem plan_access_fixture : True := by sorry\n', commit = '1'.repeat(40), environment = 'e'.repeat(64);
 const now = () => new Date().toISOString(), hash = mathDigest;
 const controls = new Map<string, { observation: WebObservation; finish(): void; emit(): void }>();
-const commands: { type: string; id: string }[] = [];
+const commands: string[] = [];
 const checks: object[] = [], errors: string[] = [], external: string[] = [], mail: unknown[] = [];
 let phase = 'setup', controlledChecks = 0;
 function observation(id: string): WebObservation {
@@ -55,12 +55,8 @@ const runner: WebRunner = {
   },
   async command(_runId, command) {
     if (command.type === 'capture') return { id: 'capture', status: 'captured' };
-    if (command.type === 'guidance-withdraw') return { id: command.id, status: 'rejected', reason: 'fixture_guidance_withdraw_not_simulated' };
-    const id = command.type === 'guidance' ? command.guidance.id : command.type === 'plan-approval' ? command.approval.id : command.proposal.id;
-    commands.push({ type: command.type, id });
-    if (command.type === 'edit-preview') return { id, status: 'validated', baseVersion: 'plan-v1', affectedTaskIds: ['goal'], changes: [{ taskId: 'goal', fields: ['objective'] }] };
-    if (command.type === 'edit') return { id, status: 'applied', baseVersion: 'plan-v1', planVersion: 'plan-v2', affectedTaskIds: ['goal'] };
-    return { id, status: 'delivered' };
+    commands.push(command.type);
+    throw new Error('A historical run must not receive scheduler commands');
   },
 };
 const port = await freePort(), origin = 'http://127.0.0.1:' + port;
@@ -130,37 +126,40 @@ try {
   currentIssue = (await http<{ item: ResearchIssue }>(owner, 'POST', `${projectPath}/issues/${issue.id}/resolution`, { requestId: crypto.randomUUID(), expectedRevision: currentIssue.revision, action: 'resolve', proposalId: proposal.id, text: '采用辅助引理后消去前提的路线' })).item;
   checks.push({ name: phase, exactRevisionRecovered: true, staleSubmissionBlocked: true, explicitReview: true });
 
-  phase = 'issue-guidance-confirmation-and-uncertain-response'; await open(owner, href);
-  const execution = owner.locator(`#issue-${issue.id} [data-issue-execution]`);
-  await execution.getByText('将决议转为执行', { exact: true }).click();
-  await execution.getByLabel('执行说明').fill('请采用已决议的引理路线，补全连接原题的最后一步');
-  await execution.locator('[data-prepare-issue-execution]').click(); await execution.locator('[data-issue-execution-preview]').waitFor();
-  assert.equal(await execution.locator('[data-send-issue-execution]').isDisabled(), true); assert.equal(commands.length, 0);
-  await execution.locator('[data-confirm-issue-execution]').check();
-  let dropped = false;
-  await owner.route('**' + projectPath + '/feedback', async route => {
-    if (route.request().method() === 'POST' && !dropped) { dropped = true; await route.fetch(); await route.abort('failed'); } else await route.continue();
+  phase = 'historical-issue-execution-is-read-only';
+  const resolution = currentIssue.resolution!;
+  const issueSource = { issueId: issue.id, issueRevision: currentIssue.revision,
+    resolutionAt: resolution.createdAt, proposalId: proposal.id };
+  const historicalFeedback: ResearchFeedback = {
+    id: 'historical-guidance', requestId: crypto.randomUUID(), projectId: project.id,
+    author: resolution.author, kind: 'guidance', text: '历史指导：用辅助引理完成最后一步', visibility: 'members',
+    issueSource: { ...issueSource, title: issue.title, resolution: { text: resolution.text, author: resolution.author },
+      proposal: { id: proposal.id, text: proposal.text, author: proposal.author }, originalTarget: target },
+    target, payload: { recipient: { kind: 'task', id: 'goal' } }, delivery: { status: 'delivered', commandId: 'historical-guidance' },
+    decision: { status: 'pending', evidenceRefs: [] }, execution: { status: 'not-started', taskRefs: [], resultRefs: [] },
+    revision: 1, createdAt: resolution.createdAt, updatedAt: resolution.createdAt,
+  };
+  const projectRecord = ['research', 'projects', `${project.id}.json`];
+  const stored = service.storage.getRecord<{ feedback: ResearchFeedback[] }>(projectRecord)!;
+  stored.feedback.push(historicalFeedback);
+  service.storage.saveRecord(projectRecord, stored);
+  await open(owner, href);
+  const issueAnchor = '#issue-' + issue.id;
+  const resolvedIssue = owner.locator(issueAnchor);
+  await resolvedIssue.getByText(resolution.text, { exact: true }).waitFor();
+  assert.equal(await resolvedIssue.locator('[data-prepare-issue-execution]').count(), 0);
+  const record = owner.locator('#feedback-' + historicalFeedback.id);
+  await record.locator('[data-feedback-issue-source] summary').click();
+  await record.getByText(proposal.text, { exact: true }).waitFor();
+  assert.equal(await record.getByRole('link', { name: '查看议题', exact: true }).getAttribute('href'), issueAnchor);
+  const session = await http<{ csrfToken: string }>(owner, 'GET', '/api/session');
+  const legacyMutation = await owner.request.post(origin + projectPath + '/feedback', {
+    headers: { 'X-CSRF-Token': session.csrfToken },
+    data: { requestId: crypto.randomUUID(), kind: 'guidance', text: '继续历史运行', issueSource, target, recipient: { kind: 'task', id: 'goal' } },
   });
-  await execution.locator('[data-send-issue-execution]').click(); await execution.getByRole('button', { name: '查看后续采纳与执行', exact: true }).waitFor();
-  await owner.unroute('**' + projectPath + '/feedback');
-  project = (await http<{ item: ResearchProjectDetail }>(owner, 'GET', projectPath)).item;
-  const guidance = project.feedback.find(item => item.kind === 'guidance')!; assert.ok(guidance);
-  assert.equal(guidance.issueSource?.proposal?.id, proposal.id); assert.deepEqual(guidance.issueSource?.originalTarget, target);
-  assert.equal(commands.filter(command => command.type === 'guidance').length, 1); assert.equal(await execution.locator('[data-issue-execution-pending]').count(), 0);
-  checks.push({ name: phase, explicitConfirmation: true, frozenOrigin: true, droppedResponseRecovered: true, guidanceDispatches: 1 });
-
-  phase = 'issue-plan-preview-before-apply';
-  await execution.locator('[data-issue-execution-kind]').selectOption('plan-edit');
-  await execution.getByLabel('任务目标', { exact: true }).fill('使用辅助事实构造最终证明，逐步核对依赖');
-  await save(owner, 'POST', `${projectPath}/runs/${createdRun.id}/edits/preview`, () => execution.locator('[data-prepare-issue-execution]').click());
-  assert.equal(commands.filter(command => command.type === 'edit-preview').length, 1); assert.equal(commands.filter(command => command.type === 'edit').length, 0);
-  await execution.locator('[data-confirm-issue-execution]').check();
-  await save(owner, 'POST', projectPath + '/feedback', () => execution.locator('[data-send-issue-execution]').click(), 201);
-  project = (await http<{ item: ResearchProjectDetail }>(owner, 'GET', projectPath)).item;
-  const edit = project.feedback.find(item => item.kind === 'plan-edit')!; assert.ok(edit?.payload && 'proposal' in edit.payload);
-  assert.equal(edit.payload.proposal.tasks.length, 2); assert.equal(edit.payload.proposal.tasks.find(task => task.id === 'lemma')?.objective, '证明辅助事实');
-  assert.equal(commands.filter(command => command.type === 'edit').length, 1);
-  checks.push({ name: phase, previewHasNoEdit: true, fullPlanPreserved: true, explicitApply: true });
+  assert.equal(legacyMutation.status(), 409);
+  assert.deepEqual(commands, []);
+  checks.push({ name: phase, frozenOriginVisible: true, legacyWriteRejected: true });
 
   phase = 'review-ownership-and-personal-inbox';
   const feedback = (await http<{ item: ResearchProjectDetail['feedback'][number] }>(owner, 'POST', projectPath + '/feedback', { requestId: crypto.randomUUID(), kind: 'discussion', text: '请评审这一步 $P \\Rightarrow Q$', statementVersionId: version })).item;

@@ -76,9 +76,12 @@ try{
   await page.unroute(unknownPattern);await page.locator('#formalize-start:enabled').click();await page.waitForURL(url=>url.searchParams.has('chat'));
   await waitSubmitted(page,first.draft.id,undefined,first.version.id);
   const all=await list(page),submitted=all.find(x=>x.id===first.draft.id)!.versions.find(x=>x.id===first.version.id)!;assert.ok(submitted.submission?.href);assert.equal(all.find(x=>x.id===second.draft.id)!.versions[0].status??'open','open');
-  const another=await context(language,width);await another.addCookies(await current.cookies(origin));const other=await another.newPage();active=other;await other.goto(`${origin}/workspace.html?tab=drafts`);await other.locator('[data-personal-show-archived-drafts]').check();const archived=other.locator(`[data-personal-draft="${first.draft.id}"]`);await archived.waitFor();await archived.locator(':scope > summary').click();await archived.locator('[data-draft-status=submitted] a').waitFor();assert.equal(await archived.locator('[data-draft-status=submitted] a').getAttribute('href'),submitted.submission!.href);
+  const another=await context(language,width);await another.addCookies(await current.cookies(origin));const other=await another.newPage();active=other;await other.goto(`${origin}/workspace.html?tab=drafts`);await other.locator('[data-personal-show-archived-drafts]').check();const archived=other.locator(`[data-personal-draft="${first.draft.id}"]`);await archived.waitFor();await archived.locator(':scope > summary').click();
+  const submittedVersion = archived.locator('article').filter({ has: archived.locator(`a[href*="draftVersion=${first.version.id}"]`) });
+  const submittedLink = submittedVersion.locator('[data-draft-status=submitted] a');
+  await submittedLink.waitFor(); assert.equal(await submittedLink.getAttribute('href'), submitted.submission!.href);
   await other.screenshot({path:path.join(output,`${language}-${width}-submitted-on-another-device.png`),fullPage:true});assert.ok(await other.evaluate(()=>Math.max(document.body.scrollWidth,document.documentElement.scrollWidth)<=innerWidth+1));
-  await archived.locator('[data-draft-status=submitted] a').click();await other.waitForURL(url=>url.searchParams.has('chat')||url.searchParams.has('formalization')||url.searchParams.has('run')||url.pathname.endsWith('/formalize.html')&&url.searchParams.has('id'));
+  await submittedLink.click();await other.waitForURL(url=>url.searchParams.has('chat')||url.searchParams.has('formalization')||url.searchParams.has('run')||url.pathname.endsWith('/formalize.html')&&url.searchParams.has('id'));
   phase=`restore-submitted-${language}`;active=page;
   await page.goto(`${origin}/?accountDraft=${first.draft.id}&draftVersion=${first.version.id}`);await page.locator('#formalize-original').waitFor();await restore(page,first);
   await page.waitForFunction(text=>(document.querySelector('#formalize-original') as HTMLTextAreaElement)?.value===text,webFormalizationStatement);
