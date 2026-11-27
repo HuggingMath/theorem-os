@@ -45,12 +45,9 @@
 
 ### Overview Film (1 min · 1080p)
 
-<div align="center">
-  <a href="https://github.com/HuggingMath/theorem-os/releases/download/v0.1.0/theoremos-promo-1080p.mp4">
-    <img src="./docs/assets/promo-video-cover.jpg" alt="TheoremOS 1-minute overview film: from conjecture input, Lean-typed lemma graphs, terminal diagnosis, and S3 kernel acceptance to full solved-problem proof trajectories" width="100%">
-  </a>
-  <p><sub>Click the poster to watch or download the <a href="https://github.com/HuggingMath/theorem-os/releases/download/v0.1.0/theoremos-promo-1080p.mp4"><strong>1080p HD overview film (1:07 · EN narration &amp; subtitles)</strong></a> — Conjecture → Lean Lemma Graph &amp; Guidance → CLI Replay → Co-Authorship → M1–M5 Harness → S3 Kernel Acceptance → Public Archives &amp; Solved Proof Trajectory.</sub></p>
-</div>
+https://github.com/user-attachments/assets/57562769-aa15-474c-87ff-73265f097ec8
+
+<p align="center"><sub><strong>TheoremOS Overview Film (1:07 · EN narration &amp; subtitles)</strong> — Conjecture → Lean Lemma Graph &amp; Guidance → CLI Replay → Co-Authorship → M1–M5 Harness → S3 Kernel Acceptance → Public Archives &amp; Solved Proof Trajectory · <a href="https://github.com/HuggingMath/theorem-os/releases/download/v0.1.0/theoremos-promo-1080p.mp4">Download full-bitrate 1080p master (31 MB)</a></sub></p>
 
 ### Why TheoremOS?
 
