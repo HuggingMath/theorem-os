@@ -217,6 +217,7 @@ export class CollaborationView {
       else if (button.hasAttribute('data-collab-open-report')) this.openReport();
       else if (button.dataset.collabTaskView) this.switchTaskView(view, button.dataset.collabTaskView as TaskView);
       else if (button.dataset.collabGraphZoom) this.zoomGraph(view, button.dataset.collabGraphZoom as 'in' | 'out' | 'reset' | 'fit');
+      else if (button.hasAttribute('data-collab-graph-expand')) this.toggleGraphExpand(view);
       else if (button.hasAttribute('data-collab-task-reset')) { this.resetTaskFilters(view); element.querySelector<HTMLInputElement>('[data-collab-task-search]')!.focus({ preventScroll: true }); }
       else if (button.hasAttribute('data-collab-task-show-selected')) { this.resetTaskFilters(view); this.revealSelectedTask(view); }
       else if (button.hasAttribute('data-collab-task-inspect-selected')) this.selectTask(view, view.selectedTask, view.selectedVersion, true);
@@ -646,16 +647,51 @@ export class CollaborationView {
       event.preventDefault();
       this.zoomGraph(view, view.graphZoom * Math.exp(-event.deltaY * (event.deltaMode === 1 ? 0.05 : 0.0015)), { x: event.clientX, y: event.clientY });
     }, { passive: false });
+    pane.addEventListener('dblclick', event => {
+      if ((event.target as Element).closest('button')) return;
+      const next = view.graphZoom >= 1.45 ? 1 : Math.min(2.2, view.graphZoom * 1.35);
+      this.zoomGraph(view, next, { x: event.clientX, y: event.clientY });
+    });
     pane.addEventListener('keydown', event => {
+      if (event.key === 'Escape') {
+        const frame = pane.closest<HTMLElement>('.collab-graph-frame');
+        if (frame?.dataset.expanded === 'true') { event.preventDefault(); this.toggleGraphExpand(view, false); return; }
+      }
       if (event.target !== pane || event.altKey || event.ctrlKey || event.metaKey) return;
       const action = event.key === '+' || event.key === '=' ? 'in' : event.key === '-' ? 'out' : event.key === '0' ? 'reset' : undefined;
       if (action) { event.preventDefault(); this.zoomGraph(view, action); }
     });
   }
+  private toggleGraphExpand(view: ViewState, force?: boolean) {
+    const frame = view.element.querySelector<HTMLElement>('.collab-graph-frame');
+    const button = view.element.querySelector<HTMLButtonElement>('[data-collab-graph-expand]');
+    if (!frame || !button) return;
+    const expanded = force ?? frame.dataset.expanded !== 'true';
+    frame.dataset.expanded = String(expanded);
+    button.setAttribute('aria-expanded', String(expanded));
+    button.textContent = expanded ? t('收起画布') : t('展开画布');
+    if (expanded) {
+      frame.setAttribute('role', 'dialog'); frame.setAttribute('aria-modal', 'true');
+      const onEsc = (event: KeyboardEvent) => {
+        if (event.key === 'Escape' && frame.dataset.expanded === 'true') {
+          event.preventDefault(); this.toggleGraphExpand(view, false);
+          button.focus({ preventScroll: true });
+        }
+      };
+      window.addEventListener('keydown', onEsc, { once: false });
+      (frame as HTMLElement & { _esc?: (e: KeyboardEvent) => void })._esc = onEsc;
+    } else {
+      frame.removeAttribute('role'); frame.removeAttribute('aria-modal');
+      const prev = (frame as HTMLElement & { _esc?: (e: KeyboardEvent) => void })._esc;
+      if (prev) window.removeEventListener('keydown', prev);
+    }
+  }
   // The pane's bottom padding keeps the floating legend clear of the last row; fit within what remains.
   private fitZoom(pane: HTMLElement, layout: GraphLayout) {
     const style = getComputedStyle(pane);
-    const height = parseFloat(style.maxHeight) - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+    const maxH = parseFloat(style.maxHeight);
+    const baseH = Number.isFinite(maxH) && maxH > 0 ? maxH : pane.clientHeight;
+    const height = Math.max(180, baseH - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom));
     return Math.min(pane.clientWidth / layout.width, height / layout.height, 1);
   }
   private zoomGraph(view: ViewState, target: number | 'in' | 'out' | 'reset' | 'fit', anchor?: { x: number; y: number }) {
@@ -663,7 +699,7 @@ export class CollaborationView {
     const previous = view.graphZoom;
     const next = target === 'in' ? previous * 1.2 : target === 'out' ? previous / 1.2 : target === 'reset' ? 1
       : target === 'fit' ? (layout ? this.fitZoom(pane, layout) : 1) : target;
-    view.graphZoom = Math.min(1.6, Math.max(minGraphZoom, Math.round(next * 100) / 100));
+    view.graphZoom = Math.min(2.5, Math.max(minGraphZoom, Math.round(next * 100) / 100));
     // Keep the point under the pointer (or the viewport centre) in place.
     const box = pane.getBoundingClientRect(), x = anchor ? anchor.x - box.left : pane.clientWidth / 2, y = anchor ? anchor.y - box.top : pane.clientHeight / 2;
     const contentX = (pane.scrollLeft + x) / previous, contentY = (pane.scrollTop + y) / previous;
@@ -677,7 +713,7 @@ export class CollaborationView {
     const level = view.element.querySelector<HTMLElement>('[data-collab-graph-zoom-level]')!, text = `${Math.round(view.graphZoom * 100)}%`;
     if (level.textContent !== text) level.textContent = text;
     for (const button of view.element.querySelectorAll<HTMLButtonElement>('[data-collab-graph-zoom="in"],[data-collab-graph-zoom="out"]'))
-      button.disabled = button.dataset.collabGraphZoom === 'in' ? view.graphZoom >= 1.6 : view.graphZoom <= minGraphZoom;
+      button.disabled = button.dataset.collabGraphZoom === 'in' ? view.graphZoom >= 2.5 : view.graphZoom <= minGraphZoom;
   }
   // A card's footer shares its width with the token count, so a checked proof uses the meter legend's shorter word.
   private taskCard(view: ViewState, task: Task, peak: number): TaskCard {

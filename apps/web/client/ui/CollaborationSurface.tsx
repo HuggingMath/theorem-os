@@ -40,7 +40,8 @@ export function CollaborationSurface(props: { runId: string; taskView: TaskView;
             <p class="collab-help"><span class="collab-legend-and">{t('先完成')}</span><span class="collab-legend-or">{t('可选路线')}</span><TermHint id="graph" /><span class="collab-legend-usage" data-collab-usage-legend hidden></span><span>{t('拖动平移')}</span></p>
             <div class="collab-graph-zoom" role="group" aria-label={t('依赖图缩放')}>
               <button type="button" data-collab-graph-zoom="out" aria-label={t('缩小')}>−</button><button type="button" data-collab-graph-zoom="reset" aria-label={t('恢复 100%')} data-collab-graph-zoom-level>100%</button>
-              <button type="button" data-collab-graph-zoom="in" aria-label={t('放大')}>+</button><button type="button" data-collab-graph-zoom="fit">{t('适应')}</button></div>
+              <button type="button" data-collab-graph-zoom="in" aria-label={t('放大')}>+</button><button type="button" data-collab-graph-zoom="fit">{t('适应')}</button>
+              <button type="button" class="collab-graph-expand" data-collab-graph-expand aria-expanded="false">{t('展开画布')}</button></div>
           </div>
         </div>
         <div data-collab-task-list class="collab-task-list" data-focus-key="task-list-scroll" tabIndex={0} aria-label={t('任务列表')}></div>

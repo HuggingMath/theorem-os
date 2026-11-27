@@ -101,12 +101,17 @@ function rawDetails(values: [string, string | undefined][], locale: Locale): str
 function acceptance(record: ArchiveIndexRecord, locale: Locale): string {
   const final = record.campaign;
   if (!final) return '';
+  const receipt = final.kernelReceiptIds[0] ? short(final.kernelReceiptIds[0]) : '';
   return `<div class="process-acceptance" data-process-acceptance>
-    <div class="process-detail-icon" data-tone="passed">${icon('shield-check')}</div>
-    <p class="process-eyebrow">${choose(locale, '本地独立验收', 'Independent local acceptance')}</p>
+    <div class="process-acceptance-top">
+      <div class="process-detail-icon" data-tone="passed">${icon('shield-check')}</div>
+      <p class="process-eyebrow">${choose(locale, '本地独立验收', 'Independent local acceptance')}</p>
+      <span class="process-acceptance-kernel">LEAN 4</span>
+    </div>
     <h3>${choose(locale, '完整原题已通过', 'The original problem passed')}</h3>
     <p>${choose(locale, 'Lean 内核检查通过，原题比较器退出码为 0。', 'The Lean kernel check passed and the original comparator exited with code 0.')}</p>
-    <div class="process-targets">${final.targets.map(target => `<code>${escape(target)}</code>`).join('')}</div>
+    <div class="process-targets" data-proved-label="${choose(locale, '✓ 已通过', '✓ proved')}">${final.targets.map(target => `<code>${escape(target)}</code>`).join('')}</div>
+    <div class="process-acceptance-foot">${receipt ? `<span>receipt ${escape(receipt)}</span>` : '<span></span>'}<span>sorry: 0 · axioms: standard</span></div>
     <div class="process-detail-actions"><button class="button button-primary" data-process-open-tab="source">${icon('file-code-2')}${choose(locale, '阅读最终证明', 'Read the final proof')}</button>
       <button class="button" data-process-open-tab="evidence">${icon('shield-check')}${choose(locale, '查看验收证据', 'View acceptance evidence')}</button></div>
     ${rawDetails([['Run ID', final.runId], ['Proof commit', final.proofCommit], ['SHA-256', final.proofSha256], ['Lean receipts', final.kernelReceiptIds.join('\n')]], locale)}
@@ -267,17 +272,31 @@ export function renderArchiveProcess(record: ArchiveIndexRecord, process: Archiv
   const selectedIndex = selected ? filtered.indexOf(selected) : -1;
   const current = process.runs.indexOf(run);
   const taskCount = new Set(process.runs.flatMap(run => run.tasks.map(task => task.id))).size;
+  const provedCount = run.tasks.filter(task => task.status === 'integrated' || task.status === 'completed').length;
+  const blockedCount = run.tasks.filter(task => task.status === 'blocked').length;
   const checks = process.runs.reduce((sum, run) => sum + (run.checks?.length ?? run.events.filter(event => event.kind === 'lean-check').length), 0);
   const meaningfulEvents = run.events.filter(event => event.kind === 'baseline' || event.kind === 'transition' && !event.message?.trim());
   const viewToolbar = `<div class="process-view-toolbar"><h4${selection.view === 'global' ? ' class="sr-only"' : ''}>${selection.view === 'global' ? choose(locale, '全局解题轨迹', 'Whole-problem trajectory') : choose(locale, '解题路线', 'Proof roadmap')}</h4><div class="process-step-filters" role="group" aria-label="${choose(locale, '轨迹视图', 'Process view')}"><button data-process-view="global" aria-pressed="${selection.view === 'global'}">${choose(locale, '全局轨迹', 'Global trajectory')}</button><button data-process-view="roadmap" aria-pressed="${selection.view === 'roadmap'}">${icon('git-branch')}${choose(locale, '本轮路线图', 'Run roadmap')}</button><button data-process-view="steps" aria-pressed="${selection.view === 'steps'}">${choose(locale, '逐步记录', 'Step records')}</button></div></div>`;
   if (selection.view === 'global') return `<div class="archive-process" data-process-layout="global" data-process-run-id="${escape(run.runId)}">${viewToolbar}${renderGlobalTrajectory(record, process, locale, value => processStatus(value, locale), { run: run.runId, acceptance: acceptance(record, locale), evidence: researchEvidence })}</div>`;
+  const taskSub = provedCount || blockedCount
+    ? choose(locale, `${provedCount} 已集成${blockedCount ? ` · ${blockedCount} 受阻` : ''}`, `${provedCount} proved${blockedCount ? ` · ${blockedCount} blocked` : ''}`)
+    : '';
+  const runDur = duration(run, locale);
   return `<div class="archive-process" data-process-run-id="${escape(run.runId)}" data-process-layout="${selection.view}">
     ${viewToolbar}<div class="process-introduction"><p>${escape(record.summary)}</p>${record.campaign ? `<div class="process-final-mark">${icon('shield-check')}<span>${choose(locale, '完整原题', 'Original problem')}<strong>${choose(locale, '本地验收通过', 'Locally accepted')}</strong></span></div>` : ''}</div>
-    <dl class="process-overview"><div><dt>${choose(locale, '记录运行', 'Recorded runs')}</dt><dd>${process.runs.length}</dd></div><div><dt>${choose(locale, '归档任务', 'Archived tasks')}</dt><dd>${taskCount}</dd></div>
-      <div><dt>${choose(locale, '已存检查', 'Saved checks')}</dt><dd>${checks}</dd></div><div><dt>${choose(locale, '最终验收', 'Final acceptance')}</dt><dd class="process-overview-date">${escape(new Date(record.updatedAt).toISOString().slice(0, 10))}</dd></div></dl>
-    <nav class="process-run-nav ${process.runs.length === 1 ? 'process-single-run' : ''}" aria-label="${choose(locale, '选择运行记录', 'Choose a recorded run')}">${process.runs.map((item, index) => `<button class="process-run" data-process-run="${escape(item.runId)}" aria-pressed="${item === run}">
-      <span class="process-run-number">${choose(locale, `第 ${index + 1} 次运行`, `Run ${String(index + 1).padStart(2, '0')}`)}${item.runId === record.campaign?.runId ? `<b>${choose(locale, '最终验收', 'Final acceptance')}</b>` : ''}</span>
-      <strong data-tone="${tone(item.resultStatus ?? item.phase)}">${escape(processStatus(item.resultStatus ?? item.phase, locale))}</strong><time>${escape(time(item.startedAt, locale))}</time></button>`).join('')}</nav>
+    <dl class="process-overview">
+      <div><dt>${choose(locale, '记录运行', 'Recorded runs')}</dt><dd>${process.runs.length}</dd><span class="process-overview-sub">${runDur ? escape(runDur) : choose(locale, '完整存档', 'Full history')}</span></div>
+      <div><dt>${choose(locale, '归档任务', 'Archived tasks')}</dt><dd>${taskCount}</dd>${taskSub ? `<span class="process-overview-sub">${escape(taskSub)}</span>` : ''}</div>
+      <div data-overview-accent="passed"><dt>${choose(locale, '已存检查', 'Saved checks')}</dt><dd>${checks}</dd><span class="process-overview-sub">${choose(locale, 'Lean 内核核验', 'kernel verified')}</span></div>
+      <div><dt>${choose(locale, '最终验收', 'Final acceptance')}</dt><dd class="process-overview-date">${escape(new Date(record.updatedAt).toISOString().slice(0, 10))}</dd><span class="process-overview-sub">${choose(locale, `${steps.length} 个研究步骤`, `${steps.length} research steps`)}</span></div>
+    </dl>
+    <nav class="process-run-nav ${process.runs.length === 1 ? 'process-single-run' : ''}" aria-label="${choose(locale, '选择运行记录', 'Choose a recorded run')}">${process.runs.map((item, index) => {
+      const isFinal = item.runId === record.campaign?.runId;
+      const itemTone = tone(item.resultStatus ?? item.phase);
+      return `<button class="process-run" data-process-run="${escape(item.runId)}" data-run-accepted="${isFinal}" data-tone="${itemTone}" aria-pressed="${item === run}">
+      <span class="process-run-number">${choose(locale, `第 ${index + 1} 次运行`, `Run ${String(index + 1).padStart(2, '0')}`)}${isFinal ? `<b>${choose(locale, '最终验收', 'Final acceptance')}</b>` : ''}</span>
+      <strong data-tone="${itemTone}">${escape(processStatus(item.resultStatus ?? item.phase, locale))}</strong><time>${escape(time(item.startedAt, locale))}</time></button>`;
+    }).join('')}</nav>
     <section class="process-current-run"><header class="process-run-header"><div><h3>${choose(locale, `第 ${current + 1} 次运行`, `Run ${current + 1}`)}</h3><p>${escape(time(run.startedAt, locale))}${run.finishedAt ? ` — ${escape(time(run.finishedAt, locale))}` : ''} UTC${duration(run, locale) ? ` · ${escape(duration(run, locale))}` : ''}</p></div>
       <a class="inline-link" href="${escape((locale === 'en' ? '../' : '') + record.archiveUrl)}" target="_blank" rel="noreferrer">${choose(locale, '原始记录', 'Original records')}${icon('arrow-up-right')}</a></header>
       ${run.reason ? `<p class="process-run-reason">${escape(readableProcessText(run.reason, 650))}</p>` : ''}
