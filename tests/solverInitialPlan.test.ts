@@ -76,7 +76,7 @@ describe('explicit initial Lead plan publication', () => {
     expect(assigned).toMatchObject({ kind: 'task', task: { id: 'goal_1' } });
     expect(cooperative.current(action)).toBe(true);
     expect(action).toEqual(originalAction);
-    expect(cooperative.initialPlanSnapshot(action)?.tasks.map(task => task.id)).toEqual(['goal_1', 'goal_2']);
+    expect(cooperative.hasLeadPublication(action)).toBe(true);
     expect(state.cooperation!.initialPlanPublication).toMatchObject({ nonce: action.initialPlanNonce,
       baseVersion: originalAction.planVersion, planVersion: state.cooperation!.planVersion });
     expect(interrupt).not.toHaveBeenCalled();
@@ -159,7 +159,7 @@ describe('explicit initial Lead plan publication', () => {
     expect(state.cooperation!.edits?.[0].status).toBe('applied');
     expect(cooperative.current(action)).toBe(false);
     expect(cooperative.started(lead, action)).toBe(false);
-    expect(cooperative.initialPlanSnapshot(action)).toBeUndefined();
+    expect(cooperative.hasLeadPublication(action)).toBe(false);
     expect(interrupt).toHaveBeenCalledOnce();
   });
 
@@ -198,10 +198,11 @@ describe('explicit initial Lead plan publication', () => {
     expect(cooperative.current({ ...action })).toBe(false);
   });
 
-  it.each([false, true])('keeps a published plan after a notes-only final delivery (request failure: %s)', async recovering => {
+  it.each([false, true])('keeps a published plan when the final notes include illustrative JSON (request failure: %s)', async recovering => {
     const cooperative = create(), action = await startLead(cooperative);
     await publish(cooperative, action);
-    fs.writeFileSync(path.join(lead.worktree, 'RESEARCH.md'), 'The peers can work while the next mathematical route is investigated.\n');
+    fs.writeFileSync(path.join(lead.worktree, 'RESEARCH.md'), 'The peers can work while the next mathematical route is investigated.\n\n' +
+      '```json\n{"example":{"tasks":["check the boundary case"]}}\n```\n');
     cooperative.deactivate(lead);
     const delivered = await cooperative.deliver(lead, action, commitSolverSources(problem, lead.worktree), recovering, 'request-failure');
     expect(delivered).toEqual({ checkWhole: false, ...(recovering ? { savedPlan: true } : {}) });

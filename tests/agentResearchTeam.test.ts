@@ -275,7 +275,7 @@ describe('Agent-led sustained collaboration with real Git and Lean', () => {
     expect(fast.options.tools!.definitions.find(item => item.name === 'theoremos_team')!.inputSchema)
       .toMatchObject({ properties: { operation: { enum: [
         'progress', 'yield', 'history', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'submit',
-        'submit_helpers', 'route_summary'] } } });
+        'route_summary'] } } });
     expect(fast.options.skills![0]!.digest).toBe(f.state.researchSkill!.digest);
     const help = fs.readFileSync(path.join(fastWorker.worktree, RESEARCH_TOOL_HELP_FILE), 'utf8');
     expect(fast.options.instructions).toContain(path.join(fastWorker.worktree, RESEARCH_TOOL_HELP_FILE));
@@ -993,7 +993,7 @@ describe('Agent-led sustained collaboration with real Git and Lean', () => {
     const f = fixture();
     expect(f.team.tools('lead').definitions.find(item => item.name === 'theoremos_team')!.inputSchema)
       .toMatchObject({ properties: { operation: { enum: [
-        'spawn', 'assign', 'amend', 'finish', 'coordinate', 'budget', 'resume', 'history', 'publish', 'cancel',
+        'spawn', 'assign', 'amend', 'finish', 'budget', 'resume', 'history', 'publish', 'cancel',
         'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'retire_route', 'route_summary'] } } });
     const spawn = { operation: 'spawn', agentId: 'child', message: 'Study independently.' };
     await f.call(spawn, 'lead', 'one-handle');

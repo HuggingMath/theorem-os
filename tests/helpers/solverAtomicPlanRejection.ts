@@ -31,7 +31,7 @@ describe('CooperativeResearch malformed plans', () => {
       if (action?.kind !== 'lead') throw new Error('fixture_expected_lead');
       expect(research.started(lead, action)).toBe(true);
       research.activate(lead, action, async () => {}, async () => {});
-      expect(research.leadCheckpointInstruction(action)).toContain('theorem-os plan-validate');
+      expect(research.leadCheckpointInstruction(action)).toContain('plan-apply');
       const file = path.join(lead.worktree, 'RESEARCH.md');
       fs.writeFileSync(file, notes);
       editLean?.();

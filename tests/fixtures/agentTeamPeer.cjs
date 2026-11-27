@@ -158,8 +158,8 @@ stream.on('line', line => {
     threadId = params.threadId || threadId;
     if (call.method === 'thread/start') {
       const expected = actor === 'lead'
-        ? ['spawn', 'assign', 'amend', 'finish', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'publish', 'cancel', 'budget', 'resume', 'history', 'coordinate', 'retire_route', 'route_summary']
-        : ['message', 'poll', 'wait', 'inspect', 'inspect-research', 'submit', 'submit_helpers', 'yield', 'history', 'progress', 'route_summary'];
+        ? ['spawn', 'assign', 'amend', 'finish', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'publish', 'cancel', 'budget', 'resume', 'history', 'retire_route', 'route_summary']
+        : ['message', 'poll', 'wait', 'inspect', 'inspect-research', 'submit', 'yield', 'history', 'progress', 'route_summary'];
       const tool = params.dynamicTools.find(tool => tool.name === 'theoremos_team');
       if (!tool || JSON.stringify(tool.inputSchema.properties.operation.enum.toSorted()) !== JSON.stringify(expected.toSorted()))
         throw new Error('role-operation-schema-mismatch');

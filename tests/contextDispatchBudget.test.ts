@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SolverRunState } from '../src/solver/archive';
-import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
+import { mathDigest } from '../src/math/mathRuntimeIo';
 import { compileTaskContext, DEFAULT_TASK_CONTEXT_BYTES, frozenSourceContext, type TaskContextInput } from '../src/solver/contextCompiler';
 import { rejectedDeliveryReceipt, deliveryReceiptFeedback, type DeliveryReceipt } from '../src/solver/deliveryReceipts';
 import type { DeliveryRecord } from '../src/solver/deliveries';
@@ -152,8 +152,9 @@ describe('bounded continuation dispatch', () => {
     for (const message of [context.message, context.continuationMessage!]) {
       const reference = JSON.parse(message.split('Pending assignment correction receipts (retrieve all before correcting deliveries):\n')[1].split('\n')[0]);
       expect(reference).toMatchObject({ file: 'COOPERATION.json', field: 'deliveryReceipts', count: receipts.length,
-        digest: mathDigest(canonicalMathJson(receipts)), scope: { taskId: 'current', status: 'needs-correction' } });
-      expect(reference.retrieval).toContain('every');
+        status: 'needs-correction' });
+      expect(reference.retrieval).toContain('every current needs-correction row');
+      expect(reference.digest).toBeUndefined();
     }
     for (const manifest of [context.manifest!, context.continuationManifest!]) {
       expect(manifest.omitted).toContainEqual(expect.objectContaining({ id: 'assignment-receipts', kind: 'feedback' }));

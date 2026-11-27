@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bootstrapLeanTask } from '../src/math/leanTask';
-import { mathDigest } from '../src/math/mathRuntimeIo';
+import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 import { readMathAgentSkill } from '../src/runtime/agentSkills';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/agentSession';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from '../src/solver/archive';
@@ -104,7 +104,7 @@ describe('recoverable team source rejections', () => {
     activity({ event: 'item_completed', itemType: 'contextCompaction' });
     expect(session.notices).toEqual([]);
     activity({ event: 'item_completed', itemType: 'contextCompaction' });
-    expect(session.notices).toEqual([expect.stringContaining('submit_helpers')]);
+    expect(session.notices).toEqual([expect.stringContaining('submit with helpersOnly:true')]);
     expect(f.events).toContainEqual({ event: 'compaction_circuit_breaker_triggered', details: expect.objectContaining({
       workerId: worker.id, taskId: worker.tasks[0]!.id, completedCompactions: 2,
     }) });
@@ -149,7 +149,7 @@ describe('recoverable team source rejections', () => {
     fs.writeFileSync(f.source(producer.worktree), original.replace('theorem goal', helperProofs + 'theorem goal'));
     fs.writeFileSync(f.source(consumer.worktree), original.replace('end Recovery', draft + 'end Recovery'));
     const names = [...declarations, { ...declarations[0]!, name: 'Recovery.second' }];
-    expect(await f.call({ operation: 'submit_helpers', summary: 'Verified standalone facts.', declarations: names }, 'member'))
+    expect(await f.call({ operation: 'submit', helpersOnly: true, summary: 'Verified standalone facts.', declarations: names }, 'member'))
       .toMatchObject({ ok: true, status: 'pending-writer-stop' });
     expect(f.team.archive.canonicalCommit).toBeUndefined();
     expect(a.options.requestGate!.checkpoint!()).toBe(true);
@@ -187,6 +187,20 @@ describe('recoverable team source rejections', () => {
       .toEqual(['Recovery.helper', 'Recovery.second', 'Recovery.goal', 'Recovery.draft']);
     expect(f.state.check).toBeUndefined();
   }, 60_000);
+
+  it('replays a recorded submit_helpers call from an older member thread', async () => {
+    const f = fixture();
+    const originalCall = { operation: 'submit_helpers', summary: 'Verified standalone facts.', declarations };
+    const context = { threadId: 'old-member-thread', turnId: 'old-turn', callId: 'old-submit', signal: f.controller.signal };
+    const result = { ok: true, status: 'pending-writer-stop', taskId: 'old-task' };
+    f.team.archive.operations.push({
+      key: canonicalMathJson(['member', context.threadId, context.turnId, context.callId]),
+      digest: mathDigest(canonicalMathJson(originalCall)), result,
+    });
+    const tools = f.team.tools('member');
+    await expect(tools.call('theoremos_team', originalCall, context)).resolves.toEqual(result);
+    expect(f.team.archive.operations).toHaveLength(1);
+  });
 
   it('preserves the rejected Lean interface and check receipt for the producer, a repair peer and restored history', async () => {
     const f = fixture(3); await f.call({ operation: 'spawn', agentId: 'member', message: 'Prove the helper.' });

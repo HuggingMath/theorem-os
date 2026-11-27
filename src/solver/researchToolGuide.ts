@@ -7,6 +7,11 @@ import { ResearchToolHelpBuilder } from './researchToolHelp';
 
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
+export const researchToolCommand = (root: string, tools?: string) => `bun ${quote(tools ?? path.join(root, 'bin/math.ts'))}`;
+
+export const checkpointCommand = (command: string, worktree: string, file: string, requestId: string) =>
+  `${command} checkpoint --worktree ${quote(worktree)} --log ${quote(file)} --request-id ${quote(requestId)}`;
+
 export const longCommandGuidance =
   'For a long calculation, record the inputs, print progress and save completed batches in .scratch/tmp. Use unbuffered output for Python (python3 -u). ' +
   'With native exec_command, keep the session ID returned after a short yield_time_ms. Poll with write_stdin and empty chars. ' +
@@ -18,11 +23,13 @@ export function buildResearchToolGuide(problem: Pick<SolverProblem, 'receiptDige
   access: Pick<ContextAccess, 'root' | 'tools' | 'worktree' | 'retrievalRoot' | 'corpusFile' |
     'knowledgeFile' | 'knowledgeDigest' | 'libraryCatalog' | 'teamRole' | 'assignment'>, environmentDigest: string,
   teamTransport?: AgentTeamTransport) {
-  const command = `bun ${quote(access.tools ?? path.join(access.root, 'bin/math.ts'))}`;
+  const command = researchToolCommand(access.root, access.tools);
   const help = new ResearchToolHelpBuilder();
   if (access.assignment?.kind === 'lead') help.section('Lead plan submission',
-    `Omit progressReview on the initial plan. Before publishing, validate the draft with ${command} plan-validate --file .scratch/plan.json\n` +
-    `To submit the validated draft on return, save it atomically to RESEARCH.md with ${command} plan-apply --file .scratch/plan.json`, '');
+    `Save one plan or revision in .scratch/plan.json. Omit progressReview on the initial plan.\n` +
+    `Publish for immediate host intake: ${command} plan-apply --publish --file .scratch/plan.json\n` +
+    `To save the plan in RESEARCH.md for intake on return: ${command} plan-apply --file .scratch/plan.json\n` +
+    'Both validate the draft. Live publication binds the current dispatch automatically.', '');
   const editable = new Set(problem.ownedFiles.filter(file => file.endsWith('.lean') && !Object.hasOwn(problem.frozenFiles ?? {}, file)));
   const file = problem.targets.find(target => editable.has(target.proofPath))?.proofPath ?? editable.values().next().value;
   const leanCheckCommand = file && `${command} check-lean --worktree ${quote(access.worktree)} --file ${quote(file)} --timeout-seconds 0`;

@@ -65,7 +65,9 @@ describe('Lead plan revisions in a cooperative run', () => {
     await publish(action, { upsert: [helper('patched_bridge')] });
     expect(ids()).toEqual([...goals, 'patched_bridge']);
     expect(events.filter(event => event.event === 'plan_published')).toHaveLength(1);
-    fs.writeFileSync(notes(), 'A notes-only final response.\n');
+    const argument = 'A notes-only final response.\n\n' + 'An intermediate estimate with details.\n'.repeat(250) +
+      '\n```json\n{"example":{"tasks":["compare two cases"]}}\n```\n\nThe remaining inference is at the boundary.\n';
+    fs.writeFileSync(notes(), argument);
     await finish(action);
     expect(state.cooperation!.planPublication?.finalized).toBe(true);
     expect(state.cooperation!.planEdited).toBe(true);
@@ -73,7 +75,7 @@ describe('Lead plan revisions in a cooperative run', () => {
     const text = fs.readFileSync(notes(), 'utf8');
     expect(readMathResponse(workers[0].worktree, 'math-plan').tasks.map((task: { id: string }) => task.id)).toEqual(ids());
     expect(text.split('\n').filter(line => line.startsWith('  {"id":"'))).toHaveLength(ids().length + 1);
-    expect(text).toContain('A notes-only final response.');
+    expect(text).toContain(argument);
   });
 
   it('accepts a live revision nested under tasks as the same top-level revision', async () => {

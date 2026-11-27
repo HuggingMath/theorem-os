@@ -178,6 +178,7 @@ export const server: Record<string, string> = {
   "示例运行：自然数加法": "Sample run: natural number addition",
   "离线示例 Agent": "Offline sample Agent",
   "先证 add_zero：n + 0 按定义就等于 n，可以直接用 rfl。另一个定理先不要动。": "Prove add_zero first: n + 0 equals n by definition, so rfl works directly. Leave the other theorem alone for now.",
+  "请用 Nat.zero_add 证明第二个定理。": "Use Nat.zero_add to prove the second theorem.",
   "请把对这份完整证明的审阅结论交上来。最后是否通过，以独立的 Lean 验收为准。": "Please send your review of this complete proof. Whether it passes is decided by the independent Lean check.",
   "审阅者看过了两个定理的完整证明，同意提交。最终是否通过，仍以独立的 Lean 验收为准。": "The reviewer read the complete proof of both theorems and agrees to submit it. Whether it passes is still decided by the independent Lean check.",
   "证明 Tutorial.add_zero：n + 0 按定义就等于 n。": "Prove Tutorial.add_zero: n + 0 is n by definition.",

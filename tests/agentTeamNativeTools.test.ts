@@ -20,12 +20,12 @@ const executable = process.env.THEOREMOS_TEST_CODEX_EXECUTABLE ?? 'codex';
 const nativeAvailable = spawnSync(executable, ['--version'], {
   env: { PATH: process.env.PATH }, timeout: 5000, stdio: 'ignore',
 }).status === 0;
-const operations = ['spawn', 'assign', 'amend', 'finish', 'coordinate', 'budget', 'resume', 'history', 'publish', 'cancel',
+const operations = ['spawn', 'assign', 'amend', 'finish', 'budget', 'resume', 'history', 'publish', 'cancel',
   'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'retire_route', 'route_summary'];
 const memberOperations = ['progress', 'yield', 'history', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'submit',
-  'submit_helpers', 'route_summary'];
+  'route_summary'];
 const nativeLeadOperations = ['finish', 'history', 'inspect', 'inspect-research', 'adopt', 'retire_route', 'route_summary'];
-const nativeMemberOperations = ['yield', 'history', 'inspect', 'inspect-research', 'submit', 'submit_helpers', 'route_summary'];
+const nativeMemberOperations = ['yield', 'history', 'inspect', 'inspect-research', 'submit', 'route_summary'];
 
 /** Codex may normalize validation keywords, but it must preserve every branch and field. */
 function expectAdvertisedOperations(host: Json, expected: string[], schema: Json) {
@@ -192,12 +192,13 @@ describe.skipIf(!nativeAvailable)('real Codex dynamic team tool transport withou
     expect(advertised?.parameters.properties.includeRetired).toMatchObject({ type: 'boolean' });
     expect(advertised?.parameters.properties.routeId).toMatchObject({ type: 'string' });
     if (actor === 'lead') {
-      expect(advertised?.description).toContain('coordinate: required decision, reason, nextStep;');
+      expect(advertised?.description).not.toContain('coordinate');
       expect(advertised?.description).toContain('retire_route: required routeId, reason; optional evidenceRefs; other fields forbidden.');
-      expect(advertised?.parameters.properties).toMatchObject({ decision: { type: 'string', enum: ['defer', 'continue'] },
-        reason: { type: 'string' }, nextStep: { type: 'string' }, evidenceRefs: { type: 'array', items: { type: 'string' } } });
+      expect(advertised?.parameters.properties).not.toHaveProperty('decision');
+      expect(advertised?.parameters.properties).toMatchObject({ reason: { type: 'string' },
+        evidenceRefs: { type: 'array', items: { type: 'string' } } });
     } else {
-      expect(advertised?.description).toContain('submit: required summary, declarations; optional objectiveRevision; other fields forbidden.');
+      expect(advertised?.description).toContain('submit: required summary, declarations; optional objectiveRevision, helpersOnly; other fields forbidden.');
       const submitSchema = advertised?.parameters.oneOf.find((branch: Json) => branch.properties.operation.enum[0] === 'submit');
       expect(submitSchema.required).toEqual(['operation', 'summary', 'declarations']);
       expect(submitSchema.properties).not.toHaveProperty('agentId');

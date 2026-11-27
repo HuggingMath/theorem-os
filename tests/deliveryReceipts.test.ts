@@ -44,15 +44,16 @@ describe('delivery receipt correction chains', () => {
     const second = reject({ kind: 'research', finding: { summary: 'Rejected correction', replacesReceipt: first.id } }, [first]);
     const independent = reject({ summary: 'Independent rejection' });
     const foreign = { ...reject({ summary: 'Foreign rejection' }), workerId: 'other-writer' };
+    const stale = { ...reject({ summary: 'Wrong seed rejection' }), seedCommit: 'b'.repeat(40) };
     // A restored link outside the dispatch must never be followed by the resolver.
     first.replacesReceipt = foreign.id;
     const node = { task, feedback: deliveryReceiptFeedback(second) };
-    const receipts = JSON.parse(JSON.stringify([first, second, independent, foreign])) as DeliveryReceipt[];
+    const receipts = JSON.parse(JSON.stringify([first, second, independent, foreign, stale])) as DeliveryReceipt[];
     const cooperative = Object.create(CooperativeResearch.prototype) as any;
     Object.assign(cooperative, { archive: { tasks: [node], deliveryReceipts: receipts },
       input: { state: { environmentDigest: 'environment' } } });
     cooperative.resolveDeliveryReceipts({ id: 'writer' }, action, second.id);
-    expect(receipts.map(receipt => receipt.status)).toEqual(['recorded', 'recorded', 'needs-correction', 'needs-correction']);
+    expect(receipts.map(receipt => receipt.status)).toEqual(['recorded', 'recorded', 'needs-correction', 'needs-correction', 'needs-correction']);
     expect(node.feedback).toBe(deliveryReceiptFeedback(independent));
     expect(receipts[0].assignmentKey).toBe(assignmentDeliveryFile(action.assignment));
   });

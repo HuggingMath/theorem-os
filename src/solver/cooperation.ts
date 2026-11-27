@@ -14,7 +14,7 @@ import { CAPACITY_EXPLORATION_FOCUSES, capacityExplorationInput, createCapacityE
   TIMED_EXPLORATION_UNANSWERED_WAKES, timedExplorationTargets } from './capacityExploration';
 import { hasFreshSolverCheck, proofReceiptsMatch, type ProofCheck } from './modules/evidence';
 import { originalGoalTaskFocus, readyResearchTasks, researchCanAdvance, routeAllowsTask, taskCanStart, taskDependenciesReady, selectedTaskRoute, runningTaskDependencies } from './modules/search';
-import { deliveryDetails, reviewVerdict, readMathResponse as block } from './deliveries';
+import { deliveryDetails, hasPlanResponse, reviewVerdict, readMathResponse as block } from './deliveries';
 import { checkTaskProof, ownedSourceDigest, taskChanges } from './cooperativeProof';
 import { assertStatementSnapshot, isStatementAction, resetStatementReview } from './statementReview';
 import { captureProofReferences } from './proofReferences';
@@ -23,6 +23,7 @@ import { attributeTaskReferences } from './taskReferenceAttribution';
 import { taskConsumerProjection } from './taskConsumers';
 import { parallelQuestions } from './taskQuestions';
 import { contextCheckpointRejection } from './contextCheckpoint';
+import { assignmentDeliveryReceipts } from './deliveryReceipts';
 import { leadResearchInputs } from './contextCompiler';
 import { deliverHumanGuidance, readHumanGuidance } from './humanGuidance';
 import { mathematicalGaps, mathematicalGapVisible } from './mathematicalGaps';
@@ -33,11 +34,11 @@ import { TACTIC_BATTERY_TIMEOUT_MS } from './tacticBattery';
 import { LIBRARY_APPLICATION_TIMEOUT_MS } from './libraryApplication';
 import { knowledgeReferenceCoverage } from './knowledgeUsage';
 import { taskTypePreflightEnvironmentIdentity, typeDiagnosticExcerpt, type TaskTypePreflight } from './taskTypePreflight';
-import { assignmentDeliveryFile, isDefinitionTask, isFeasibilityReview, isFinalCandidateReview, taskGroup, type CooperativeTask, type CooperativeAction, type RouteRecord, type TaskAssignment, type TaskRecord } from './tasks';
+import { assignmentDeliveryFile, isActiveFinalCandidateReview, isDefinitionTask, isFeasibilityReview, isFinalCandidateReview, taskGroup, type CooperativeTask, type CooperativeAction, type RouteRecord, type TaskAssignment, type TaskRecord } from './tasks';
 import { consumeLeadWakes, dropLeadWakes, LEAD_MAX_BACKOFF, leadWakePending, settleLeadWakes } from './leadWakes';
 import { idlePeerEpisode, idlePeersAwaitingLead, IDLE_PEER_WAKE_MS, leadInbox, leadInboxBasis, NO_WORK_STAGES, type LeadInboxBasis } from './leadInbox';
 import { restoreResidue } from './stateInvariants';
-import { digest, directDeliveryRejections, isTaskSourceRepairFeedback, leadPlanPublicationTarget, LEAD_PLAN_REPAIR_INSTRUCTION,
+import { digest, directDeliveryRejections, isTaskSourceRepairFeedback, LEAD_PLAN_REPAIR_INSTRUCTION,
   rejectionCode, CooperationState, TaskVersions, DispatchBudget, RETRY_DISPATCH, DispatchResult, bounded } from './cooperationShared';
 import { CooperationInputs } from './cooperationInputs';
 import { ResearchAdmissionError } from './researchAdmission';
@@ -264,10 +265,9 @@ export class CooperativeResearch extends CooperationInputs {
     return changed;
   }
   /** A live publication never authorizes a superseded dispatch or changed decisions. */
-  planSnapshot(action: CooperativeAction) {
-    return this.current(action) ? this.publishedPlans.get(action)?.plan : undefined;
+  hasLeadPublication(action: CooperativeAction) {
+    return this.current(action) && this.leadPublication(action) !== undefined;
   }
-  initialPlanSnapshot(action: CooperativeAction) { return this.planSnapshot(action); }
   start() {
     this.timer = setInterval(() => { void this.humanGuidanceCheckpoint(); void this.inputs().catch(error => {
       this.input.emit('cooperation_poll_failed', { reason: error instanceof Error ? error.message : 'unknown' });
@@ -465,6 +465,8 @@ export class CooperativeResearch extends CooperationInputs {
     }
     const head = this.archive.canonicalCommit!;
     if (this.canAssemble(head) && this.lastAssembly !== head) {
+      // Candidate selection stops the workers. Let integration publish its receipts first.
+      if (this.integrationQueueDepth) return this.waitForDispatch();
       this.syncPlanNotes();
       const seed = this.seed(worker, head); this.archive.canonicalCommit = seed;
       this.cancelStaleTaskTypes();
@@ -589,11 +591,12 @@ export class CooperativeResearch extends CooperationInputs {
       researchInputs, progressReview, nextCheckOutcomes };
   }
   /** A read or incomplete draft cannot satisfy this dispatch's still-owed decisions. */
-  leadCheckpointNeedsHandoff(action: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>): boolean {
-    if (!this.current(action) || this.planSnapshot(action) ||
-        this.archive.tasks.length && !this.leadDecisionObligations(action).any) return false;
+  leadCheckpointHandoff(action: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>) {
+    if (!this.current(action) || this.leadPublication(action) ||
+        this.archive.tasks.length && !this.leadDecisionObligations(action).any) return;
     const draft = this.inspectLeadCheckpointDraft(action);
-    return !draft || Boolean(draft.reason);
+    if (draft && !draft.reason) return;
+    return { reason: draft?.reason };
   }
   /** Re-read this dispatch's still-owed decisions when its checkpoint reminder is delivered. */
   leadCheckpointInstruction(action: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>): string {
@@ -611,11 +614,9 @@ export class CooperativeResearch extends CooperationInputs {
         outcomeDeliveryId: record.outcome?.deliveryId }))) + '.');
     if (obligations.feedback) required.push('Repair the current host plan validation feedback; an unchanged saved draft does not answer it. ' +
       LEAD_PLAN_REPAIR_INSTRUCTION);
-    const target = this.publishedPlans.has(action) ? undefined : leadPlanPublicationTarget(action);
-    const { file, ...envelope } = target ?? {};
+    const target = this.openLeadPublicationTarget(action);
     const revision = Boolean(this.archive.tasks.length && action.planVersion);
     const response = {
-      ...envelope,
       ...(revision ? { baseVersion: action.planVersion, upsert: [] }
         : { tasks: ['<complete task definitions covering every original target>'] }),
       ...(obligations.research ? { researchDecisions: obligations.researchInputs.map(record => ({
@@ -632,10 +633,9 @@ export class CooperativeResearch extends CooperationInputs {
         action: '<choose continue, revise or stop>', reason: '<specific mathematical reason>',
       })) } : {}),
     };
-    const destination = file
-      ? `Publish the following complete event as a single JSON line in ${file}. Keep kind, dispatchNonce and baseVersion from the template. ` +
-        'If you return using RESEARCH.md instead, save the same decision in its math-plan fence without the publication fields kind and dispatchNonce. '
-      : 'Save the current decision in a math-plan fence in RESEARCH.md before returning. ';
+    const destination = target
+      ? 'Save the decision as .scratch/plan.json and run plan-apply --publish from the Lead tool help. '
+      : 'Use plan-apply to save the current decision in RESEARCH.md before returning. ';
     const schema = revision
       ? 'Use upsert:[] when the task graph stays unchanged, and include the required decisions in the same object. '
       : 'Include a complete tasks array and the required decisions in the same object. ';
@@ -644,6 +644,9 @@ export class CooperativeResearch extends CooperationInputs {
       (obligations.research ? 'For research adoption add taskIds naming newly added or substantively changed tasks; ' +
         'for source add sourcePaths naming changed owned Lean files. ' : '') +
       (obligations.progress ? 'Choose enough progress nextChecks to cover every reviewed goal. ' : '') +
+      (obligations.nextCheckOutcomes.some(record => record.outcome?.conclusion === 'refuted')
+        ? 'Continuing after a refutation requires counterEvidenceDeliveryId from a supporting host check of the same target and consumer with retained evidence. Otherwise revise the argument, dependencies or route, assign a new independent feasibility check, or stop. '
+        : '') +
       'Keep still-unanswered ids and pending decisions in RESEARCH.md when saving an unfinished draft; ' +
       'notes alone do not answer these requirements. ';
   }
@@ -763,7 +766,7 @@ export class CooperativeResearch extends CooperationInputs {
   }
   private peerTaskCandidates(tasks: readonly TaskRecord[], groups?: readonly RouteRecord[]) {
     const finalReview = this.finalReviewCommit();
-    const ranked = this.input.modules.M3.ready(tasks, groups);
+    const ranked = this.input.modules.M3.ready(tasks, groups).filter(node => !isFinalCandidateReview(node.task));
     const ready = ranked.filter(node => (!finalReview || !ordinaryAdvisoryTask(node.task)) &&
       this.nextCheckDispatchable(node) && !this.taskDispatchBlock(node));
     return { ranked, ready };
@@ -1272,6 +1275,14 @@ export class CooperativeResearch extends CooperationInputs {
       this.livePeers.some(worker => assessTaskResponsibility(node, worker, this.responsibility).kind === 'matches' &&
         this.input.modules.M5.assign([node], worker, this.livePeers, this.archive.groups, this.archive.tasks, this.stoppedWorkers) === node));
   }
+  candidateReady(check: ProofCheck): boolean {
+    if (check.commit !== this.archive.canonicalCommit || this.candidateSynchronizationBlocked()) return false;
+    const reviewRequired = this.input.state.planApproval || this.archive.review || this.archive.tasks.some(({ task }) =>
+      task.statementReview || isActiveFinalCandidateReview(task));
+    if (!reviewRequired || this.reviewed(check)) return true;
+    this.requireReview(check);
+    return false;
+  }
   reviewed(check?: ProofCheck) {
     const required = this.fixedStatementReviewTasks();
     if (this.fixedReviewScope && !required) return false;
@@ -1380,10 +1391,10 @@ export class CooperativeResearch extends CooperationInputs {
       planPublicationRejection: (action?.kind === 'lead' || worker?.id === this.lead.id) &&
         this.archive.planPublicationRejection?.baseVersion === this.archive.planVersion ? this.archive.planPublicationRejection : undefined,
       contextCheckpointRejection: checkpointResearch ? contextCheckpointRejection(checkpointResearch) : undefined,
-      deliveryReceipts: this.archive.deliveryReceipts?.filter(receipt => worker && receipt.workerId === worker.id &&
-        receipt.environmentDigest === this.input.state.environmentDigest &&
-        (action?.kind === 'task' ? receipt.assignmentKey === assignmentDeliveryFile(action.assignment) :
-          visible(receipt.taskId, receipt.taskDigest))),
+      deliveryReceipts: worker && action?.kind === 'task'
+        ? assignmentDeliveryReceipts(this.archive.deliveryReceipts, action.assignment, this.input.state.environmentDigest, worker.id)
+        : this.archive.deliveryReceipts?.filter(receipt => receipt.workerId === worker?.id &&
+          receipt.environmentDigest === this.input.state.environmentDigest && visible(receipt.taskId, receipt.taskDigest)),
       proofReadyRecords: this.archive.proofReadyRecords?.filter(receipt =>
         (action?.kind === 'lead' || worker?.id === this.lead.id || worker && receipt.workerId === worker.id &&
           (action?.kind !== 'task' || receipt.assignmentKey === assignmentDeliveryFile(action.assignment))) &&
@@ -1424,7 +1435,7 @@ export class CooperativeResearch extends CooperationInputs {
       const sourceChanged = ownedSourceDigest(this.input.state.problem, worker.worktree, action.seedCommit) !==
         ownedSourceDigest(this.input.state.problem, worker.worktree, commit);
       let accepted = false;
-      const publishedPlan = this.planSnapshot(action);
+      const publishedPlan = this.leadPublication(action);
       const previousPlanVersion = this.planVersion();
       const obligations = this.leadDecisionObligations(action);
       const requiredDecision = obligations.any;
@@ -1441,10 +1452,14 @@ export class CooperativeResearch extends CooperationInputs {
             changedNotes = seedNotes?.trim() !== savedNotes.trim();
           } catch { /* Without a readable dispatch baseline, validate the saved response normally. */ }
         }
-        const notes = savedNotes?.trimStart() ?? '';
-        const hasPlanResponse = notes.startsWith('{') || /```(?:math|json|math-[a-z-]+)\b/u.test(notes);
-        const hasFinalPlan = hasPlanResponse && this.publishedPlans.get(action)?.responseDigest !== this.proposedPlanDigest();
-        if (schedulingDraft && (savedNotes === undefined || changedNotes && notes.trim() && !hasPlanResponse)) {
+        const hasPlan = hasPlanResponse(savedNotes ?? '');
+        let hasFinalPlan = hasPlan;
+        if (publishedPlan && hasPlan && savedNotes !== undefined) {
+          const seedNotes = this.leadNotes(action.seedCommit);
+          const baseline = seedNotes.text === undefined ? seedNotes.digest : this.proposedPlanDigest(seedNotes.text);
+          hasFinalPlan = baseline !== this.proposedPlanDigest(savedNotes);
+        }
+        if (schedulingDraft && (savedNotes === undefined || changedNotes && savedNotes.trim() && !hasPlan)) {
           // A scheduled yield can save fresh mathematical notes before Lead has a decision to submit.
           this.pin(commit);
           if (requiredDecision) this.wakeLead('lead-checkpoint-unchanged');
@@ -1481,11 +1496,7 @@ export class CooperativeResearch extends CooperationInputs {
       const decisionProgress = Boolean(publishedPlan) || accepted &&
         (previousPlanVersion !== this.planVersion() || obligations.research || obligations.progress || obligations.nextCheck);
       const savedPlan = recovering && recoveryKind === 'request-failure' && decisionProgress;
-      if (accepted && !recovering && action.kind === 'lead') {
-        const nonce = action.initialPlanNonce ?? action.planNonce;
-        for (const publication of [this.archive.planPublication, this.archive.initialPlanPublication])
-          if (nonce && publication?.nonce === nonce) publication.finalized = true;
-      }
+      if (publishedPlan && accepted && !recovering) publishedPlan.finalized = true;
       if (accepted && (!recovering || decisionProgress)) this.rememberLeadDecision(action);
       if (recovering && recoveryKind !== 'request-failure' && action.kind === 'lead' &&
           !action.initialPlanNonce && !decisionProgress && !this.leadDecisionObligations(action).any) {

@@ -20,6 +20,22 @@ export const MAX_RESEARCH_NOTES_BYTES = 1_000_000;
 // complete finding. Allow bounded JSON escaping without rejecting existing files.
 export const MAX_DELIVERY_LINE_BYTES = 16_000_000;
 
+export function appendDeliveryEvent(worktree: string, file: string, event: unknown): void {
+  if (!/^DELIVERIES-[a-f0-9]{64}\.jsonl$/u.test(file)) throw new Error('math_delivery_log_invalid');
+  const output = path.join(worktree, file);
+  assertMathCanonicalPath(output);
+  const line = JSON.stringify(event) + '\n';
+  if (Buffer.byteLength(line) > MAX_DELIVERY_LINE_BYTES) throw new Error('math_delivery_line_too_large');
+  const fd = fs.openSync(output, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT |
+    fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK, 0o600);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink !== 1) throw new Error('math_delivery_log_invalid');
+    fs.writeFileSync(fd, line);
+    fs.fsyncSync(fd);
+  } finally { fs.closeSync(fd); }
+}
+
 /** JSON for host decisions, optional Markdown for explanations; legacy fences remain readable. */
 export function readMathResponse(worktree: string, legacyFence: string, bindings: Record<string, unknown> = {}, textField?: string): any {
   const file = path.join(worktree, 'RESEARCH.md');
@@ -54,8 +70,9 @@ function researchResponse(text: string, textField?: string): unknown {
 }
 
 const planKeys = /"(?:tasks|groups|proofRoutes|dispatchNonce|baseVersion|upsert|remove)"\s*:/u;
+const noteFences = /```([a-z-]+)\s*\n([\s\S]*?)\n```/gu;
 /** A fence carries Lead control JSON, not illustrative mathematical JSON. */
-export function isPlanFence(label: string, body: string): boolean {
+function isPlanFence(label: string, body: string): boolean {
   if (label === 'math-plan') return true;
   if (!['math', 'json'].includes(label) || !body.trimStart().startsWith('{')) return false;
   try {
@@ -66,16 +83,38 @@ export function isPlanFence(label: string, body: string): boolean {
 }
 
 /** Select the Lead control object without counting illustrative mathematical JSON as a plan. */
-function planResponse(text: string): unknown {
-  const blocks = [...text.matchAll(/```([a-z-]+)\s*\n([\s\S]*?)\n```/gu)];
+function planResponseBody(text: string): string | undefined {
+  const blocks = [...text.matchAll(noteFences)];
   const explicit = blocks.filter(block => block[1] === 'math-plan');
   if (explicit.length > 1) throw new Error('math_math-plan_requires_one_block');
-  if (explicit.length) return JSON.parse(explicit[0][2]);
+  if (explicit.length) return explicit[0][2];
   if (/```math-[a-z-]+\s*\n/u.test(text)) throw new Error('math_math-plan_requires_one_block');
-  if (text.startsWith('{')) return JSON.parse(text);
+  if (text.startsWith('{')) return text;
   const legacy = blocks.filter(block => isPlanFence(block[1], block[2]));
   if (legacy.length > 1) throw new Error('math_math-plan_requires_one_block');
-  return legacy.length ? JSON.parse(legacy[0][2]) : undefined;
+  return legacy[0]?.[2];
+}
+
+/** An explicit but malformed response still needs host validation and feedback. */
+export function hasPlanResponse(notes: string): boolean {
+  try { return planResponseBody(notes.trim()) !== undefined; } catch { return true; }
+}
+
+/** Save one plan block while keeping the surrounding mathematical notes. */
+export function replacePlanInNotes(source: string, json: string): string {
+  const fence = '```math-plan\n' + json + '\n```';
+  const bare = source.trim();
+  if (bare.startsWith('{') && isPlanFence('json', bare)) {
+    try { JSON.parse(bare); return fence + '\n'; } catch { /* Preserve incomplete text. */ }
+  }
+  let replaced = false;
+  const notes = source.replace(noteFences, (block, label: string, body: string) => {
+    if (!isPlanFence(label, body)) return block;
+    if (replaced) return '';
+    replaced = true;
+    return fence;
+  });
+  return replaced ? notes : fence + '\n' + (source ? '\n' + source : '');
 }
 
 /** The same parser also reads immutable checkpoint text without consulting a live workspace. */
@@ -83,7 +122,9 @@ export function parseMathResponse(text: string, legacyFence: string, bindings: R
   const errorPrefix = `math_${legacyFence}`;
   text = text.trim();
   if (legacyFence === 'math-result' || legacyFence === 'math-plan') {
-    const value = legacyFence === 'math-plan' ? planResponse(text) : researchResponse(text, textField);
+    const body = legacyFence === 'math-plan' ? planResponseBody(text) : undefined;
+    const value = legacyFence === 'math-result' ? researchResponse(text, textField) :
+      body === undefined ? undefined : JSON.parse(body);
     if (value === undefined) throw new Error(errorPrefix + '_requires_one_block');
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('math_response_invalid');
     return { ...bindings, ...value };
@@ -184,47 +225,41 @@ export function deliveryDetails(value: any): Pick<DeliveryRecord, 'summary' | 'e
 
 type DeliveryLogEntry = { line?: string; error?: 'math_delivery_line_too_large' | 'math_delivery_log_rewritten'; offset: number;
   discardingOversized: boolean };
-type DeliveryLogBatch = { lines: string[]; offset: number; entries?: DeliveryLogEntry[]; discardingOversized?: boolean };
+type DeliveryLogBatch = { entries: DeliveryLogEntry[]; offset: number; discardingOversized: boolean; hasMore: boolean };
 
-/** Read complete appended lines only. The durable cursor survives restarts and partial writes. With recovery state,
- * a log rewritten below the cursor is reported once, its current contents are skipped, and reading resumes with the
- * next appended line. */
-export function readDeliveryLines(file: string, offset: number,
-  recovery?: { discardingOversized: boolean }): DeliveryLogBatch {
+/** Read one bounded batch of complete appended lines, starting at the durable cursor. */
+export function readDeliveryLines(file: string, offset: number, discardingOversized = false): DeliveryLogBatch {
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('math_delivery_log_invalid');
-  if (!fs.existsSync(file)) return { lines: [], offset, entries: [],
-    ...(recovery ? { discardingOversized: recovery.discardingOversized } : {}) };
+  if (!fs.existsSync(file)) return { entries: [], offset, discardingOversized, hasMore: false };
   assertMathCanonicalPath(file);
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   try {
     const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || stat.nlink !== 1 || (stat.size < offset && !recovery)) throw new Error('math_delivery_log_invalid');
-    const entries: DeliveryLogEntry[] = [];
-    let discarding = recovery?.discardingOversized ?? false;
+    if (!stat.isFile() || stat.nlink !== 1) throw new Error('math_delivery_log_invalid');
     if (stat.size < offset) {
-      // Each complete line, and a trailing fragment, was either read already or is a rewritten copy: never replay them.
-      const tail = Buffer.alloc(Math.min(stat.size, MAX_DELIVERY_LINE_BYTES + 1));
-      const read = fs.readSync(fd, tail, 0, tail.length, stat.size - tail.length);
-      const newline = tail.subarray(0, read).lastIndexOf(10);
-      offset = newline < 0 ? stat.size : stat.size - read + newline + 1;
-      discarding = offset < stat.size || (newline < 0 && stat.size > 0);
-      entries.push({ error: 'math_delivery_log_rewritten', offset, discardingOversized: discarding });
+      // The rewritten bytes may repeat old events. Skip the snapshot and discard any unfinished line.
+      const last = Buffer.alloc(1);
+      const partial = stat.size > 0 && fs.readSync(fd, last, 0, 1, stat.size - 1) === 1 && last[0] !== 10;
+      const entry: DeliveryLogEntry = { error: 'math_delivery_log_rewritten', offset: stat.size, discardingOversized: partial };
+      return { entries: [entry], offset: entry.offset, discardingOversized: partial, hasMore: false };
     }
     const buffer = Buffer.alloc(Math.min(stat.size - offset, MAX_DELIVERY_LINE_BYTES + 1));
     const size = fs.readSync(fd, buffer, 0, buffer.length, offset);
+    const hasMore = offset + size < stat.size;
     let start = 0;
     // A rejected long line may span several polls; never parse its trailing fragment.
-    if (discarding) {
+    if (discardingOversized) {
       const newline = buffer.subarray(0, size).indexOf(10);
-      if (newline < 0) return { lines: [], offset: offset + size, entries, discardingOversized: true };
-      start = newline + 1; discarding = false;
+      if (newline < 0) return { entries: [], offset: offset + size, discardingOversized: true, hasMore };
+      start = newline + 1;
+      discardingOversized = false;
     }
+    const entries: DeliveryLogEntry[] = [];
     while (start < size) {
       const newline = buffer.subarray(0, size).indexOf(10, start);
       if (newline < 0) {
         if (start === 0 && size > MAX_DELIVERY_LINE_BYTES) {
-          if (!recovery) throw new Error('math_delivery_line_too_large');
-          start = size; discarding = true;
+          start = size; discardingOversized = true;
           entries.push({ error: 'math_delivery_line_too_large', offset: offset + start, discardingOversized: true });
         }
         break;
@@ -233,7 +268,29 @@ export function readDeliveryLines(file: string, offset: number,
       start = newline + 1;
       entries.push({ line, offset: offset + start, discardingOversized: false });
     }
-    return { lines: entries.flatMap(entry => entry.line?.trim() ? [entry.line] : []), offset: offset + start,
-      entries, ...(recovery ? { discardingOversized: discarding } : {}) };
+    return { entries, offset: offset + start, discardingOversized, hasMore };
   } finally { fs.closeSync(fd); }
+}
+
+/** Advance only after the caller handles an entry. Failed intake leaves it available for retry. */
+export function* pendingDeliveryLines(file: string, cursors: Record<string, number>, key: string, onAdvance: () => void,
+  mode: 'batch' | 'drain' = 'batch') {
+  const discardKey = key + '/discardingOversized';
+  const advance = ({ offset, discardingOversized }: Pick<DeliveryLogBatch, 'offset' | 'discardingOversized'>) => {
+    const discarding = Number(discardingOversized);
+    if ((cursors[key] ?? 0) === offset && (cursors[discardKey] ?? 0) === discarding) return;
+    cursors[key] = offset;
+    cursors[discardKey] = discarding;
+    onAdvance();
+  };
+  for (;;) {
+    const offset = cursors[key] ?? 0;
+    const batch = readDeliveryLines(file, offset, cursors[discardKey] === 1);
+    for (const entry of batch.entries) {
+      yield entry;
+      advance(entry);
+    }
+    advance(batch);
+    if (mode === 'batch' || !batch.hasMore || batch.offset <= offset) return;
+  }
 }

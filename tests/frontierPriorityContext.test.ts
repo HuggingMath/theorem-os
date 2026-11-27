@@ -4,7 +4,7 @@ import type { CooperationState } from '../src/solver/cooperation';
 import type { SolverRunState } from '../src/solver/archive';
 import type { SolverProblem } from '../src/solver/problem';
 import { buildResearchContext } from '../src/solver/modules/context';
-import { assignmentDeliveryFile, initialPlanDeliveryFile, taskVersion, type CooperativeAction, type TaskRecord } from '../src/solver/tasks';
+import { assignmentDeliveryFile, taskVersion, type CooperativeAction, type TaskRecord } from '../src/solver/tasks';
 import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 
 const seedCommit = 'a'.repeat(40);
@@ -50,7 +50,7 @@ const withoutOptionalContext = () => {
 afterEach(() => vi.restoreAllMocks());
 
 it.each(['lemma', 'goal', 'research', 'sketch'] as const)(
-  'retains the complete %s delivery protocol without optional context or repeated protocol text', kind => {
+  'keeps the %s delivery entry points available without optional context', kind => {
     withoutOptionalContext();
     const record = node('assigned', kind), action = actionFor(record);
     if (action.kind !== 'task') throw new Error('fixture_assignment');
@@ -60,27 +60,29 @@ it.each(['lemma', 'goal', 'research', 'sketch'] as const)(
     expect(context.manifest!.included).toContainEqual(expect.objectContaining({ id: 'assignment-policy', required: true }));
     expect(context.message).toContain('Current delivery log: ' + assignmentDeliveryFile(action.assignment));
     expect(context.instructions).toContain('"kind":"helpers","declarations":');
-    expect(context.instructions).toContain('"kind":"research","finding":');
-    expect(context.instructions).toContain('publishing does not finish or park your proof task');
-    expect(context.instructions).toContain('The host freezes the saved sources and independently checks and integrates them');
-    expect(context.instructions).toContain('Do not truncate the delivery log');
-    expect((context.instructions + context.message).match(/To share before returning/g)).toHaveLength(1);
+    expect(context.instructions).toContain('Use research-observe from .scratch/theoremos-help.md');
+    expect(context.toolHelp?.text).toContain("--finding '.scratch/finding.json'");
+    if (kind === 'lemma' || kind === 'goal') {
+      expect(context.instructions).toContain('save the assigned declaration and return for host checking');
+    } else {
+      expect(context.instructions).toContain('return with RESEARCH.md to deliver an advisory assignment');
+    }
+    expect(context.instructions).not.toContain('"kind":"research","finding":');
     expect(context.message).toContain(`Your role: ${kind === 'goal' ? 'engineer' : kind === 'lemma' ? 'prover' : 'researcher'}`);
     expect(context.message).toContain('Delivery protocol: see session instructions.');
     expect(context.message).toContain(formal);
   });
 
-it('retains the complete initial plan publication protocol without optional context or repeated protocol text', () => {
+it('keeps initial plan publication available without optional context', () => {
   withoutOptionalContext();
   const action: CooperativeAction = { kind: 'lead', seedCommit, initialPlanNonce: 'publication', planVersion: 'plan-version' };
   const context = contextFor({ canonicalCommit: seedCommit, tasks: [] }, action);
 
   expect(context.manifest).toMatchObject({ maxOptionalBytes: 0, optionalBytes: 0 });
-  expect(context.instructions).toContain(initialPlanDeliveryFile(action));
-  expect(context.instructions).toContain('"kind":"plan","baseVersion":"plan-version"');
-  expect(context.instructions).toContain('Only the first valid publication in this dispatch is accepted');
-  expect(context.instructions).toContain('Do not truncate the log');
-  expect((context.instructions + context.message).match(/Once a useful executable plan is ready, publish it promptly/g)).toHaveLength(1);
+  expect(context.instructions).toContain('Edit only /proof/RESEARCH.md, /proof/.scratch/plan.json.');
+  expect(context.instructions).toContain('The host accepts only one publication per dispatch');
+  expect(context.toolHelp?.text).toContain('plan-apply --publish --file .scratch/plan.json');
+  expect(context.message).toContain(JSON.stringify(action));
   expect(context.message).toContain('Your role: lead');
   expect(context.message).toContain('Delivery protocol: see session instructions.');
   expect(context.message).toContain(formal);

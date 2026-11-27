@@ -5,7 +5,7 @@ import type { SolverRunState } from '../src/solver/archive';
 import type { CooperativeResearch } from '../src/solver/cooperation';
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import { commitSolverSources, type SolverProblem } from '../src/solver/problem';
-import { leadPlanDeliveryFile, parseCooperationPlan, taskVersion, type CooperativeAction, type CooperativeTask } from '../src/solver/tasks';
+import { parseCooperationPlan, taskVersion, type CooperativeAction, type CooperativeTask } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 
@@ -80,19 +80,17 @@ describe('correction of inherited rejected Lead drafts', () => {
     vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  it('corrects a previously rejected inherited draft once, while leaving the plan and decisions unpublished', async () => {
+  it('reports a previously rejected inherited draft at checkpoint handoff without publishing it', async () => {
     const action = await rejectForRetry(), before = structuredClone(state.cooperation!.tasks);
-    await cooperative.pulse(); await cooperative.pulse();
-    expect(notify).toHaveBeenCalledOnce();
-    expect(notify.mock.calls[0][0]).toContain('math_plan_research_decisions_missing');
-    expect(notify.mock.calls[0][0]).toContain('unanswered-finding');
-    expect(notify.mock.calls[0][0]).toContain(leadPlanDeliveryFile(action));
+    await cooperative.pulse();
+    expect(notify).not.toHaveBeenCalled();
+    expect(cooperative.leadCheckpointHandoff(action)?.reason).toContain('math_plan_research_decisions_missing');
+    expect(cooperative.leadCheckpointInstruction(action)).toContain('unanswered-finding');
     expect(state.cooperation!.tasks).toEqual(before);
     expect(state.cooperation!.researchDecisions).toBeUndefined();
     expect(state.cooperation!.planPublication).toBeUndefined();
     write({ ...graph(), ...decision() });
-    await cooperative.pulse();
-    expect(notify).toHaveBeenCalledOnce();
+    expect(cooperative.leadCheckpointHandoff(action)).toBeUndefined();
     expect(state.cooperation!.researchDecisions).toBeUndefined();
     expect(state.cooperation!.planPublication).toBeUndefined();
     expect(state.cooperation!.error).toContain('math_plan_research_decisions_missing');
@@ -102,19 +100,9 @@ describe('correction of inherited rejected Lead drafts', () => {
     expect(state.cooperation!.error).toBeUndefined();
   });
 
-  it('retries a failed correction notification for the inherited rejected draft', async () => {
-    await rejectForRetry();
-    notify.mockRejectedValueOnce(new Error('fixture_notification_unavailable'));
-    await cooperative.pulse(); await Promise.resolve();
-    await cooperative.pulse(); await cooperative.pulse();
-    expect(notify).toHaveBeenCalledTimes(2);
-    expect(state.cooperation!.researchDecisions).toBeUndefined();
-    expect(state.cooperation!.planPublication).toBeUndefined();
-  });
-
-  it('keeps an ordinary accepted baseline quiet when only new research requires a decision', async () => {
-    await start(); await cooperative.pulse(); await cooperative.pulse();
-    expect(notify).not.toHaveBeenCalled();
+  it('requests the decision without diagnosing an ordinary accepted baseline as a rejected draft', async () => {
+    const action = await start();
+    expect(cooperative.leadCheckpointHandoff(action)).toEqual({ reason: undefined });
     expect(state.cooperation!.planRejection).toBeUndefined();
     expect(state.cooperation!.researchDecisions).toBeUndefined();
   });
@@ -125,19 +113,18 @@ describe('correction of inherited rejected Lead drafts', () => {
     await checkpoint(action);
     expect(state.cooperation!.planRejection?.error).toContain('math_plan_research_decisions_missing');
     write(graph());
-    await start(); await cooperative.pulse(); await cooperative.pulse();
-    expect(notify).not.toHaveBeenCalled();
+    const retry = await start();
+    expect(cooperative.leadCheckpointHandoff(retry)).toEqual({ reason: undefined });
     expect(state.cooperation!.researchDecisions).toBeUndefined();
   });
 
   it('does not correct a missing research decision already settled by other accepted evidence', async () => {
-    await rejectForRetry();
+    const action = await rejectForRetry();
     const finding = state.cooperation!.deliveries!.find(record => record.id === 'unanswered-finding')!;
     state.cooperation!.researchDecisions = [{ deliveryId: finding.id, taskDigest: finding.taskDigest,
       findingDigest: finding.findingDigest, outcome: 'decline', reason: 'An accepted decision already settled this finding.',
       at: 1, planVersion: state.cooperation!.planVersion! }];
-    await cooperative.pulse();
-    expect(notify).not.toHaveBeenCalled();
+    expect(cooperative.leadCheckpointHandoff(action)?.reason).toBeUndefined();
     expect(state.cooperation!.planPublication).toBeUndefined();
   });
 });

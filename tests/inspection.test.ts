@@ -641,6 +641,22 @@ describe('human plan edits', () => {
     await expect(queueRunEdit(f.run, { ...plan, tasks: [{ ...plan.tasks[0], status: 'active' }] })).rejects.toThrow('id_conflict');
   });
 
+  it('finds queued edits and appends new ones past malformed complete records', async () => {
+    const f = fixture(), plan = { ...exportRunPlan(f.state), id: 'first-edit' };
+    const log = path.join(path.dirname(f.stateFile), 'edits.jsonl');
+    await queueRunEdit(f.run, plan);
+    const existing = Buffer.concat([Buffer.from('{broken\nnull\n'), fs.readFileSync(log), Buffer.from([0xff, 0x0a])]);
+    fs.writeFileSync(log, existing);
+
+    expect(await queueRunEdit(f.run, plan)).toMatchObject({ status: 'already_queued' });
+    await expect(queueRunEdit(f.run, { ...plan, baseVersion: 'old' })).rejects.toThrow('id_conflict');
+    expect(fs.readFileSync(log)).toEqual(existing);
+    expect(await queueRunEdit(f.run, { ...plan, id: 'second-edit' })).toMatchObject({ status: 'queued' });
+    const saved = fs.readFileSync(log);
+    expect(saved.subarray(0, existing.length)).toEqual(existing);
+    expect(JSON.parse(saved.subarray(existing.length).toString('utf8')).id).toBe('second-edit');
+  });
+
   it('rejects stale versions, cyclic plans and missing original goals before appending', async () => {
     const f = fixture(), plan = exportRunPlan(f.state);
     await expect(queueRunEdit(f.run, { ...plan, baseVersion: 'old' })).rejects.toThrow('version_conflict');
@@ -672,7 +688,13 @@ describe('human plan edits', () => {
     const other = path.join(f.root, 'other'); fs.writeFileSync(other, 'outside'); fs.symlinkSync(other, log);
     await expect(queueRunEdit(f.run, exportRunPlan(f.state))).rejects.toThrow();
     expect(fs.readFileSync(other, 'utf8')).toBe('outside');
-    fs.unlinkSync(log); fs.writeFileSync(log, '{"id":');
-    await expect(queueRunEdit(f.run, exportRunPlan(f.state))).rejects.toThrow('incomplete_log');
+    fs.unlinkSync(log);
+    const plan = { ...exportRunPlan(f.state), id: 'already-queued' };
+    await queueRunEdit(f.run, plan);
+    fs.appendFileSync(log, '{"id":');
+    const partial = fs.readFileSync(log);
+    await expect(queueRunEdit(f.run, plan)).rejects.toThrow('incomplete_log');
+    await expect(queueRunEdit(f.run, { ...plan, id: 'new-edit' })).rejects.toThrow('incomplete_log');
+    expect(fs.readFileSync(log)).toEqual(partial);
   });
 });

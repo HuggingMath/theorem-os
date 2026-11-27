@@ -126,7 +126,7 @@ describe('theory module guidance in research prompts', () => {
   it('collapses theory modules, offers them as proof paths and asks for definition sanity lemmas', () => {
     const owned = ['Submission.lean', ...modules, ...certificateSlotFiles(2)].toSorted();
     const lead = build(fixture(owned));
-    expect(lead).toContain('Edit only /proof/RESEARCH.md.');
+    expect(lead).toContain('Edit only /proof/RESEARCH.md, /proof/.scratch/plan.json.');
     expect(lead).toContain('Leave all Lean source files, imports and environment configuration unchanged.');
     const worker = build(fixture(owned), lemma);
     expect(worker).toContain('Edit only /proof/Submission.lean, the 3 theory modules /proof/Submission/Theory/T01.lean … ' +
@@ -137,7 +137,6 @@ describe('theory module guidance in research prompts', () => {
     expect(worker).toContain('Submission/Theory/T01.lean … Submission/Theory/T03.lean are owned theory-library modules');
     expect(worker).toContain('a theorem named Foo.bar there is Submission.Theory.Foo.bar');
     expect(lead).toContain('Pair each definition with a typed sanity lemma');
-    expect(worker).toContain(`Its keys must be exactly ${JSON.stringify(owned)}`);
 
     const plain = build(fixture(['Submission.lean']));
     expect(plain).toContain('Choose proofPath from ["Submission.lean"]; goals infer');

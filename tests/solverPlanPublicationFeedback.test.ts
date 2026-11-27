@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mathDigest } from '../src/math/mathRuntimeIo';
@@ -62,13 +63,16 @@ describe('live Lead publication correction feedback', () => {
     fs.appendFileSync(path.join(workers[0].worktree, log(action)), (typeof value === 'string' ? value : JSON.stringify(value)) + '\n');
     await cooperative.pulse();
   };
-  const expectCorrection = (message: string, action: Lead, reason: string) => {
-    for (const detail of [reason, log(action), action.planVersion!, nonce(action)]) expect(message).toContain(detail);
-    expect(message).toContain('"kind":"plan"');
-    const target = JSON.parse(message.split('current publication target: ')[1].split('. Preserve the log')[0]);
-    expect(target).toEqual({ file: log(action), kind: 'plan', dispatchNonce: nonce(action), baseVersion: action.planVersion });
-    expect(message).toMatch(/append/iu);
-    expect(message).toMatch(/complete/iu);
+  const expectCorrection = (message: string, _action: Lead, reason: string) => {
+    expect(message).toContain(reason);
+    expect(message).toContain('plan-apply --publish');
+  };
+  const submitDraft = async (action: Lead, draft: object) => {
+    const result = spawnSync('bun', ['bin/math.ts', 'plan-apply', '--publish', '--workspace', workers[0].worktree],
+      { input: JSON.stringify(draft), encoding: 'utf8', timeout: 15_000 });
+    expect(result.status, result.stdout || result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ status: 'queued', file: log(action) });
+    await cooperative.pulse();
   };
   const context = (action: Lead) => directSolverModules.M4.build(problem,
     { ...state, cooperation: cooperative.contextState(action, workers[0]) },
@@ -85,8 +89,8 @@ describe('live Lead publication correction feedback', () => {
   const checkpoint = (requestId: string, correct = false) => ({ kind: 'checkpoint', requestId,
     notesDigest: correct ? mathDigest(fs.readFileSync(path.join(workers[0].worktree, 'RESEARCH.md'))) : '0'.repeat(64) });
   const expectCheckpointCorrection = (message: string, action: Lead, requestId: string, reason: string) => {
-    for (const detail of [requestId, reason, log(action), 'notesDigest', '"kind":"checkpoint"']) expect(message).toContain(detail);
-    expect(message).toMatch(/append/iu);
+    for (const detail of [requestId, reason, log(action), '--request-id', '--log']) expect(message).toContain(detail);
+    expect(message).toContain('rerun checkpoint');
     expect(message).not.toContain('dispatchNonce');
     expect(message).not.toContain('"kind":"plan"');
   };
@@ -154,7 +158,7 @@ describe('live Lead publication correction feedback', () => {
     });
 
   it.each(['initial', 'replacement'] as const)(
-    'supplies the missing event envelope for a bare %s graph or patch', async kind => {
+    'binds a bare %s graph or patch to the active dispatch', async kind => {
       prepare(kind);
       const action = await start(), before = structuredClone(state.cooperation);
       const graph = kind === 'initial' ? { tasks: completePlan.tasks, groups: completePlan.groups }
@@ -167,13 +171,9 @@ describe('live Lead publication correction feedback', () => {
       expect(state.cooperation!.tasks).toEqual(before!.tasks);
       expect(state.cooperation!.planPublication).toBeUndefined();
       const message = notify.mock.calls[0][0];
-      const target = JSON.parse(message.match(/current publication target: (\{[^\n]+?\})\. /u)![1]);
-      const { file, ...envelope } = target;
-      expect(file).toBe(log(action));
-      expect(envelope.kind).toBe('plan');
-      expect(envelope.dispatchNonce).toBe(nonce(action));
-      expect(message).toContain('top level of the same event');
-      await publish(action, { ...envelope, ...graph });
+      expect(message).toContain('plan-apply --publish');
+      const { baseVersion: _base, ...draft } = graph as typeof graph & { baseVersion?: string };
+      await submitDraft(action, draft);
       expect(rejected()).toHaveLength(1);
       expect(state.cooperation!.planPublicationRejection).toBeUndefined();
       expect(state.cooperation!.planPublication).toMatchObject({ nonce: nonce(action) });
@@ -199,12 +199,12 @@ describe('live Lead publication correction feedback', () => {
     const message = notify.mock.calls[0][0];
     expect(message).toContain('Current response template');
     const template = JSON.parse(message.split('the template itself is not a valid submission):\n')[1].split('\n')[0]);
-    expect(template).toMatchObject({ kind: 'plan', dispatchNonce: nonce(action), baseVersion: action.planVersion, upsert: [],
+    expect(template).toMatchObject({ baseVersion: action.planVersion, upsert: [],
       researchDecisions: [{ deliveryId: 'current-research-finding' }] });
     expect(template).not.toHaveProperty('file');
     expect(state.cooperation!.researchDecisions).toBeUndefined();
     expect(state.cooperation!.planPublication).toBeUndefined();
-    await publish(action, { ...template, upsert: [helper], researchDecisions: [{ deliveryId: 'current-research-finding',
+    await submitDraft(action, { ...template, upsert: [helper], researchDecisions: [{ deliveryId: 'current-research-finding',
       outcome: 'adopt', taskIds: [helper.id], reason: 'This exact helper closes the consumer obligation.' }] });
     expect(notify).toHaveBeenCalledOnce();
     expect(rejected()).toHaveLength(1);
@@ -404,7 +404,7 @@ describe('live Lead publication correction feedback', () => {
     for (const id of ['plan-publication-rejection', 'context-checkpoint-rejection'])
       expect(compiled.manifest!.included).toContainEqual(expect.objectContaining({ id, required: true }));
     for (const message of [compiled.message, compiled.continuationMessage!]) {
-      for (const detail of [requestId, rejection!.reason, log(action), 'notesDigest', '"kind":"checkpoint"', planRejection!.reason])
+      for (const detail of [requestId, rejection!.reason, log(action), '--request-id', '--log', planRejection!.reason])
         expect(message).toContain(detail);
     }
     await publish(action, checkpoint(requestId, true));

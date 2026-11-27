@@ -3,6 +3,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from '../src/solver/archive';
 import type { CooperativeResearch } from '../src/solver/cooperation';
+import { MAX_DELIVERY_LINE_BYTES } from '../src/solver/deliveries';
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import { planApprovalInspection, planApprovalLog } from '../src/solver/planApproval';
 import { commitSolverSources, type SolverProblem } from '../src/solver/problem';
@@ -133,13 +134,17 @@ describe('plan approval before dispatch (--plan-approval)', () => {
     expect(planApprovalInspection(state)).toMatchObject({ required: false, status: 'not-required' });
   });
 
-  it('applies an edit before an approval read in the same pulse, so the approval of the older plan conflicts', async () => {
+  it.each([false, true])('applies queued edits before checking an approval of the old plan (oversized entry: %s)', async oversized => {
     const cooperative = create(), action = await startLead(cooperative);
     await publish(cooperative, action);
     const read = state.cooperation!.planVersion!;
-    fs.appendFileSync(path.join(directory, 'edits.jsonl'), JSON.stringify({ id: 'owner-edit', baseVersion: read, ...plan('_edited') }) + '\n');
+    const edits = path.join(directory, 'edits.jsonl');
+    if (oversized) fs.writeFileSync(edits, 'x'.repeat(MAX_DELIVERY_LINE_BYTES + 1) + '\n');
+    fs.appendFileSync(edits, JSON.stringify({ id: 'owner-edit', baseVersion: read, ...plan('_edited') }) + '\n');
     await approve(cooperative, 'owner', read);
-    expect(state.cooperation!.edits?.[0]).toMatchObject({ id: 'owner-edit', status: 'applied' });
+    expect(state.cooperation!.edits?.at(-1)).toMatchObject({ id: 'owner-edit', status: 'applied' });
+    expect(named('edit_rejected').map(event => event?.reason)).toEqual(oversized ? ['math_delivery_line_too_large'] : []);
+    expect(state.cooperation!.cursors?.edits).toBe(fs.statSync(edits).size);
     expect(state.cooperation!.planVersion).not.toBe(read);
     expect(state.cooperation!.planApproval!.rejections).toEqual([expect.objectContaining({ id: 'owner',
       reason: 'math_plan_approval_version_conflict', planVersion: read })]);
@@ -148,6 +153,30 @@ describe('plan approval before dispatch (--plan-approval)', () => {
     const waiting = track(cooperative.next(peer, budget));
     await approve(cooperative, 'owner-again');
     expect(await waiting).toMatchObject({ kind: 'task', task: { id: 'goal_1_edited' } });
+  });
+
+  it('continues reading approvals after a shortened log across restart', async () => {
+    const cooperative = create(), action = await startLead(cooperative);
+    await publish(cooperative, action);
+    const log = planApprovalLog(path.join(directory, 'state.json'));
+    const version = state.cooperation!.planVersion!;
+    await approve(cooperative, 'stale', 'obsolete-version');
+    const oldOffset = state.cooperation!.cursors!.planApprovals;
+    fs.writeFileSync(log, '{"id":"ignored","planVersion":"');
+    expect(fs.statSync(log).size).toBeLessThan(oldOffset);
+    await cooperative.pulse();
+    expect(named('plan_approval_rejected').map(event => event?.reason))
+      .toEqual(['math_plan_approval_version_conflict', 'math_delivery_log_rewritten']);
+    expect(planApprovalInspection(state).status).toBe('pending');
+
+    const stateFile = path.join(directory, 'state.json');
+    writeSolverRunState(stateFile, state);
+    state = readSolverRunState(stateFile);
+    const resumed = create();
+    fs.appendFileSync(log, version + '"}\n');
+    await approve(resumed, 'owner', version);
+    expect(named('plan_approved')).toEqual([{ id: 'owner', planVersion: version }]);
+    expect(named('plan_approval_rejected')).toHaveLength(2);
   });
   it('gives the Lead one revision turn per owner note while the plan waits', async () => {
     const cooperative = create(), action = await startLead(cooperative);

@@ -8,10 +8,18 @@ type Json = Record<string, any>;
 export type AgentTeamTransport = 'host-tools' | 'native-agent-control';
 // Codex 0.171 drops the entire parameters object above this branch count.
 const MAX_CODEX_ONEOF_BRANCHES = 16;
-const nativeOperations = new Set(['finish', 'history', 'inspect', 'inspect-research', 'adopt', 'yield', 'submit', 'submit_helpers', 'retire_route', 'route_summary']);
+const nativeOperations = new Set(['finish', 'history', 'inspect', 'inspect-research', 'adopt', 'yield', 'submit', 'retire_route', 'route_summary']);
 
 const text = z.string().trim().min(1).max(16000);
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/u);
+const submission = z.object({
+  operation: z.literal('submit'), summary: text, objectiveRevision: z.number().int().positive().optional(),
+  declarations: declarationSubmissionSchema.shape.declarations, helpersOnly: z.boolean().optional(),
+}).strict();
+// Saved threads can still send the old operation. Keep its parsed form for the operation journal.
+export const legacyHelperSubmissionSchema = submission.omit({ helpersOnly: true })
+  .extend({ operation: z.literal('submit_helpers') });
+
 export const agentTeamRequestSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('spawn'), agentId: id, message: text, routeId: portfolioRouteIdSchema.optional(), workKind: agentTeamWorkKindSchema.optional(), budget: agentTeamAllowanceSchema.optional() }).strict(),
   z.object({ operation: z.literal('assign'), agentId: id, message: text, routeId: portfolioRouteIdSchema.optional(), workKind: agentTeamWorkKindSchema.optional(), budget: agentTeamAllowanceSchema.optional() }).strict(),
@@ -40,8 +48,7 @@ export const agentTeamRequestSchema = z.discriminatedUnion('operation', [
     limit: z.number().int().min(1).max(16000).optional() }).strict(),
   z.object({ operation: z.literal('inspect-research'), artifactId: z.string().regex(/^[a-f0-9]{64}$/u),
     offset: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(16000).optional() }).strict(),
-  z.object({ operation: z.literal('submit'), summary: text, objectiveRevision: z.number().int().positive().optional(), declarations: declarationSubmissionSchema.shape.declarations }).strict(),
-  z.object({ operation: z.literal('submit_helpers'), summary: text, objectiveRevision: z.number().int().positive().optional(), declarations: declarationSubmissionSchema.shape.declarations }).strict(),
+  submission,
   z.object({ operation: z.literal('adopt'), deliveryId: z.string().regex(/^[a-f0-9]{64}$/u), targetId: id.optional() }).strict(),
   z.object({ operation: z.literal('stop'), agentId: id }).strict(),
   routeRetirementSchema.extend({ operation: z.literal('retire_route') }),
@@ -49,7 +56,7 @@ export const agentTeamRequestSchema = z.discriminatedUnion('operation', [
     includeRetired: z.boolean().optional() }).strict(),
 ]);
 
-export const agentTeamMemberOperations = new Set(['message', 'poll', 'wait', 'inspect', 'inspect-research', 'history', 'yield', 'submit', 'submit_helpers', 'progress', 'route_summary']);
+export const agentTeamMemberOperations = new Set(['message', 'poll', 'wait', 'inspect', 'inspect-research', 'history', 'yield', 'submit', 'progress', 'route_summary']);
 
 export function agentTeamMessageRouteFeedback(actor: string, recipient: string) {
   if (recipient !== actor) return;
@@ -61,7 +68,7 @@ export function agentTeamMessageRouteFeedback(actor: string, recipient: string) 
 
 function optionsFor(actor: string, budgetControlsEnabled: boolean, transport: AgentTeamTransport = 'host-tools') {
   return agentTeamRequestSchema.options.filter(option => (transport !== 'native-agent-control' || nativeOperations.has(option.shape.operation.value)) && (actor === 'lead'
-    ? !['submit', 'submit_helpers', 'yield', 'progress'].includes(option.shape.operation.value) && (budgetControlsEnabled || option.shape.operation.value !== 'budget')
+    ? !['submit', 'yield', 'progress'].includes(option.shape.operation.value) && (budgetControlsEnabled || option.shape.operation.value !== 'budget')
     : agentTeamMemberOperations.has(option.shape.operation.value)));
 }
 
@@ -103,7 +110,9 @@ function fieldSchema(value: z.ZodTypeAny): Json {
 }
 
 function operationContracts(actor: string, budgetControlsEnabled: boolean, transport: AgentTeamTransport = 'host-tools') {
-  return optionsFor(actor, budgetControlsEnabled, transport).map(option => {
+  // Historical host callers can still send coordinate explicitly.
+  const advertised = optionsFor(actor, budgetControlsEnabled, transport).filter(option => option.shape.operation.value !== 'coordinate');
+  return advertised.map(option => {
     const schema = fieldSchema(option);
     if (!budgetControlsEnabled) {
       delete schema.properties.budget;
@@ -148,10 +157,10 @@ export function agentTeamToolDefinition(actor: string, budgetControlsEnabled: bo
   for (const { schema } of contracts) Object.assign(properties, schema.properties);
   properties.operation = { type: 'string', enum: contracts.map(item => item.operation) };
   const purpose = native ? lead
-    ? 'Mathematical host interface for the Lead. Native collaboration tools manage agent identities, spawning, followups, messages and interruption. Inspect reads a checked delivery; it does not install its declarations. Adopt merges them into the saved consumer draft before rechecking, so that draft may already call the agreed names. Finish requests independent original-proof checking. '
+    ? 'Mathematical host interface for the Lead. Native collaboration tools manage agent identities, spawning, followups, messages and interruption. Adopt rechecks a delivery in the saved consumer draft before merging. Inspect shows details on demand. Return with saved original proofs for independent checking. Finish requests early handoff. '
     : 'Mathematical host interface for a proof-writing member. Native collaboration tools deliver messages. Submit exact saved declarations, then return for stopped-writer checking. Yield preserves this task and draft for native followup after dependencies are integrated. '
     : lead
-    ? 'Lead collaboration interface. Spawn and assign queue proof writers and return immediately. Amend changes the effective objective or workKind of a queued, running or paused task, retaining its identity, draft and revision history. Coordinate records a deliberate collaboration decision and next step. Publish updates the shared advisory research summary. Inspect evidence before adoption; return after adopting into yourself so the host can stop writing and integrate. Finish hands saved original proofs to the host for independent acceptance even if local diagnostics failed to start. Stop interrupts a member. '
+    ? 'Lead collaboration interface. Spawn and assign queue proof writers and return immediately. Amend changes the effective objective or workKind of a queued, running or paused task, retaining its identity, draft and revision history. Publish updates the shared advisory research summary. Inspect shows delivery details on demand. Return after requesting adoption into your workspace. Save original proofs and return for independent checking. Finish requests early handoff. Stop interrupts a member. '
     : 'Proof-writing member interface. Progress records a useful finding, local probe, blocker or route change against the supplied current objectiveRevision and notifies Lead. Optional knowledgeUses names a supplied source anchor (file#heading) actually used and its concrete application; a report remains advisory. Message Lead or peers to discuss results. Submit exact declarations once they answer the assignment; include objectiveRevision after an amendment, then return for host checking. The host also checkpoints before the next model request after submit/yield. Other original goals may remain open. Yield preserves the task and draft for later resume. ';
   return { name: 'theoremos_team', description: purpose +
     (native ? 'History pages complete business task text; inspect and inspect-research read fixed evidence. agentId/targetId refer to the workspace member IDs shown in team observations; native collaboration targets use canonical paths or thread IDs. ' :
@@ -164,9 +173,9 @@ export function agentTeamToolDefinition(actor: string, budgetControlsEnabled: bo
     (native ? 'Inspection and adoption retain peer-result provenance. ' :
       'WorkKind describes the deliverable: research, proof, independent-reconstruction, review or assembly. Inspection/adoption exposure is recorded and carried with later deliveries; this records reuse, not a guarantee of mathematical independence. ') +
     (lead ? 'Use retire_route to record a refutation and cancel all unfinished work tagged with that route. ' +
-      (native ? 'For native spawn_agent or followup_task, tag the assignment with Route: ROUTE_ID on its first line. ' :
+      (native ? 'For native spawn_agent or followup_task, put an optional Route: ROUTE_ID line first, then an optional Profiles: line of comma-separated IDs or slugs, then the assignment. ' :
         'For spawn/assign, use routeId to tag the route and select assignment profiles from the pinned Skill for the gap. ') :
-      'Use submit_helpers at a milestone to nominate standalone helpers, even while the assigned proof is open. Save and return for independent checking, then resume the same assignment. The host makes accepted signatures available to peers and applies the helpers before their next turn. ' +
+      'Set helpersOnly:true on submit to share standalone helpers and keep the assignment open. The host makes checked helpers available to peers before their next turn. ' +
       (native ? '' : 'To report to Lead use agentId: "lead"; for peer discussion use the peer ID. ') + 'Submit omits agentId because the caller and task are already bound; each declaration supplies file, name and complete closed type. For a new auxiliary def or abbrev, also set kind to "definition"; submit theorems about it as separate declarations. ') +
     'Use route_summary for a compact view of route assignments, checked helpers and recent deliveries. ' +
     'Supply only the fields for the selected operation:\n' + contracts.map(item => contractText(item.operation, item.schema)).join('\n'),

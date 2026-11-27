@@ -17,7 +17,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const execute = promisify(execFile);
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const editId = 'web-cooperative-edit', guidanceId = 'web-cooperative-direction';
-const proveMarker = 'WEB_COOPERATIVE_PROVE_FIRST', reviewMarker = 'WEB_COOPERATIVE_RELEASE_REVIEW';
+const proveMarker = 'WEB_COOPERATIVE_PROVE_FIRST', secondProofMarker = 'WEB_COOPERATIVE_PROVE_SECOND';
 const terminal = (run: WebRun) => ['completed', 'error', 'cancelled'].includes(run.status);
 const docker = (args: string[], timeout = 30_000) => execute('docker', args,
   { cwd: root, timeout, maxBuffer: 16 * 1024 * 1024 });
@@ -130,18 +130,12 @@ export async function runWebCooperativeSmoke(argv = process.argv.slice(2)) {
     const queuedEdit = await jobs.command(owner, run.id, { type: 'edit', proposal });
     assert.ok(['queued', 'received', 'applied'].includes(queuedEdit.status));
     assert.equal(queuedEdit.commandDigest, preview.commandDigest);
-    await wait('host applies the complete plan, rechecks revised targets, and starts independent review', () => Boolean(
-      run?.observation?.inspection.edits.find(edit => edit.id === editId)?.recheck?.status === 'passed' &&
-      run.observation.inspection.review?.status === 'running'));
-    const rechecked = await capture(), edit = rechecked.inspection.edits.find(item => item.id === editId)!;
-    assert.equal(edit.status, 'applied'); assert.notEqual(edit.planVersion, proposal.baseVersion);
-    assert.equal(edit.recheck!.tasks.length, 2);
-    for (const item of edit.recheck!.tasks) {
-      assert.equal(item.status, 'passed'); assert.equal(item.lastCheck!.passed, true);
-      assert.ok(item.lastCheck!.receiptIds.length);
-      assert.equal(item.taskDigest, rechecked.inspection.tasks.find(task => task.id === item.taskId)!.version);
-    }
-    assert.notEqual(rechecked.inspection.tasks.find(task => task.id === 'goal_1')!.version, first.version);
+    await wait('host applies the revised plan and starts the second proof', () => Boolean(
+      run?.observation?.inspection.edits.find(edit => edit.id === editId)?.status === 'applied' &&
+      run.observation.inspection.workers.some(worker => worker.id === 'engineer' && worker.task === 'goal_2' &&
+        worker.scheduling?.status === 'working')));
+    const revised = await capture(), second = revised.inspection.tasks.find(task => task.id === 'goal_2')!;
+    assert.notEqual(revised.inspection.tasks.find(task => task.id === 'goal_1')!.version, first.version);
     const duplicate = await jobs.command(owner, run.id, { type: 'edit', proposal });
     assert.equal(duplicate.status, 'applied');
     const auditScript = `const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process');
@@ -158,12 +152,10 @@ export async function runWebCooperativeSmoke(argv = process.argv.slice(2)) {
     assert.ok(audit.proofNotes.some((item: { notes: { fixture?: { guidanceReceived?: string } } }) =>
       item.notes.fixture?.guidanceReceived?.includes(proveMarker)), 'A frozen worker note must retain the guidance actually received through turn/steer.');
     write('host-audit.json', audit);
-    const reviewerId = rechecked.inspection.review!.workerId!;
-    assert.equal(reviewerId, 'researcher-1', 'The independent reviewer must be a separate peer from the proof Engineer.');
-    const release = guidance(rechecked, { id: 'web-cooperative-review-release', recipient: { kind: 'worker', id: reviewerId },
-      text: `${reviewMarker}: report the review of this fixed candidate. Final acceptance remains with S3.` });
+    const release = guidance(revised, { id: 'web-cooperative-second-proof', recipient: { kind: 'task', id: second.id },
+      taskRef: { id: second.id, version: second.version }, text: `${secondProofMarker}: prove the second goal using Nat.zero_add.` });
     assert.ok(['queued', 'deferred', 'delivered'].includes((await jobs.command(owner, run.id, { type: 'guidance', guidance: release })).status));
-    await wait('independent reviewer settles and final Lean/S3 accepts both original targets', () => terminal(run!), 180_000);
+    await wait('final Lean/S3 accepts both original targets', () => terminal(run!), 180_000);
     assert.equal(run.status, 'completed', run.error);
     assert.equal(run.result!.status, 'evaluated_passed', JSON.stringify(run.result!.report));
     assertWebEnvironmentReport(run.result!.report, 'standard');
@@ -174,7 +166,16 @@ export async function runWebCooperativeSmoke(argv = process.argv.slice(2)) {
     // Canonical integration can remove empty lines between unchanged declaration headers.
     assert.equal(run.result!.proof.replace(/\n\n+/gu, '\n'),
       input.source.replace('by sorry', 'by rfl').replace('by sorry', 'by exact Nat.zero_add n').replace(/\n\n+/gu, '\n'));
-    assert.equal(run.observation!.inspection.review!.status, 'accepted');
+    const finished = run.observation!.inspection, edit = finished.edits.find(item => item.id === editId)!;
+    assert.equal(edit.status, 'applied'); assert.notEqual(edit.planVersion, proposal.baseVersion);
+    assert.equal(edit.recheck!.status, 'passed');
+    assert.equal(edit.recheck!.tasks.length, 2);
+    for (const item of edit.recheck!.tasks) {
+      assert.equal(item.status, 'passed'); assert.equal(item.lastCheck!.passed, true);
+      assert.ok(item.lastCheck!.receiptIds.length);
+      assert.equal(item.taskDigest, finished.tasks.find(task => task.id === item.taskId)!.version);
+    }
+    assert.equal(finished.review, undefined);
     assert.equal(run.observation!.acceptance, 'not-assessed');
     assert.equal(run.observation!.inspection.configuration.methodDigest, run.moduleConfiguration!.methodDigest);
     assert.equal(run.observation!.guidance.find(item => item.id === release.id)!.status, 'delivered');
@@ -197,7 +198,7 @@ export async function runWebCooperativeSmoke(argv = process.argv.slice(2)) {
       workers: run.observation!.inspection.workers.map(worker => ({ id: worker.id, role: worker.role, turns: worker.turns })),
       initialPlanPublished: true, guidanceDeliveredToExactTask: delivered, actualGuidanceRetainedInFrozenWorkerNotes: true,
       previewReadOnly: true, previousCheckedTaskVersion: first.version, edit: edit, duplicateEditAppliedOnce: true,
-      independentReviewer: reviewerId, result: run.result, archive: archive, containerRemoved: removed,
+      result: run.result, archive: archive, containerRemoved: removed,
       artifacts: ['observations.json', 'host-audit.json', 'archive.json', 'commands.json', 'trace.json'] });
     console.log('Cooperative Docker / command / host / Lean checks passed. Report: out/web-cooperative-smoke/report.json');
   } catch (error) {

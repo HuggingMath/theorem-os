@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/codexSession';
@@ -235,32 +236,35 @@ describe('cooperative advisory scheduling checkpoints', () => {
     controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
   });
 
-  it.each([false, true])('publishes the research reminder example through the current assignment protocol (needs decision: %s)', async needsDecision => {
+  it.each([false, true])('publishes the research reminder through research-observe (needs decision: %s)', async needsDecision => {
     const { state, workers, check, controller, run, pulse } = fixture();
     const held = heldAdvisoryTurns(1), completion = run(held.open, 1); void completion.catch(() => {});
     await held.wait(0, completion);
     await vi.advanceTimersByTimeAsync(90_000);
     const message = held.notify.mock.calls[0]![0] as string;
-    const example = message.match(/Append one complete JSON line to ("(?:\\.|[^"])*"): (\{"kind":"research".*?\}\})\./u);
-    expect(example).not.toBeNull();
-    const log = JSON.parse(example![1]) as string;
-    expect(log).toBe(path.join(workers[1].worktree, assignmentDeliveryFile(held.actions[0].assignment)));
-    const value = JSON.parse(example![2]);
-    expect(value.finding).not.toHaveProperty('needsDecision');
-    value.finding.summary = needsDecision
-      ? 'The saved search resolves the available identities but leaves the uniform norm estimate open; Lead must choose a different estimate.'
-      : 'The saved algebraic reduction supplies the exact identity needed by the consumer.';
-    value.finding.conclusion = needsDecision ? 'inconclusive' : 'supporting';
-    value.finding.remainingObligations = needsDecision ? ['Construct the uniform norm estimate.'] : [];
-    if (needsDecision) value.finding.needsDecision = true;
-    fs.writeFileSync(path.join(workers[1].worktree, 'RESEARCH.md'), value.finding.summary + '\n');
-    fs.appendFileSync(log, JSON.stringify(value) + '\n');
+    expect(message).toContain('publish it with research-observe');
+    const finding = {
+      summary: needsDecision
+        ? 'The saved search resolves the available identities but leaves the uniform norm estimate open; Lead must choose a different estimate.'
+        : 'The saved algebraic reduction supplies the exact identity needed by the consumer.',
+      conclusion: needsDecision ? 'inconclusive' : 'supporting',
+      remainingObligations: needsDecision ? ['Construct the uniform norm estimate.'] : [],
+      ...(needsDecision ? { needsDecision: true } : {}),
+    };
+    const worktree = workers[1].worktree;
+    const file = path.join(worktree, '.scratch', 'finding.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(path.join(worktree, 'RESEARCH.md'), finding.summary + '\n');
+    fs.writeFileSync(file, JSON.stringify(finding));
+    const published = spawnSync('bun', ['bin/math.ts', 'research-observe', '--worktree', worktree, '--finding', file],
+      { encoding: 'utf8', timeout: 15_000 });
+    expect(published.status, published.stdout || published.stderr).toBe(0);
     const wakes = state.cooperation!.leadWakes!.requested;
     await pulse(workers[1].id);
     const delivery = state.cooperation!.deliveries!.find(item => item.taskId === held.actions[0].task.id && item.kind === 'research');
     expect(delivery).toMatchObject({ taskDigest: held.actions[0].assignment.taskDigest,
-      summary: value.finding.summary, status: needsDecision ? 'conditional' : 'advisory' });
-    expect(JSON.parse(delivery!.finding!)).toMatchObject(value.finding);
+      summary: finding.summary, status: needsDecision ? 'conditional' : 'advisory' });
+    expect(JSON.parse(delivery!.finding!)).toMatchObject(finding);
     expect(state.cooperation!.leadWakes!.requested).toBe(wakes + (needsDecision ? 1 : 0));
     if (needsDecision) expect(state.cooperation!.leadWakes!.recent!.at(-1)!.reason).toBe('research-finding');
     expect(check).not.toHaveBeenCalled(); expect(state.check).toBeUndefined();
@@ -325,9 +329,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
       }) + '\n```\n';
       fs.writeFileSync(path.join(workers[1].worktree, 'RESEARCH.md'), notes);
       await vi.advanceTimersByTimeAsync(90_000);
-      expect(held.notify.mock.calls[0][0]).toContain('Append one complete JSON line to');
-      expect(held.notify.mock.calls[0][0]).toContain(assignmentDeliveryFile(held.actions[0].assignment));
-      expect(held.notify.mock.calls[0][0]).toContain('"kind":"research","finding":');
+      expect(held.notify.mock.calls[0][0]).toContain('publish it with research-observe');
       await vi.advanceTimersByTimeAsync(30_000); await stopping.promise;
       expect(state.cooperation!.deliveries ?? []).toEqual([]);
       expect(state.cooperation!.researchDrafts?.investigate).toBeUndefined();
@@ -937,14 +939,15 @@ describe('cooperative advisory scheduling checkpoints', () => {
     await held.wait(0, completion);
     held.open.mock.calls[0][0].onActivity!({ event: 'reasoning' });
     const request = state.workers![0].contextCheckpoint!;
-    // The Lead's checkpoint request names only its own protocol and defines the digest it must append.
+    // The Lead's checkpoint request supplies a complete command.
     const instruction = held.notify.mock.calls.map(([message]) => message).find(message => message.includes(request.requestId!))!;
     expect(instruction).toContain('a Lead publishes no findings');
-    expect(instruction).toContain('as printed by sha256sum RESEARCH.md');
+    expect(instruction).toContain('checkpoint --worktree');
     expect(instruction).not.toContain('needsDecision');
     const log = held.messages[0].receipt!;
-    fs.appendFileSync(path.join(workers[0].worktree, log), JSON.stringify({ kind: 'checkpoint', requestId: request.requestId,
-      notesDigest: mathDigest(fs.readFileSync(path.join(workers[0].worktree, 'RESEARCH.md'))) }) + '\n');
+    const acknowledged = spawnSync('bun', ['bin/math.ts', 'checkpoint', '--worktree', workers[0].worktree,
+      '--log', log, '--request-id', request.requestId!], { encoding: 'utf8', timeout: 15_000 });
+    expect(acknowledged.status, acknowledged.stdout || acknowledged.stderr).toBe(0);
     await pulse(workers[0].id);
     await vi.advanceTimersByTimeAsync(5_000); await held.wait(1, completion);
     expect(held.threads).toEqual(['continuation-thread-1', 'continuation-thread-2']);
@@ -1663,7 +1666,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(sessions.get('solver')!.notify).toHaveBeenCalledOnce();
     expect(sessions.get('solver')!.notify.mock.calls[0]![0]).toMatch(/^If the first plan is still unpublished, publish it now/u);
-    expect(sessions.get('solver')!.notify.mock.calls[0]![0]).toContain('If the host accepted it while this notice was waiting');
+    expect(sessions.get('solver')!.notify.mock.calls[0]![0]).toContain('plan-apply --publish');
     expect(sessions.get('solver')!.interrupt).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(20 * 60_000 - 90_000);
     await proofStarted.promise;

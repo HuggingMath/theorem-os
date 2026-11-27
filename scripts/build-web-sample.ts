@@ -16,10 +16,12 @@ if (!['theorem-os.web-archive.v1', 'theorem-os.web-archive.v2'].includes(archive
 const from = archive.run.id;
 const title = '示例运行：自然数加法';
 const task = '证明两个自然数加法定理，保持原题声明不变。根据 Lean 反馈修复候选，并验收完整原题。';
-// The scripted agent acts on marker-prefixed instructions and writes a fixed review; the sample shows them as a person would say them.
+// Replace fixture markers with the text shown to sample readers. Older archives also include a candidate review.
 const readable: [recorded: string, shown: string][] = [
   ['WEB_COOPERATIVE_PROVE_FIRST: use definitional equality and leave the other original target unchanged.',
     '先证 add_zero：n + 0 按定义就等于 n，可以直接用 rfl。另一个定理先不要动。'],
+  ['WEB_COOPERATIVE_PROVE_SECOND: prove the second goal using Nat.zero_add.',
+    '请用 Nat.zero_add 证明第二个定理。'],
   ['WEB_COOPERATIVE_RELEASE_REVIEW: report the review of this fixed candidate. Final acceptance remains with S3.',
     '请把对这份完整证明的审阅结论交上来。最后是否通过，以独立的 Lean 验收为准。'],
   ['Offline independent reviewer inspected the fixed two-target candidate; only host Lean/S3 checks can accept it.',

@@ -5,8 +5,10 @@ import { readSolverRunState, writeSolverRunState, type SolverRunState } from '..
 import type { CooperativeResearch } from '../src/solver/cooperation';
 import { requestLeadWake } from '../src/solver/leadWakes';
 import type { ResearchWorker } from '../src/solver/modules/organization';
+import { publishCooperationPlanFile } from '../src/solver/planTool';
 import { commitSolverSources, type SolverProblem } from '../src/solver/problem';
 import { leadPlanDeliveryFile, parseCooperationPlan, type CooperativeAction } from '../src/solver/tasks';
+import { deferred } from './helpers/async';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 import { integratedProof } from './helpers/taskProof';
@@ -19,10 +21,10 @@ describe('live replacement plan publication', () => {
   let events: { event: string; details?: Record<string, unknown> }[], pending: Promise<unknown>[];
   const graph = () => ({ tasks: state.cooperation!.tasks.map(node => node.task),
     groups: state.cooperation!.groups!.map(route => route.group) });
-  const create = () => {
+  const create = (exclusiveCheck: <T>(check: () => Promise<T>) => Promise<T> = async check => check()) => {
     const controller = new AbortController();
     const result = cooperativeResearch({ state, workers, retrievalRoot: directory, signal: controller.signal,
-      emit: (event, details) => events.push({ event, details }) });
+      exclusiveCheck, emit: (event, details) => events.push({ event, details }) });
     instances.push({ cooperative: result, controller });
     return result;
   };
@@ -101,6 +103,16 @@ describe('live replacement plan publication', () => {
     expect(events.filter(event => event.event === 'plan_published')).toHaveLength(1);
   });
 
+  it('closes the publish command after a publication that leaves the plan version unchanged', async () => {
+    const action = await start(), workspace = workers[0].worktree;
+    await publish(action);
+    expect(state.cooperation!.planPublication?.planVersion).toBe(action.planVersion);
+    const acceptedLog = fs.readFileSync(file(action));
+    expect(publishCooperationPlanFile({ workspace, text: JSON.stringify(withHelper('second_bridge')) }))
+      .toMatchObject({ ok: false, error: 'math_plan_publication_unavailable' });
+    expect(fs.readFileSync(file(action))).toEqual(acceptedLog);
+  });
+
   it('requires both the dispatch nonce and current base version before accepting a replacement', async () => {
     const action = await start(), value = JSON.parse(line(action, withHelper('bridge')));
     await publish(action, JSON.stringify({ ...value, dispatchNonce: 'different-dispatch' }));
@@ -122,6 +134,28 @@ describe('live replacement plan publication', () => {
     expect(state.workers![0].scheduling?.status).toBe('stopping');
     expect(state.cooperation!.tasks.some(node => node.task.id === 'human_bridge')).toBe(true);
     expect(state.cooperation!.tasks.some(node => node.task.id === 'stale_bridge')).toBe(false);
+  });
+
+  it('rejects a publication still waiting for exclusive access when the run stops', async () => {
+    const waiting = deferred(), release = deferred();
+    let pause = false;
+    cooperative = create(async check => {
+      if (pause) { waiting.resolve(); await release.promise; }
+      return check();
+    });
+    const action = await start(), before = graph();
+    pause = true;
+    const polling = publish(action, line(action, withHelper('late_bridge')));
+    await Promise.race([waiting.promise, polling]);
+    const stopped = cooperative.stop();
+    release.resolve();
+    await Promise.all([polling, stopped]);
+
+    expect(graph()).toEqual(before);
+    expect(state.cooperation!.planPublication).toBeUndefined();
+    expect(state.cooperation!.planPublicationRejection).toBeUndefined();
+    expect(events).toContainEqual(expect.objectContaining({ event: 'plan_publication_rejected',
+      details: expect.objectContaining({ reason: 'math_plan_publication_superseded' }) }));
   });
 
   it.each([false, true])('keeps a live graph when inherited plan notes remain in a notes-only final (append prose: %s)', async append => {

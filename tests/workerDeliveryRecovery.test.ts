@@ -3,9 +3,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CooperativeResearch } from '../src/solver/cooperation';
-import { MAX_DELIVERY_LINE_BYTES, readDeliveryLines, type DeliveryRecord } from '../src/solver/deliveries';
+import { MAX_DELIVERY_LINE_BYTES, type DeliveryRecord } from '../src/solver/deliveries';
 import { git } from '../src/solver/problem';
 import { assignmentDeliveryFile, taskVersion, type CooperativeAction, type CooperativeTask } from '../src/solver/tasks';
+import { deferred } from './helpers/async';
 
 describe('worker delivery log recovery', () => {
   let directory: string, commit: string, cooperative: any, controller: AbortController;
@@ -165,6 +166,33 @@ describe('worker delivery log recovery', () => {
     expect(records.map(record => record.summary)).toEqual(['Keep this progress while retrying the reminder.']);
   });
 
+  it('lets a replacement session receive a correction while the previous notice is still pending', async () => {
+    fs.appendFileSync(path.join(directory, log()), '{broken\n');
+    const previous = deferred(), current = deferred();
+    const oldNotify = vi.fn(() => previous.promise), newNotify = vi.fn(() => current.promise);
+    cooperative.active = new Map([['peer', { action, notify: oldNotify }]]);
+    try {
+      await poll();
+      expect(oldNotify).toHaveBeenCalledOnce();
+      cooperative.active.set('peer', { action, notify: newNotify });
+      await poll(); await poll();
+      expect(newNotify).toHaveBeenCalledOnce();
+      const receipt = cooperative.archive.deliveryReceipts[0];
+      expect(newNotify.mock.calls[0]).toEqual([expect.stringContaining(receipt.id)]);
+
+      const oldNotice = [...cooperative.notifications][0];
+      previous.reject(new Error('previous session closed'));
+      await oldNotice;
+      await poll();
+      expect(newNotify).toHaveBeenCalledOnce();
+      expect(cooperative.archive.deliveryReceipts).toHaveLength(1);
+      expect(events.filter(event => event.event === 'delivery_rejected')).toHaveLength(1);
+    } finally {
+      previous.resolve(); current.resolve();
+      await Promise.allSettled([...cooperative.notifications]);
+    }
+  });
+
   it('rejects a commit outside the frozen problem history once without blocking following progress', async () => {
     const tree = git(directory, ['rev-parse', `${commit}^{tree}`]);
     const unrelated = git(directory, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@localhost',
@@ -239,8 +267,4 @@ describe('worker delivery log recovery', () => {
     expect(cursors[`${key()}/discardingOversized`]).toBe(0);
   });
 
-  it('keeps the existing strict line reader behavior for callers without recovery state', () => {
-    const file = path.join(directory, log()); fs.writeFileSync(file, 'x'.repeat(MAX_DELIVERY_LINE_BYTES + 1));
-    expect(() => readDeliveryLines(file, 0)).toThrow('math_delivery_line_too_large');
-  });
 });

@@ -1,14 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 import { readMathAgentSkill } from '../src/runtime/agentSkills';
 import { rejectedDeliveryReceipt } from '../src/solver/deliveryReceipts';
 import { prepareResearchSkill, researchSkillIdentity } from '../src/solver/researchSkill';
 import { materializeResearchToolHelp } from '../src/solver/researchToolHelp';
 import { buildResearchContext, finalizeResearchDispatch } from '../src/solver/modules/context';
 import { buildRunInspection, renderRunInspection } from '../src/solver/inspection';
-import { assignmentDeliveryFile, leadPlanDeliveryFile, parseCooperationPlan, taskVersion } from '../src/solver/tasks';
+import { assignmentDeliveryFile, parseCooperationPlan, taskVersion } from '../src/solver/tasks';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 
 const roots: string[] = [];
@@ -51,12 +50,12 @@ describe('Skill methods with complete host workflows', () => {
     expect(context.instructions).not.toContain('comparison arms');
     expect(context.instructions).toContain('Keep the user-selected method available.');
     expect(context.instructions).toContain('Leave every Lean source unchanged');
-    expect(context.instructions).toContain(leadPlanDeliveryFile(action));
+    expect(context.instructions).toContain('plan-apply --publish');
     const leadHelp = fs.readFileSync(path.join(f.workspace, '.scratch/theoremos-help.md'), 'utf8');
     expect(leadHelp.split(/^## /mu)[1]).toMatch(/^Lead plan submission\b/u);
     expect(leadHelp).toContain('Omit progressReview on the initial plan');
-    expect(context.instructions).toContain('Validate the draft JSON before publishing');
-    expect(leadHelp).toMatch(/plan-validate --file \.scratch\/plan\.json\n[^\n]+plan-apply --file \.scratch\/plan\.json/u);
+    expect(leadHelp).toContain('plan-apply --publish --file .scratch/plan.json');
+    expect(leadHelp).not.toContain('plan-validate');
     const reference = path.join(path.dirname(f.skill.path), 'references/cooperation.md');
     expect(context.instructions).toContain(reference);
     const protocol = fs.readFileSync(reference, 'utf8');
@@ -87,7 +86,7 @@ describe('Skill methods with complete host workflows', () => {
       { ...f.access, assignment: action, tools });
     materializeResearchToolHelp(context, f.workspace);
     const help = fs.readFileSync(path.join(f.workspace, '.scratch/theoremos-help.md'), 'utf8');
-    expect(help.split(/^## /mu)[1]).toContain(`bun '${tools}' plan-validate --file .scratch/plan.json`);
+    expect(help.split(/^## /mu)[1]).toContain(`bun '${tools}' plan-apply --publish --file .scratch/plan.json`);
     expect(help).toContain(`bun '${tools}' plan-apply --file .scratch/plan.json`);
     expect(context.instructions).toContain('Omit progressReview on the initial plan');
   });
@@ -137,8 +136,8 @@ describe('Skill methods with complete host workflows', () => {
       assignmentDeliveryFile(assignment)]) expect(dispatch.message).toContain(current);
     expect(dispatch.message).not.toContain('OLD_PROOF_ERROR');
     const index = JSON.parse(dispatch.message.split('Pending assignment correction receipts (retrieve all before correcting deliveries):\n')[1]!.split('\n')[0]!);
-    expect(index).toMatchObject({ count: 2, digest: mathDigest(canonicalMathJson(cooperation.deliveryReceipts)),
-      scope: { taskId: node.task.id, assignmentKey: assignmentDeliveryFile(assignment) } });
+    expect(index).toMatchObject({ count: 2, file: 'COOPERATION.json', field: 'deliveryReceipts', status: 'needs-correction' });
+    expect(index.retrieval).toContain('replacesReceipt set to its id');
     expect(dispatch.manifest!.included).toContainEqual(expect.objectContaining({ id: 'assignment-receipt-index', required: true }));
     expect(dispatch.manifest!.omitted).toContainEqual(expect.objectContaining({ id: 'assignment-receipts', reason: 'optional-budget' }));
     expect(dispatch.manifest!.optionalBytes).toBe(0);

@@ -14,6 +14,14 @@ export const deliveryReceiptSchema = z.object({
 });
 export type DeliveryReceipt = z.infer<typeof deliveryReceiptSchema>;
 
+export function assignmentDeliveryReceipts(receipts: readonly DeliveryReceipt[] | undefined, assignment: TaskAssignment,
+  environmentDigest: string | undefined, workerId = assignment.workerId): DeliveryReceipt[] {
+  const assignmentKey = assignmentDeliveryFile(assignment);
+  return (receipts ?? []).filter(receipt => receipt.workerId === workerId && receipt.assignmentKey === assignmentKey &&
+    receipt.taskId === assignment.taskId && receipt.taskDigest === assignment.taskDigest &&
+    receipt.seedCommit === assignment.seedCommit && receipt.environmentDigest === environmentDigest);
+}
+
 /** Protocol feedback is durable evidence about intake, never Lean acceptance. */
 export function rejectedDeliveryReceipt(input: { assignment: TaskAssignment; workerId: string;
   environmentDigest: string; submission: string; error: Error; now: number;
@@ -29,11 +37,10 @@ export function rejectedDeliveryReceipt(input: { assignment: TaskAssignment; wor
     const value = parseMathResponse(input.submission, 'math-result', {}, 'summary');
     replacement = value.kind === 'research' ? value.finding?.replacesReceipt : value.replacesReceipt;
   } catch { /* An unreadable submission cannot establish a correction link. */ }
-  const prior = typeof replacement === 'string' ? input.receipts?.find(receipt => receipt.id === replacement &&
-    receipt.workerId === input.workerId && receipt.assignmentKey === assignmentKey &&
-    receipt.taskId === input.assignment.taskId && receipt.taskDigest === input.assignment.taskDigest &&
-    receipt.seedCommit === input.assignment.seedCommit && receipt.environmentDigest === input.environmentDigest &&
-    receipt.status !== 'superseded') : undefined;
+  const prior = typeof replacement === 'string'
+    ? assignmentDeliveryReceipts(input.receipts, input.assignment, input.environmentDigest, input.workerId)
+      .find(receipt => receipt.id === replacement && receipt.status !== 'superseded')
+    : undefined;
   return { id: mathDigest(canonicalMathJson({ assignmentKey, submissionDigest, code, issues })),
     submissionDigest, workerId: input.workerId, assignmentKey,
     taskId: input.assignment.taskId, taskDigest: input.assignment.taskDigest,
@@ -49,7 +56,7 @@ export function deliveryReceiptFeedback(receipt: DeliveryReceipt): string {
       'Optional previousDeliveryId must come from COOPERATION.json mathematicalGaps[].deliveryId for that goal; an ordinary research delivery is not a scoped prior gap. ' +
       'If no such prior gap exists, omit only previousDeliveryId and keep the required previousGap description.' : '';
   return 'Host delivery receipt (intake feedback, not proof acceptance):\n' + JSON.stringify(receipt) +
-    '\nCorrect the indicated fields and append a new complete event to the same assignment delivery log; ' +
+    '\nCorrect the indicated fields and rerun research-observe. ' +
     'include replacesReceipt:' + JSON.stringify(receipt.id) + ' in the corrected finding to resolve this receipt. ' +
     'If that correction is rejected again, replace the new receipt; a recorded correction resolves its verified chain of earlier attempts. ' +
     'Do not repeat the rejected event or truncate the log. Read COOPERATION.json for current receipts.' + gapFeedback;

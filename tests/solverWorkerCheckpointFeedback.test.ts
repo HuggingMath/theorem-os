@@ -55,9 +55,9 @@ describe('task worker checkpoint correction feedback', () => {
     { root: directory, worktree: worker.worktree, retrievalRoot: directory, environment: {},
       taskText: 'Resolve the exact assigned mathematical question.', assignment: action, maxOptionalContextBytes: 0 });
   const expectCorrection = (message: string, worker: ResearchWorker, action: Task, notification = true) => {
-    for (const detail of [research(worker).contextCheckpoint!.requestId!, log(action), 'notesDigest', '"kind":"checkpoint"'])
+    for (const detail of [research(worker).contextCheckpoint!.requestId!, log(action), '--request-id', '--log'])
       expect(message).toContain(detail);
-    expect(message).toMatch(/append/iu);
+    expect(message).toContain('rerun checkpoint');
     if (notification) {
       expect(message).not.toContain('replacesReceipt');
       expect(message).not.toContain('dispatchNonce');
@@ -256,7 +256,7 @@ describe('task worker checkpoint correction feedback', () => {
     expect(currentNotice).toHaveBeenCalledOnce();
     expectCorrection(currentNotice.mock.calls[0][0], worker, currentAction);
     for (const message of [context(worker, currentAction).message, context(worker, currentAction).continuationMessage!])
-      expect(message).toContain('Append one complete corrected JSON line to ' + log(currentAction));
+      expect(message).toContain('--log ' + log(currentAction));
     await publish(worker, currentAction, checkpoint(worker, true));
     expect(checkpointRequest.rejection).toBeUndefined();
     expect(checkpointRequest.publishedNotesDigest).toBe(checkpoint(worker, true).notesDigest);

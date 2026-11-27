@@ -2,39 +2,6 @@ import { isAdvisoryTask, isFeasibilityReview, taskVersion, type CooperativeActio
 import { contextTaskConsumers, type TaskConsumerContext } from '../taskConsumers';
 import { researchSourceContract } from '../researchReferences';
 
-/** A route-changing claim needs an application check, not just declaration lookup. */
-export const criticalInferenceGuidance = 'For a new construction interface or a reduction that claims a core obligation is vacuous, ' +
-  'identically zero or automatic, first isolate the decisive inference and unfold the actual definitions and argument positions. ' +
-  'Check inferred structures and one discriminating small or boundary instance in the pinned environment before expanding the route. ' +
-  'Retain the exact Lean probe, assumptions and actual result. #check establishes only a declaration name and type; ' +
-  'type elaboration does not establish inhabitation, and an argument copied from peer notes is still unverified. ' +
-  'A failed tactic is inconclusive; report refuted only with a scoped counterexample or invalid inference and evidence. ' +
-  'Refuting an argument does not prove its claimed statement or the original theorem false. ' +
-  'Publish decisive negative evidence promptly so Lead can revise the contract or request an independent check. ';
-
-const finiteWorkGuidance = 'A finite range of target values is not an enumerable proof task while it still quantifies over an infinite family of objects. ' +
-  'State the finite reduction or a uniform argument before proposing enumeration.';
-const planningDeliveryGuidance = 'For each new parallel task, use objective to state its distinct scope relative to in-flight work, ' +
-  'a concrete first construction, proof step or discriminating check, and the intended consumer with its application. ' +
-  'Use the existing type and dependsOn fields for exact proof interfaces and actual inputs. ' +
-  'For an uncertain route, record its hardest premise, the first discriminating feasibility check and what remains after the nearest consumer application. ' +
-  'Connect an executable local package through actual consumer dependencies or proofRoutes; if its connection is unknown, keep it as exploration with the precise missing bridge. ' +
-  'Changing the bound or restating an unresolved theorem does not supply a new method. ' +
-  'When a helper or glue step is implementable from available inputs, publish a typed lemma or original-goal proof task promptly; ' +
-  'give the Engineer executable proof work instead of repeatedly assigning the same research. ' +
-  'Keep unresolved mathematical questions as scoped research; no task is required merely to occupy an idle worker. ' +
-  criticalInferenceGuidance + finiteWorkGuidance;
-const researchDeliveryGuidance = 'As soon as a useful helper or glue step has an exact interface and a concrete implementation method, ' +
-  'publish it promptly in lemmaRequests with a full closed Lean type and actual typed input dependencies. ' +
-  'When using a source, save sourceUses with its kind, exact reference and locator, full assumptions, definition adaptation, ' +
-  'visible consumer taskId/taskDigest, related lemmaRequestIds and remaining premises. Search the installed catalog before requesting a new dependency. ' +
-  'In its objective, state the distinct scope, first construction or Lean step, and intended consumer with the application back to it. ' +
-  'Name the nearest consumer task/declaration and its remaining premises; include the typed glue consumer as a sibling lemmaRequest when that step is implementable. ' +
-  'Record the known typed inputs and consumers; an unrecorded consumer is a question for Lead, not an invented proof edge. ' +
-  'Retain reusable Lean probe code in RESEARCH.md and request a Lead decision; do not keep researching an already implementable step. ' +
-  'If the method is still unknown, report the precise missing inference instead of presenting another form of the same gap as ready proof work. ' +
-  criticalInferenceGuidance + finiteWorkGuidance + ' Proposals remain advisory and require a separate proof assignment and independent checking.';
-
 /** One work product per dispatch; worker slots and mathematical responsibilities are separate. */
 export function cooperativeWorkContract(action: CooperativeAction, tasks: readonly TaskRecord[], context: TaskConsumerContext = {}) {
   const exploration = action.kind === 'task' ? tasks.find(node => node.task.id === action.task.id)?.capacityExploration : undefined;
@@ -44,18 +11,15 @@ export function cooperativeWorkContract(action: CooperativeAction, tasks: readon
       action.kind === 'assemble' ? 'integration' : action.kind;
   const products = {
     'route-planning': { owner: 'lead', output: 'validated-task-graph',
-      consumer: 'M3-ready-selection-and-M5-assignment', acceptance: 'host-plan-validation', sourcePolicy: 'host-checks-any-source-repair',
-      deliveryGuidance: planningDeliveryGuidance },
+      consumer: 'M3-ready-selection-and-M5-assignment', acceptance: 'host-plan-validation', sourcePolicy: 'host-checks-any-source-repair' },
     investigation: { owner: 'researcher', output: 'advisory-finding-retained-code-and-exact-lemma-proposals',
-      consumer: 'lead-plan-decision', acceptance: 'advisory-only', sourcePolicy: 'read-only', deliveryGuidance: researchDeliveryGuidance },
+      consumer: 'lead-plan-decision', acceptance: 'advisory-only', sourcePolicy: 'read-only' },
     'capacity-exploration': { owner: 'idle-proof-or-research-worker', output: 'distinct-frontier-finding-retained-lean-probe-and-exact-interface',
-      consumer: 'target-owner-and-lead-plan-decision', acceptance: 'advisory-only', sourcePolicy: 'read-only', deliveryGuidance: researchDeliveryGuidance },
+      consumer: 'target-owner-and-lead-plan-decision', acceptance: 'advisory-only', sourcePolicy: 'read-only' },
     'feasibility-review': { owner: 'independent-researcher', output: 'core-inference-risk-and-discriminating-evidence',
-      consumer: 'lead-route-decision', acceptance: 'advisory-only', sourcePolicy: 'read-only',
-      deliveryGuidance: criticalInferenceGuidance },
+      consumer: 'lead-route-decision', acceptance: 'advisory-only', sourcePolicy: 'read-only' },
     'formal-proof': { owner: 'proof-worker', output: 'saved-exact-typed-declaration',
-      consumer: 'M2-then-canonical-integration', acceptance: 'independent-exact-source-check', sourcePolicy: 'owned-proof-sources',
-      deliveryGuidance: criticalInferenceGuidance },
+      consumer: 'M2-then-canonical-integration', acceptance: 'independent-exact-source-check', sourcePolicy: 'owned-proof-sources' },
     'consumer-connection': { owner: 'proof-worker', output: 'consumer-proof-from-fixed-typed-inputs',
       consumer: 'M2-then-input-proofs-and-unconditional-integration', acceptance: 'conditional-check-only', sourcePolicy: 'owned-proof-sources' },
     integration: { owner: 'host', output: 'fixed-original-proof-check',

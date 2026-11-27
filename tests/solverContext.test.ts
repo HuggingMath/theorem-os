@@ -4,8 +4,8 @@ import type { SolverProblem } from '../src/solver/problem';
 import type { SolverRunState } from '../src/solver/archive';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import type { DeliveryReceipt } from '../src/solver/deliveryReceipts';
-import { deliveryDetails, parseMathResponse, type DeliveryRecord } from '../src/solver/deliveries';
-import { assignmentDeliveryFile, leadPlanDeliveryFile, taskVersion, type CooperativeAction, type CooperativeTask } from '../src/solver/tasks';
+import type { DeliveryRecord } from '../src/solver/deliveries';
+import { assignmentDeliveryFile, taskVersion, type CooperativeAction, type CooperativeTask } from '../src/solver/tasks';
 
 it('deduplicates repeated findings and progress while preserving exact Lean types and version references', () => {
   const exactType = '∀ (n : Nat), ' + 'True ∧ '.repeat(2100) + 'True';
@@ -38,13 +38,13 @@ it('deduplicates repeated findings and progress while preserving exact Lean type
   expect(context.continuationMessage).not.toContain(exactType);
   expect(context.continuationMessage).not.toContain(finding);
   expect(context.continuationMessage).toContain(JSON.stringify(action));
-  expect(context.continuationMessage).toContain(leadPlanDeliveryFile(action));
+  expect(context.continuationMessage).toContain('plan-apply --publish');
   expect(context.continuationMessage).toContain(JSON.stringify(context.workContract));
   expect(context.continuationMessage).toContain('replaces every previous dispatch nonce and receipt');
   expect(context.continuationMessage).toContain('RESEARCH.md');
   expect(context.continuationMessage).toContain('COOPERATION.json');
-  expect(context.continuationMessage).toContain('host-synced accepted graph');
-  expect(context.continuationMessage).toContain('{"baseVersion":"current-plan","upsert":[');
+  expect(context.instructions).toContain('host-synced accepted graph');
+  expect(context.instructions).toContain('{"baseVersion":"current-plan","upsert":[');
   expect(context.continuationMessage).toContain('proof acceptance');
   expect(context.manifest!.usedBytes).toBeLessThanOrEqual(context.manifest!.maxBytes);
   const graph = context.message.split('Lead task graph and host feedback:\n')[1].split('\n\nRoute groups')[0];
@@ -175,19 +175,15 @@ it.each([false, true])('keeps the Lead on read-only planning and prompt delivery
       ...(existing ? { planNonce: dispatchNonce } : { initialPlanNonce: dispatchNonce }) } });
   expect(context.instructions).toContain('Once a complete plan has useful executable work, save the plan, or a revision of the accepted graph, and return promptly so peers can start it.');
   expect(context.instructions).toContain('Delegate unresolved library or mathematical searches as research tasks to eligible Researchers or the Engineer.');
-  for (const message of [context.instructions, context.continuationMessage]) {
-    expect(message).toContain(`"dispatchNonce":${JSON.stringify(dispatchNonce)}`);
-    expect(message).toContain('Copy the dispatchNonce and baseVersion fields exactly as shown');
-    expect(message).toContain('Create this current dispatch log by appending if absent');
-    expect(message).toContain('a second copy of the graph in RESEARCH.md or the final response is unnecessary');
-    expect(message).toContain('return after publication without polling or waiting for approval');
-    expect(message).toContain('ready tasks reserved by ownerId to a busy worker');
-    expect(message).toContain('Explicitly reassign an unstarted, unassigned task through the plan');
-    expect(message).toContain('Preserve route gates, group scope, independent reviewer eligibility and running assignments');
-    expect(message).toContain('A goal/lemma objective may guide the argument, but cannot replace its frozen proof deliverable');
-    expect(message).toContain('Create a separate untyped research/sketch task for those checks');
-  }
-  const log = leadPlanDeliveryFile(context.assignment as Extract<CooperativeAction, { kind: 'lead' }>);
+  expect(context.instructions).toContain('a second copy of the graph in RESEARCH.md or the final response is unnecessary');
+  expect(context.instructions).toContain('return after publication without polling or waiting for approval');
+  expect(context.instructions).toContain('ready tasks reserved by ownerId to a busy worker');
+  expect(context.instructions).toContain('Explicitly reassign an unstarted, unassigned task through the plan');
+  expect(context.instructions).toContain('Preserve route gates, group scope, independent reviewer eligibility and running assignments');
+  expect(context.instructions).toContain('A goal/lemma objective may guide the argument, but cannot replace its frozen proof deliverable');
+  expect(context.instructions).toContain('Create a separate untyped research/sketch task for those checks');
+  expect(context.continuationMessage).toContain('plan-apply --publish');
+  expect(context.continuationMessage).not.toContain('ready tasks reserved by ownerId to a busy worker');
   expect(context.workContract).toMatchObject({ stage: 'route-planning', sourcePolicy: 'host-checks-any-source-repair' });
   expect(context.message).toContain(taskText);
   expect(context.message).toContain(formal);
@@ -195,14 +191,14 @@ it.each([false, true])('keeps the Lead on read-only planning and prompt delivery
   for (const continuation of [false, true]) {
     const dispatched = finalizeResearchDispatch(context, { continuation });
     expect(dispatched.instructions.split('\n').find(line => line.startsWith('Edit only ')))
-      .toBe(`Edit only /proof/RESEARCH.md, /proof/${log}.`);
+      .toBe('Edit only /proof/RESEARCH.md, /proof/.scratch/plan.json.');
     expect(dispatched.instructions).toContain('Develop a mathematically plausible route from the exact original statement, definitions and relevant saved findings');
     expect(dispatched.instructions).toContain('put a direct original-goal task in the graph; the assigned worker carries out its proof');
     expect(dispatched.instructions).toContain('Return the plan without running Lean diagnostics');
     expect(dispatched.instructions).toContain('Leave all Lean source files, imports and environment configuration unchanged');
     expect(dispatched.instructions).toContain('Keep all existing imports');
     expect(dispatched.instructions).toContain('Plan a shared helper before its consumers when needed; assigned workers implement it');
-    expect(dispatched.instructions).toContain('only a further substantive change requires another final plan response');
+    expect(dispatched.instructions).toContain('For intake on return, omit --publish');
     for (const writableAdvice of ['bodies must be filled', 'you may add import Mathlib or any pinned Mathlib.* import', 'Add helpers in owned modules',
       'For diagnostics, run', 'check-lean --workspace', 'proof-search --workspace', 'Repair the earliest error',
       'restore the offending context', 'For type lookup, add single-name #check'])
@@ -216,22 +212,15 @@ it.each([false, true])('keeps the Lead on read-only planning and prompt delivery
   expect(context.instructions).toContain('Lead planning saves a task graph and returns promptly');
   expect(context.instructions).not.toContain('automatically hands writing back to the host');
   // Only an accepted graph can be revised; initial planning still writes a complete plan.
-  for (const message of [context.instructions, context.continuationMessage]) {
-    expect(message?.includes('Revise the accepted graph instead of retyping it.')).toBe(existing);
-    expect(message?.includes('it does not need a complete proof decomposition')).toBe(!existing);
-    if (!existing) {
-      expect(message).toContain('Keep original goals independent of advisory research in proof dependencies');
-      expect(message).toContain('never invent a proposition to fill the graph');
-      expect(message).toContain('before further literature searches or proof exploration');
-      expect(message).not.toContain('before choosing a task graph');
-    }
+  expect(context.instructions.includes('Revise the accepted graph instead of retyping it.')).toBe(existing);
+  expect(context.instructions.includes('it does not need a complete proof decomposition')).toBe(!existing);
+  if (!existing) {
+    expect(context.instructions).toContain('Keep original goals independent of advisory research in proof dependencies');
+    expect(context.instructions).toContain('never invent a proposition to fill the graph');
+    expect(context.instructions).toContain('before further literature searches or proof exploration');
   }
   expect(context.continuationMessage?.includes('revise the accepted graph or return it unchanged')).toBe(existing);
   expect(context.continuationMessage?.includes('No task graph has been accepted')).toBe(!existing);
-  if (!existing) {
-    expect(context.continuationMessage).toContain('"baseVersion":"current-plan"');
-    expect(context.continuationMessage).toContain('Inline the complete valid graph covering every original target exactly once');
-  }
 });
 
 it.each(['append', 'replace'] as const)('retains custom Lead strategies and installed mathematics tools (%s)', mode => {
@@ -323,7 +312,7 @@ it.each(['lemma', 'goal', 'lead', 'research'] as const)(
       expect(context.instructions).toContain('every original goal proof exactly as it appears in assignment.seedCommit, including existing sorry placeholders');
       expect(context.instructions).toContain('A preserved placeholder in another declaration does not block delivery of your completed helper.');
       expect(context.instructions).toContain('Proofs you submit for acceptance must not use sorry');
-      expect(context.instructions).toContain('confirmed shutdown');
+      expect(context.instructions).toContain('save the assigned declaration and return for host checking');
     }
   });
 
@@ -336,9 +325,8 @@ it.each(['lemma', 'goal'] as const)('keeps Lead planning requests out of a dispa
     expect(dispatched.instructions).toContain('plan approval belong to the Lead and host');
     expect(dispatched.instructions).toContain('before dispatching typed proof work');
     expect(dispatched.instructions).toContain('do not start another planning or approval cycle');
-    expect(dispatched.instructions).toContain('append JSON to the current delivery log');
+    expect(dispatched.instructions).toContain('Use research-observe');
     expect(dispatched.message).toContain(`Current delivery log: ${deliveryFile}`);
-    expect(dispatched.instructions).toContain('Create it by appending if absent');
     expect(dispatched.message).toContain(JSON.stringify(context.assignment));
     expect(dispatched.workContract).toEqual(context.workContract);
     expect(dispatched.manifest!.usedBytes).toBeLessThanOrEqual(dispatched.manifest!.maxBytes);
@@ -354,16 +342,8 @@ it.each(['lemma', 'goal'] as const)('delivers a completed %s without requiring a
   const context = gapContext(kind);
   for (const continuation of [false, true]) {
     const dispatched = finalizeResearchDispatch(context, { continuation });
-    expect(dispatched.instructions).toContain('Once the assigned proof is complete and saved, use the ready delivery protocol above and return');
-    expect(dispatched.instructions).toContain('no separate research observation is required');
-    expect(dispatched.instructions).not.toContain('Publish a single research observation promptly');
-    expect(dispatched.instructions).toContain('only for a substantive intermediate finding or gap');
-    expect(dispatched.instructions).toContain('theorem-os research-observe --worktree');
-    expect(dispatched.instructions).toContain('--finding FINDING_FILE');
-    expect(dispatched.instructions).toContain('Save the finding object shown above in the JSON file FINDING_FILE');
-    expect(dispatched.instructions).toContain('When supporting Lean code is saved but the assigned declaration is still unproved');
-    expect(dispatched.instructions).toContain('append {"kind":"ready","summary":"saved proof"}, stop editing and return');
-    expect(dispatched.instructions).toContain('after turn settlement and confirmed shutdown');
+    expect(dispatched.instructions).toContain('for a substantive finding or unresolved gap');
+    expect(dispatched.instructions).toContain('save the assigned declaration and return for host checking');
   }
 });
 
@@ -382,31 +362,23 @@ it.each(['lemma', 'goal'] as const)('preserves the %s proof deliverable when its
   const objective = 'Read-only audit: run diagnostics once and report the result without editing Lean sources.';
   const context = gapContext(kind, undefined, objective);
   expect(context.assignment).toMatchObject({ kind: 'task', task: { kind, objective, theoremName: 'target', type: 'True' } });
-  for (const message of [context.instructions, context.continuationMessage]) {
-    expect(message).toContain('Audit objectives cannot change this exact proof deliverable');
-    expect(message).toContain('Save diagnostics in RESEARCH.md; publish a needsDecision:true research finding to Lead');
-    expect(message).toContain('do not resubmit unchanged proofs');
-  }
+  expect(context.instructions).toContain('Audit objectives cannot change this exact proof deliverable');
+  expect(context.instructions).toContain('Save diagnostics in RESEARCH.md; publish a needsDecision:true research finding to Lead');
+  expect(context.instructions).toContain('do not resubmit unchanged proofs');
+  expect(context.continuationMessage).toContain(JSON.stringify(context.workContract));
   expect(context.instructions).not.toContain('You are a Mathematical Researcher');
   expect(context.instructions).toContain('Prove the assigned Lean declaration with its exact requested type');
 });
 
 it('asks researchers to save scoped negative evidence and publish a schema-valid gap decision promptly', () => {
   const context = gapContext('research');
-  expect(context.instructions).toContain('Publish a single research observation promptly with theorem-os research-observe');
+  expect(context.instructions).toContain('Use research-observe from .scratch/theoremos-help.md');
   expect(context.instructions).not.toContain('no separate research observation is required');
   expect(context.instructions).toContain('Save a scoped negative library result or a classification gap in worktree-root RESEARCH.md as soon as it is established');
   expect(context.instructions).toContain('pinned library/environment version, searched paths, queries or method, exact result');
   expect(context.instructions).toContain('A scoped search failure is not proof of global absence');
   expect(context.instructions).toContain('needsDecision:true, conclusion:"inconclusive"');
-  const encoded = context.instructions.split('To share an advisory finding or an unresolved proof gap, append ')[1].split('. Inline the full finding;')[0];
-  const publication = JSON.parse(encoded);
-  expect(publication.kind).toBe('research');
-  const finding = parseMathResponse(JSON.stringify(publication.finding), 'math-result', { taskId: 'frontier' }, 'summary');
-  expect(finding).toMatchObject({ taskId: 'frontier', needsDecision: true, conclusion: 'inconclusive' });
-  expect(deliveryDetails(finding)).toMatchObject({ evidenceRefs: [],
-    remainingObligations: ['precise unresolved mathematical inference'] });
-  expect(context.instructions).toContain('publishing does not finish or park your proof task');
+  expect(context.instructions).toContain('Ordinary findings share progress');
   expect(context.instructions).toContain('Restore Lean sources to the assignment seed before ordinary findings delivery.');
   expect(context.instructions).toContain('after the host acknowledges the submission');
   expect(context.instructions).toContain('visible kind:"goal" original consumer');
@@ -426,15 +398,8 @@ it.each(['research', 'lemma', 'goal'] as const)('keeps scoped no-rescan and dura
   expect(context.instructions).toContain('First check the key mathematical premise and structural bridge against the exact definitions');
   expect(context.instructions).toContain('A checked conditional wrapper establishes sufficiency under its explicit conditions; keep its unproved conditions on the frontier');
   expect(context.manifest!.optionalBytes).toBe(0);
-  for (const message of [context.instructions, context.continuationMessage]) {
-    if (kind === 'research') expect(message).not.toContain('add a top-level sources object');
-    else {
-      expect(message).toContain('add a top-level sources object');
-      expect(message).toContain('Omit commit when using sources');
-      expect(message).toContain('Source changes after that report require a fresh source-bound finding');
-      expect(message).toContain('Auxiliary code and a reported gap never accept the assigned proof');
-    }
-  }
+  if (kind === 'research') expect(context.instructions).not.toContain('Use research-observe --snapshot-sources');
+  else expect(context.instructions).toContain('Use research-observe --snapshot-sources when a finding depends on changed saved Lean code.');
 });
 
 it('asks the Lead for a real reduction with zero optional context', () => {
@@ -475,7 +440,7 @@ it.each(['research', 'lemma', 'goal'] as const)(
     expect(context.continuationMessage).toContain(JSON.stringify(context.assignment));
     expect(context.continuationMessage).toContain(JSON.stringify(context.workContract));
     expect(context.continuationMessage).toContain('COOPERATION.json');
-    expect(context.continuationMessage).toContain('proof acceptance');
+    expect(context.continuationMessage).toContain('Resume the saved argument from RESEARCH.md');
     expect(context.message).toContain('Frozen source context and immutable retrieval references:');
     expect(context.manifest).toBeDefined();
   });
@@ -523,7 +488,7 @@ it('keeps current task feedback and scoped intake receipts inline without repeat
   expect(first.continuationMessage).not.toContain('old-env-secret');
   expect(first.continuationMessage).not.toContain(fullFinding);
   expect(first.continuationMessage!.length).toBeLessThan(first.message.length / 2);
-  expect(first.continuationMessage).toContain('matching task digest does not mean its feedback or inbox is unchanged');
+  expect(first.continuationMessage).toContain('Read the relevant new records in COOPERATION.json');
   state.cooperation!.tasks[0].feedback = 'New diagnostic under the same exact task digest.';
   const updated = { ...receipt, id: 'new-receipt', issues: [{ path: 'summary', message: 'Include the new exact counterexample.' }] };
   state.cooperation!.deliveryReceipts!.push(updated);

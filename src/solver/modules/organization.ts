@@ -31,6 +31,23 @@ export function researchWorkerCanNode(worker: Pick<ResearchWorker, 'id' | 'role'
   return researchWorkerCanTask(worker, node.task) || capacityExplorationWorkerCanTask(worker, node.task, node);
 }
 
+/** Validate the explicit worker choices in a proposed plan against the run's roster. */
+export function assertPlanAssignments(plan: { tasks: readonly CooperativeTask[]; groups: readonly RouteGroup[] },
+  previous: readonly TaskRecord[], workers: readonly Pick<ResearchWorker, 'id' | 'role'>[]): void {
+  const byId = new Map(workers.map(worker => [worker.id, worker]));
+  const previousById = new Map(previous.map(node => [node.task.id, node]));
+  for (const task of plan.tasks) {
+    const ownerId = task.ownerId ?? task.preferredOwnerId;
+    if (!ownerId) continue;
+    const owner = byId.get(ownerId), node = previousById.get(task.id);
+    const ownershipTask = node?.capacityExploration ? { ...task, status: 'active' as const } : task;
+    if (!owner || !researchWorkerCanNode(owner, { ...(node ?? { status: 'pending', attempts: 0 }), task: ownershipTask }))
+      throw new Error('math_plan_task_owner_unavailable');
+  }
+  for (const group of plan.groups) if (group.engineerId && byId.get(group.engineerId)?.role !== 'engineer')
+    throw new Error('math_plan_group_engineer_unavailable');
+}
+
 export function researchTaskRole(task: CooperativeTask): ResearchRole {
   return isFeasibilityReview(task) ? 'reviewer' : task.kind === 'goal' ? 'engineer' : task.kind === 'lemma' ? 'prover' : 'researcher';
 }
