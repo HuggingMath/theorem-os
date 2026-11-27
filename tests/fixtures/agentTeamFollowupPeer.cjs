@@ -48,8 +48,8 @@ function complete(stage, text, status = 'completed') {
 
 function checkRole(method, params) {
   const lead = actor === 'lead';
-  const expected = lead ? ['spawn', 'assign', 'amend', 'finish', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'publish', 'cancel', 'budget', 'resume', 'history', 'coordinate', 'retire_route', 'route_summary']
-    : ['message', 'poll', 'wait', 'inspect', 'inspect-research', 'submit', 'submit_helpers', 'yield', 'history', 'progress', 'route_summary'];
+  const expected = lead ? ['spawn', 'assign', 'amend', 'finish', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'publish', 'cancel', 'budget', 'resume', 'history', 'retire_route', 'route_summary']
+    : ['message', 'poll', 'wait', 'inspect', 'inspect-research', 'submit', 'yield', 'history', 'progress', 'route_summary'];
   const identity = lead ? 'You are the Lead of an Agent-organized research team; your agentId is lead.'
     : `You are a mathematical researcher and Lean proof writer; your agentId is ${JSON.stringify(actor)}, and your coordinator is lead.`;
   assert(params.developerInstructions.includes(identity), 'current-developer-identity-missing');

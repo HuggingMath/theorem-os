@@ -3,19 +3,19 @@ import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { VerificationCheckpointError } from './verificationCheckpoint';
-import { canonicalMathJson, mathDigest, readMathFile } from '../math/mathRuntimeIo';
+import { canonicalMathJson, mathDigest, parseMathJson, readMathFile } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath } from '../math/paths';
 import { mathGitResult } from '../math/mathGit';
 import { type ResearchWorker } from './modules/organization';
 import { taskCanStart } from './modules/search';
-import { deliveryDetails, readDeliveryLines, readMathResponse, parseMathResponse } from './deliveries';
+import { deliveryDetails, pendingDeliveryLines, readMathResponse, parseMathResponse } from './deliveries';
 import { assertSolverSources, committedSource, commitSolverProjection, git, withSolverWorktree } from './problem';
 import { isStatementAction } from './statementReview';
 import { captureDeliveryArtifacts } from './deliveryArtifacts';
 import { bindMathematicalGap } from './mathematicalGaps';
 import { assignmentDeliveryFile, isFeasibilityReview, isFinalCandidateReview, leadPlanDeliveryFile, type TaskRecord, type CooperativeAction } from './tasks';
-import { directDeliveryRejections, rejectionCode, HumanEditRecord, TaskVersions, bounded, leadPlanPublicationFeedback, parseLeadPlan,
-  type PlanPublicationRejection } from './cooperationShared';
+import { directDeliveryRejections, rejectionCode, HumanEditRecord, TaskVersions, bounded, leadPlanPublicationFeedback,
+  leadPlanPublicationTarget, parseLeadPlan, type PlanPublicationRejection } from './cooperationShared';
 import { CooperationPlanning } from './cooperationPlanning';
 import { ResearchAdmissionError } from './researchAdmission';
 import { acceptContextCheckpoint, contextCheckpointRejection, contextCheckpointRejectionFeedback, savedContextCheckpoint } from './contextCheckpoint';
@@ -58,7 +58,6 @@ export abstract class CooperationInputs extends CooperationPlanning {
   }
   private planPublicationNotification?: PlanPublicationRejection;
   private leadDraftBaselines = new WeakMap<CooperativeAction, string | null>();
-  private leadDraftNotifications = new WeakMap<CooperativeAction, { digest: string; reason: string }>();
   private contextCheckpointNotifications?: WeakMap<object, object>;
   protected syncEditChecks(nodes: ReadonlyMap<string, TaskRecord>, versions: TaskVersions) {
     for (const edit of this.archive.edits ?? []) {
@@ -96,14 +95,14 @@ export abstract class CooperationInputs extends CooperationPlanning {
       this.schedulePlanSynchronization();
     const cursors = this.archive.cursors ??= {};
     const file = path.join(path.dirname(this.lead.worktree), 'edits.jsonl');
-    const edits = readDeliveryLines(file, cursors.edits ?? 0);
-    const advance = (offset: number) => { cursors.edits = offset; this.input.save(); };
-    for (const entry of edits.entries!) {
+    // Drain queued edits before considering an approval of the resulting plan.
+    for (const entry of pendingDeliveryLines(file, cursors, 'edits', () => this.input.save(), 'drain')) {
       this.input.signal.throwIfAborted();
       let id = crypto.randomUUID();
       let record: HumanEditRecord | undefined;
       try {
-        if (!entry.line?.trim()) { advance(entry.offset); continue; }
+        if (entry.error) throw new Error(entry.error);
+        if (!entry.line?.trim()) continue;
         let edit: any;
         try { edit = JSON.parse(entry.line); }
         catch { throw new Error('math_edit_invalid_json'); }
@@ -116,7 +115,7 @@ export abstract class CooperationInputs extends CooperationPlanning {
             this.schedulePlanSynchronization();
             this.input.emit('edit_applied', { id, planVersion: record!.planVersion, affectedTasks: record!.affectedTasks, recheck: record!.recheck });
           }
-          advance(entry.offset); continue;
+          continue;
         }
         if (!record) {
           record = { id, status: 'received', receivedAt: Date.now(),
@@ -140,17 +139,16 @@ export abstract class CooperationInputs extends CooperationPlanning {
         this.input.signal.throwIfAborted();
         const reason = error instanceof Error ? error.message : 'math_edit_invalid';
         if (record?.status === 'applied' || !(error instanceof Error) || error.name === 'AbortError' ||
-            !/^math_(?:edit_(?:invalid(?:_json|_id)?|version_conflict)$|plan_[a-z_]+(?:$|:))/u.test(reason)) throw error;
+            (entry.error !== reason && !/^math_(?:edit_(?:invalid(?:_json|_id)?|version_conflict)$|plan_[a-z_]+(?:$|:))/u.test(reason)))
+          throw error;
         if (record) { record.status = 'rejected'; record.reason = reason; }
         else (this.archive.edits ??= []).push({ id, status: 'rejected', reason, receivedAt: Date.now() });
         this.changed();
         this.input.emit('edit_rejected', { id, reason });
       }
-      advance(entry.offset);
     }
     this.readPlanApprovals(cursors);
     await this.readPlanDelivery(cursors);
-    this.notifyLeadDraftCorrection();
     for (const worker of this.input.workers) {
       if (this.deliveryChecks.has(worker.id)) continue;
       const active = this.active.get(worker.id);
@@ -195,68 +193,29 @@ export abstract class CooperationInputs extends CooperationPlanning {
       this.preparePlan(plan, action);
     } catch (error) {
       if (error instanceof Error && /^math_plan_/u.test(error.message))
-        return { digest, reason: bounded(error.message, 4000) };
+        return { reason: bounded(error.message, 4000) };
       throw error;
     }
-    return { digest, reason: undefined };
-  }
-  /** Saved notes are drafts: offer same-turn corrections without publishing them or changing the graph. */
-  private notifyLeadDraftCorrection() {
-    const active = this.active.get(this.lead.id), action = active?.action;
-    if (!active || action?.kind !== 'lead' || this.publishedPlans.has(action)) return;
-    const current = () => this.active.get(this.lead.id) === active && !active.cancelled &&
-      !this.stopping && !this.input.signal.aborted && this.current(action) && !this.publishedPlans.has(action);
-    const inspect = () => {
-      if (!current()) return;
-      const draft = this.inspectLeadCheckpointDraft(action);
-      return draft?.reason ? { digest: draft.digest, reason: draft.reason } : undefined;
-    };
-    const correction = inspect();
-    if (!correction) { this.leadDraftNotifications.delete(action); return; }
-    const previous = this.leadDraftNotifications.get(action);
-    if (previous?.digest === correction.digest && previous.reason === correction.reason) return;
-    this.leadDraftNotifications.set(action, correction);
-    const pending = Promise.resolve().then(async () => {
-      if (!current() || this.leadDraftNotifications.get(action) !== correction) return;
-      const latest = inspect();
-      if (!latest || latest.digest !== correction.digest || latest.reason !== correction.reason) {
-        if (this.leadDraftNotifications.get(action) === correction) this.leadDraftNotifications.delete(action);
-        return;
-      }
-      const file = leadPlanDeliveryFile(action);
-      await active.notify('The complete math-plan draft saved in RESEARCH.md needs correction before publication: ' +
-        correction.reason + '. ' + this.leadCheckpointInstruction(action) +
-        'Correct the same draft now, before returning or starting another search. Keep the mathematical decisions your own; ' +
-        'this preflight has not accepted the plan or any proof. ' + (file
-          ? 'To publish after correction, append one complete JSON line to ' + file + ' using ' +
-            JSON.stringify({ kind: 'plan', dispatchNonce: action.initialPlanNonce ?? action.planNonce, baseVersion: action.planVersion }) +
-            ' plus the complete revision and all required decisions. Preserve the log; RESEARCH.md may retain the single corrected math-plan fence instead.'
-          : 'Save one complete corrected math-plan JSON fence in RESEARCH.md.'));
-      this.input.emit('lead_draft_correction_requested', { workerId: this.lead.id, draftDigest: correction.digest, reason: correction.reason });
-    }).catch(() => {
-      if (this.leadDraftNotifications.get(action) === correction) this.leadDraftNotifications.delete(action);
-      this.input.emit('notification_deferred', { workerId: this.lead.id, reason: 'lead-draft-correction' });
-    });
-    this.notifications.add(pending); void pending.finally(() => this.notifications.delete(pending));
+    return { reason: undefined };
   }
   /** Human approvals queued by queuePlanApproval; each names the exact plan version it opens dispatch for. */
   private readPlanApprovals(cursors: Record<string, number>) {
     const file = planApprovalLog(path.join(path.dirname(this.lead.worktree), 'state.json'));
-    for (const entry of readDeliveryLines(file, cursors.planApprovals ?? 0).entries!) {
+    for (const entry of pendingDeliveryLines(file, cursors, 'planApprovals', () => this.input.save(), 'drain')) {
       this.input.signal.throwIfAborted();
+      if (!entry.error && !entry.line?.trim()) continue;
       let parsed: PlanApprovalInput | undefined;
-      try { parsed = planApprovalInputSchema.parse(JSON.parse(entry.line ?? '')); } catch { parsed = undefined; }
-      if (entry.line?.trim()) this.applyPlanApproval(parsed);
-      cursors.planApprovals = entry.offset; this.input.save();
+      if (entry.line) try { parsed = planApprovalInputSchema.parse(JSON.parse(entry.line)); } catch { /* Report invalid approval below. */ }
+      this.applyPlanApproval(parsed, entry.error);
     }
   }
-  private applyPlanApproval(approval: PlanApprovalInput | undefined) {
+  private applyPlanApproval(approval: PlanApprovalInput | undefined, readError?: string) {
     const record = this.archive.planApproval ??= {};
     if (approval && record.approvedId === approval.id) return;
     const status = planApprovalStatus(this.input.state);
-    const reason = !approval ? 'math_plan_approval_invalid' : status === 'not-required' ? 'math_plan_approval_not_required' :
+    const reason = readError ?? (!approval ? 'math_plan_approval_invalid' : status === 'not-required' ? 'math_plan_approval_not_required' :
       status === 'approved' ? 'math_plan_approval_already_approved' : status === 'awaiting-plan' ? 'math_plan_approval_plan_unavailable' :
-      approval.planVersion !== this.archive.planVersion ? 'math_plan_approval_version_conflict' : undefined;
+      approval.planVersion !== this.archive.planVersion ? 'math_plan_approval_version_conflict' : undefined);
     if (!approval || reason) {
       const rejection = { id: approval?.id ?? crypto.randomUUID(), reason: reason!, at: Date.now(),
         ...(approval ? { planVersion: approval.planVersion } : {}) };
@@ -271,18 +230,17 @@ export abstract class CooperationInputs extends CooperationPlanning {
   private async readPlanDelivery(cursors: Record<string, number>) {
     const active = this.active.get(this.lead.id), action = active?.action;
     if (!action || action.kind !== 'lead') return;
-    const file = leadPlanDeliveryFile(action);
-    if (!file) return;
-    const initial = Boolean(action.initialPlanNonce), nonce = action.initialPlanNonce ?? action.planNonce!;
+    const target = leadPlanPublicationTarget(action);
+    if (!target) return;
+    const { file, dispatchNonce: nonce, baseVersion } = target;
+    const initial = Boolean(action.initialPlanNonce);
     const code = (reason: string) => `math_${initial ? 'initial_plan' : 'plan_publication'}_${reason}`;
-    const key = `${this.lead.id}/${file}`, discardKey = `${key}/discardingOversized`;
-    const batch = readDeliveryLines(path.join(this.lead.worktree, file), cursors[key] ?? 0,
-      { discardingOversized: cursors[discardKey] === 1 });
+    const key = `${this.lead.id}/${file}`;
     const research = this.input.state.workers?.find(record => record.id === this.lead.id) ?? this.input.state;
     const current = () => this.active.get(this.lead.id) === active && !active.cancelled &&
       !this.stopping && !this.input.signal.aborted && this.current(action);
-    const open = () => current() &&
-      (this.archive.planPublication ?? this.archive.initialPlanPublication)?.nonce !== nonce;
+    const open = () => current() && !this.leadPublication(action) &&
+      !(initial && (this.archive.initialPlanPublication || this.archive.tasks.length));
     let advanced = false, feedbackChanged = false;
     const reject = (reason: string, offset: number, checkpoint = false) => {
       this.input.emit(initial ? 'initial_plan_rejected' : 'plan_publication_rejected', { workerId: this.lead.id, file, reason });
@@ -292,69 +250,60 @@ export abstract class CooperationInputs extends CooperationPlanning {
         checkpoint.request.rejection = { file, offset, reason: bounded(reason, 4000) };
       } else {
         if (!open()) return;
-        this.archive.planPublicationRejection = { nonce, file, offset, baseVersion: action.planVersion!, reason: bounded(reason, 4000) };
+        this.archive.planPublicationRejection = { nonce, file, offset, baseVersion, reason: bounded(reason, 4000) };
       }
       feedbackChanged = true;
     };
     try {
-      for (const entry of batch.entries!) {
+      for (const entry of pendingDeliveryLines(path.join(this.lead.worktree, file), cursors, key, () => { advanced = true; })) {
         this.input.signal.throwIfAborted();
-        if (entry.error) reject(entry.error, entry.offset);
-        else if (entry.line?.trim()) {
-          // Only a complete explicit event is parsed; RESEARCH.md remains an unpublished draft.
-          const eventDigest = mathDigest(entry.line);
-          let response: any;
-          try { response = JSON.parse(entry.line); }
-          catch { reject(code('invalid_json'), entry.offset); }
-          if (response !== undefined) {
-            try {
-              if (response?.kind === 'checkpoint') {
-                await this.input.exclusiveCheck(async () => {
-                  if (!current()) throw new Error(code('superseded'));
-                  acceptContextCheckpoint(research, this.lead.worktree, response);
-                  this.input.emit('context_checkpoint_published', { workerId: this.lead.id, threadId: research.threadId,
-                    requestId: research.contextCheckpoint?.requestId, notesDigest: research.contextCheckpoint?.publishedNotesDigest });
-                  this.changed();
-                });
-              } else {
-                if (!response || typeof response !== 'object' || Array.isArray(response))
-                  throw new Error(code('invalid') + ': expected a JSON object');
-                const fields: string[] = [];
-                if (response.kind !== 'plan') fields.push('kind must be "plan"');
-                if (typeof response.baseVersion !== 'string') fields.push('baseVersion must be the current plan version');
-                if ((!initial || response.dispatchNonce !== undefined) && response.dispatchNonce !== nonce)
-                  fields.push('dispatchNonce must match this Lead dispatch');
-                if (fields.length) throw new Error(code('invalid') + ': ' + fields.join(', '));
-                const details = deliveryDetails(response);
-                await this.input.exclusiveCheck(async () => {
-                  const publication = this.archive.planPublication ?? this.archive.initialPlanPublication;
-                  if (publication?.nonce === nonce && publication.eventDigest === eventDigest) return;
-                  if (publication?.nonce === nonce || initial && (this.archive.initialPlanPublication || this.archive.tasks.length) ||
-                      this.active.get(this.lead.id)?.action !== action || !this.current(action))
-                    throw new Error(code('superseded'));
-                  if (!action.planVersion || response.baseVersion !== action.planVersion ||
-                      response.baseVersion !== this.archive.planVersion) throw new Error(code('version_conflict'));
-                  const plan = parseLeadPlan(this.input.state.problem, response, this.planPatchBase(), { goalPath: this.goalPathReview() });
-                  await this.acceptPlan(plan, undefined, { action, receipt: { nonce, file,
-                    offset: entry.offset, eventDigest, baseVersion: response.baseVersion, acceptedAt: Date.now() } });
-                  await this.retainGuidanceDecisions(this.lead, action, response.guidanceDecisions);
-                  this.rememberLeadDecision(action);
-                  this.changed();
-                  this.input.emit(initial ? 'initial_plan_published' : 'plan_published', { ...this.archive.planPublication,
-                    workerId: this.lead.id, summary: details.summary, taskIds: plan.tasks.map(task => task.id) });
-                });
-              }
-            } catch (error) {
-              this.input.signal.throwIfAborted();
-              if (!(error instanceof Error) || !/^math_(?:initial_plan_|plan_|delivery_invalid)/u.test(error.message)) throw error;
-              reject(error.message, entry.offset, response?.kind === 'checkpoint');
-            }
+        if (entry.error) { reject(entry.error, entry.offset); continue; }
+        const line = entry.line;
+        if (!line?.trim()) continue;
+        let checkpoint = false;
+        try {
+          const value = parseMathJson(line, code('invalid_json'));
+          if (!value || typeof value !== 'object' || Array.isArray(value))
+            throw new Error(code('invalid') + ': expected a JSON object');
+          const response = value as Record<string, unknown>;
+          checkpoint = response.kind === 'checkpoint';
+          if (checkpoint) {
+            await this.input.exclusiveCheck(async () => {
+              if (!current()) throw new Error(code('superseded'));
+              acceptContextCheckpoint(research, this.lead.worktree, response);
+              this.input.emit('context_checkpoint_published', { workerId: this.lead.id, threadId: research.threadId,
+                requestId: research.contextCheckpoint?.requestId, notesDigest: research.contextCheckpoint?.publishedNotesDigest });
+              this.changed();
+            });
+            continue;
           }
+          const fields: string[] = [];
+          if (response.kind !== target.kind) fields.push('kind must be "plan"');
+          if (typeof response.baseVersion !== 'string') fields.push('baseVersion must be the current plan version');
+          if ((!initial || response.dispatchNonce !== undefined) && response.dispatchNonce !== nonce)
+            fields.push('dispatchNonce must match this Lead dispatch');
+          if (fields.length) throw new Error(code('invalid') + ': ' + fields.join(', '));
+          const eventDigest = mathDigest(line), details = deliveryDetails(response);
+          await this.input.exclusiveCheck(async () => {
+            if (this.leadPublication(action)?.eventDigest === eventDigest) return;
+            if (!open()) throw new Error(code('superseded'));
+            if (response.baseVersion !== baseVersion || baseVersion !== this.archive.planVersion)
+              throw new Error(code('version_conflict'));
+            const plan = parseLeadPlan(this.input.state.problem, response, this.planPatchBase(), { goalPath: this.goalPathReview() });
+            await this.acceptPlan(plan, undefined, { action, receipt: { nonce, file,
+              offset: entry.offset, eventDigest, baseVersion, acceptedAt: Date.now() } });
+            await this.retainGuidanceDecisions(this.lead, action, response.guidanceDecisions);
+            this.rememberLeadDecision(action);
+            this.changed();
+            this.input.emit(initial ? 'initial_plan_published' : 'plan_published', { ...this.archive.planPublication,
+              workerId: this.lead.id, summary: details.summary, taskIds: plan.tasks.map(task => task.id) });
+          });
+        } catch (error) {
+          this.input.signal.throwIfAborted();
+          if (!(error instanceof Error) || !/^math_(?:initial_plan_|plan_|delivery_invalid)/u.test(error.message)) throw error;
+          reject(error.message, entry.offset, checkpoint);
         }
-        cursors[key] = entry.offset; cursors[discardKey] = entry.discardingOversized ? 1 : 0; advanced = true;
       }
-      if (cursors[key] !== batch.offset || (cursors[discardKey] === 1) !== batch.discardingOversized) advanced = true;
-      cursors[key] = batch.offset; cursors[discardKey] = batch.discardingOversized ? 1 : 0;
     } finally { if (advanced) { if (feedbackChanged) this.changed(); else this.input.save(); } }
     const rejection = this.archive.planPublicationRejection;
     if (rejection && rejection.nonce === nonce && open() && this.planPublicationNotification !== rejection) {
@@ -418,10 +367,7 @@ export abstract class CooperationInputs extends CooperationPlanning {
     try {
       for (const log of [assignmentDeliveryFile(action.assignment), 'DELIVERIES.jsonl']) {
         const scoped = log !== 'DELIVERIES.jsonl', key = scoped ? `${worker.id}/${log}` : worker.id;
-        const discardKey = `${key}/discardingOversized`;
-        const batch = readDeliveryLines(path.join(worker.worktree, log), cursors[key] ?? 0,
-          { discardingOversized: cursors[discardKey] === 1 });
-        for (const entry of batch.entries!) {
+        for (const entry of pendingDeliveryLines(path.join(worker.worktree, log), cursors, key, () => { advanced = true; })) {
           this.input.signal.throwIfAborted();
           if (entry.error) reject(entry.error, `${key}:${entry.offset}:${entry.error}`);
           else if (entry.line?.trim()) {
@@ -437,13 +383,7 @@ export abstract class CooperationInputs extends CooperationPlanning {
               }
             }
           }
-          cursors[key] = entry.offset;
-          cursors[discardKey] = entry.discardingOversized ? 1 : 0;
-          advanced = true;
         }
-        if (cursors[key] !== batch.offset || (cursors[discardKey] === 1) !== batch.discardingOversized) advanced = true;
-        cursors[key] = batch.offset;
-        cursors[discardKey] = batch.discardingOversized ? 1 : 0;
       }
     } finally {
       if (advanced) {

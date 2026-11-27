@@ -3,7 +3,7 @@ import path from 'node:path';
 import { mathDigest } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath } from '../math/paths';
 import type { SolverRunState } from './archive';
-import { MAX_RESEARCH_NOTES_BYTES } from './deliveries';
+import { appendDeliveryEvent, MAX_RESEARCH_NOTES_BYTES } from './deliveries';
 
 type CheckpointResearch = Pick<SolverRunState, 'threadId' | 'contextCheckpoint'>;
 export type ContextCheckpointRejection = { threadId: string; requestId: string; file: string; offset: number; reason: string };
@@ -20,10 +20,15 @@ export function contextCheckpointRejectionFeedback(rejection: ContextCheckpointR
   file: string | undefined): string | undefined {
   if (!rejection || !file) return;
   return 'Host rejected the current context checkpoint acknowledgment:\n' + JSON.stringify(rejection) + '\n' +
-    'After saving the current argument and unresolved inference in RESEARCH.md, recompute notesDigest as SHA256 of its exact saved bytes. ' +
-    'Append one complete corrected JSON line to ' + file + ': ' +
-    JSON.stringify({ kind: 'checkpoint', requestId: rejection.requestId, notesDigest: 'SHA256_OF_SAVED_RESEARCH_MD' }) + '. ' +
-    'Preserve the log, append this control event last, then stop editing and return. This acknowledgment grants no proof acceptance.';
+    'Save the current argument and unresolved inference in RESEARCH.md. From the worktree root rerun checkpoint with ' +
+    '--log ' + file + ' --request-id ' + JSON.stringify(rejection.requestId) + ', then return.';
+}
+
+export function queueContextCheckpoint(worktree: string, file: string, requestId: string) {
+  const notesDigest = readCheckpointNotesDigest(worktree);
+  if (!notesDigest) throw new Error('Save your current research in a nonempty RESEARCH.md before acknowledging the checkpoint.');
+  appendDeliveryEvent(worktree, file, { kind: 'checkpoint', requestId, notesDigest });
+  return { status: 'queued', file };
 }
 
 export function readCheckpointNotesDigest(worktree: string): string | undefined {

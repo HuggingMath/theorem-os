@@ -148,20 +148,27 @@ describe('failed turns superseded while their session closes', () => {
       deadline: Infinity, maxTurns: 1, maxTurnMs: Infinity, maxTotalTokens: 0,
       save: () => {}, emit: (event, details) => events.push({ event, details }),
     });
-    const currentReviewFailure = kind === 'review' && change === 'pause';
-    if (currentReviewFailure) await expect(result).rejects.toThrow('math_original_declaration_changed');
-    else await expect(result).resolves.toBeUndefined();
+    const reviewRemainsCurrent = kind === 'review' && change === 'pause';
+    await expect(result).resolves.toBeUndefined();
 
     expect(edited).toBe(true);
     expect(state.cooperation!.tasks.every(node => node.status === 'pending' && !node.feedback)).toBe(true);
     const failures = state.cooperation!.deliveries?.filter(delivery => delivery.kind === 'failure') ?? [];
-    if (currentReviewFailure) {
-      expect(failures).toHaveLength(1);
+    const sourceRejections = events.filter(event => event.event === 'source_rejected');
+    if (reviewRemainsCurrent) {
+      // Pausing only changes scheduling. Reject the review's invalid edit and leave the run resumable.
+      expect(state.cooperation!.tasks.find(node => node.task.id === target.id)?.task.status).toBe('paused');
+      const reason = expect.stringContaining('math_original_declaration_changed');
+      expect(failures).toMatchObject([{ status: 'failed', summary: reason }]);
       expect(state.cooperation!.review).toMatchObject({ status: 'changes_requested',
-        summary: expect.stringContaining('math_original_declaration_changed') });
-    } else expect(failures).toEqual([]);
-    expect(events.some(event => event.event === 'assignment_superseded')).toBe(!currentReviewFailure);
-    if (kind === 'review' && !currentReviewFailure) expect(state.cooperation!.deliveries).toContainEqual(
+        commit: problem.baseCommit, sourceDigest: baseDigest(), summary: reason });
+      expect(sourceRejections).toMatchObject([{ details: { reason } }]);
+    } else {
+      expect(failures).toEqual([]);
+      expect(sourceRejections).toEqual([]);
+    }
+    expect(events.some(event => event.event === 'assignment_superseded')).toBe(!reviewRemainsCurrent);
+    if (kind === 'review' && !reviewRemainsCurrent) expect(state.cooperation!.deliveries).toContainEqual(
       expect.objectContaining({ kind: 'review', status: 'superseded', commit: problem.baseCommit }));
     expect(retry).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledOnce();

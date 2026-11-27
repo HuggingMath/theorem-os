@@ -71,13 +71,16 @@ export function sampleActions(sample: Pick<WebSampleFile, 'events' | 'observatio
       [{ path: 'generated/problem/Submission.lean', kind: 'update', diff: unified(source, source.replace(proof[0], proof[1])) }]);
   }
 
-  // The reviewer writes its verdict 100 ms after it is asked to report.
-  const assigned = events.find(event => event.type === 'review_assigned'), reviewer = assigned?.details?.workerId;
-  const review = observations.at(-1)?.inspection?.review;
-  const asked = reviewer && observations.at(-1)!.guidance.find(item => item.deliveredTo?.includes(reviewer));
-  if (!reviewer || !review || !asked) throw new Error('no recorded review');
-  write(reviewer, time(asked.updatedAt, 100), [{ path: 'RESEARCH.md', kind: 'add',
-    diff: JSON.stringify({ commit: review.commit, verdict: review.status, summary: review.summary }, null, 2) + '\n' }]);
+  // Older recordings include a guided review turn.
+  const assigned = events.find(event => event.type === 'review_assigned');
+  if (assigned) {
+    const reviewer = assigned.details?.workerId;
+    const review = observations.at(-1)?.inspection?.review;
+    const asked = reviewer && observations.at(-1)!.guidance.find(item => item.deliveredTo?.includes(reviewer));
+    if (!reviewer || !review || !asked) throw new Error('no recorded review');
+    write(reviewer, time(asked.updatedAt, 100), [{ path: 'RESEARCH.md', kind: 'add',
+      diff: JSON.stringify({ commit: review.commit, verdict: review.status, summary: review.summary }, null, 2) + '\n' }]);
+  }
 
   return written.sort((a, b) => a.at.localeCompare(b.at)).map((item, index) => ({ ...item.body, sequence: index + 1, at: item.at }));
 }

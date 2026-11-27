@@ -80,7 +80,7 @@ Lead 的计划和人工导出计划新增可选的顶层字段：
 
 Lead 的 capacity/stagnation 请求保存稳定的 `requestId`、原始 `inputDigest` 和当前 dispatch nonce。未完成的请求续接沿用身份；完成回复须匹配当前请求和 nonce。有待处理 handoff/challenge 时，先走原有决策协议。没有独立可执行工作时，可提交上下文给出的 `assessment` 短回执和具体数学缺口。新输入可重新触发评估；worker 调度、inbox 变化或纯计划版本变化不会清除同一数学责任的无进展保护。探索耗尽要求当前全部 focus 实际完成，只有派发记录不算完成。
 
-对于有类型的证明任务，worker 保存源码后，可向当前分工日志追加 `{"kind":"ready","summary":"saved proof ready for checking"}`，随即停止编辑并返回。宿主先持久记录请求，再等待 turn 结束、确认受管 writer 进程组停止，然后固定 Git commit 并独立检查。中断请求的应答和普通 `close()` 都不能代替停写确认；主动交回写权后的中断若未结束，复用现有 10 秒清理期限关闭会话。无法确认停止时，不提交或验收活动源码，回执记为失败，并持久隔离该 writer 的工作目录；禁止同目录重派或直接恢复，须恢复到新的隔离目录。普通验收失败可通过带新 id 的事件重试。自然 turn 完成仍兼容原交付协议。
+对于有类型的证明任务，worker 保存源码后直接返回即可交付。需要提前交回写权限时，可向当前分工日志追加 `{"kind":"ready","summary":"saved proof ready for checking"}`，随即停止编辑并返回。宿主先持久记录请求，再等待 turn 结束、确认受管 writer 进程组停止，然后固定 Git commit 并独立检查。中断请求的应答和普通 `close()` 都不能代替停写确认；主动交回写权后的中断若未结束，复用现有 10 秒清理期限关闭会话。无法确认停止时，不提交或验收活动源码，回执记为失败，并持久隔离该 writer 的工作目录；禁止同目录重派或直接恢复，须恢复到新的隔离目录。普通验收失败可通过带新 id 的事件重试。
 
 `proofReadyRecords` 区分 `awaiting-freeze`、`frozen`、`checked`、`failed` 和 `superseded`，保存固定 snapshot、源码摘要和 Lean 回执。恢复未冻结请求必须在新会话重新提交 ready；已有 frozen snapshot 直接按原 commit 重新验收，不再启动写入 turn，也不替换为后续活动源码。条件证明明确保留依赖条件并释放当前 Engineer；它不能关闭原目标，仍须后续无条件集成与独立最终评测。停写确认针对本 runtime 管理的进程组；ready 协议要求合作式交回写权。
 

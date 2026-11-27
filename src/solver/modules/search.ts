@@ -7,7 +7,7 @@ import { proofRouteReady, type ProofRoute } from '../proofRoutes';
 import { createRecordedTaskSettlement } from '../progress';
 import { createProofRoutePriority } from '../routePriority';
 import { automaticTaskConnection, freshTaskConnection } from '../taskConnections';
-import { allRoutesParked, assumableLemma, checkedUnconditionally, freshlyAccepted, groupOpen, isAdvisoryTask, isFeasibilityReview, isFinalCandidateReview,
+import { allRoutesParked, assumableLemma, checkedUnconditionally, groupOpen, isAdvisoryTask, isFeasibilityReview, isFinalCandidateReview,
   openRoutes, taskGroup, taskReferenceDependencies, taskVersion, type TaskRecord, type RouteRecord, type CooperativeAction } from '../tasks';
 
 export type ResearchBudget = Readonly<{ maxTurns: number; remainingMs: number; aborted: boolean }>;
@@ -25,12 +25,6 @@ export function routeAllowsTask(task: TaskRecord['task'], tasks: readonly TaskRe
   const route = groups.find(record => record.group.id === taskGroup(task));
   return groupOpen(route) &&
     (route.busy ?? tasks.filter(node => node.status === 'running' && taskGroup(node.task) === route.group.id).length) < (route.group.maxConcurrent ?? 3);
-}
-
-/** Advisory final review still needs a complete, freshly accepted original candidate. */
-export function finalCandidateReviewReady(tasks: readonly TaskRecord[]): boolean {
-  const goals = tasks.filter(node => node.task.kind === 'goal');
-  return goals.length > 0 && goals.every(node => !node.pendingValidation && freshlyAccepted(node, taskVersion(node.task)));
 }
 
 function dispatchRouteReady(route: ProofRoute, tasks: readonly TaskRecord[]) {
@@ -119,11 +113,11 @@ function taskReadiness(tasks: readonly TaskRecord[], groups?: readonly RouteReco
     return ready;
   };
   const canStart = (task: TaskRecord['task']): boolean => {
+    if (isFinalCandidateReview(task)) return false; // These are requests for the fixed-candidate Reviewer.
     const node = nodes.get(task.id);
     if (node?.pendingValidation || node?.alternativeRoutes?.length && !openRoutes(node).some(route => dispatchRouteReady(route, tasks))) return false;
-    return isFinalCandidateReview(task) ? finalCandidateReviewReady(tasks) && dependenciesReady(task)
-      : ['research', 'sketch'].includes(task.kind) || dependenciesReady(task) ||
-        Boolean((task.conditional || automaticTaskConnection(task, tasks, groups)) && task.dependsOn.every(dependencyAvailable));
+    return isAdvisoryTask(task) || dependenciesReady(task) ||
+      Boolean((task.conditional || automaticTaskConnection(task, tasks, groups)) && task.dependsOn.every(dependencyAvailable));
   };
   return { dependenciesReady, canStart };
 }
@@ -233,6 +227,7 @@ export function goalsFirstResearchTasks(tasks: readonly TaskRecord[], groups?: r
 /** Unit-cost dependency depth is a scheduling heuristic, not a proof-time estimate. */
 export function criticalPathResearchTasks(tasks: readonly TaskRecord[], groups?: readonly RouteRecord[]): TaskRecord[] {
   const unfinished = new Map(tasks.filter(node => !['integrated', 'completed'].includes(node.status) &&
+    !isFinalCandidateReview(node.task) &&
     (node.task.status ?? 'active') === 'active' && (!groups || groupOpen(groups.find(record => record.group.id === taskGroup(node.task)))))
     .map(node => [node.task.id, node]));
   const consumers = new Map<string, string[]>();
@@ -398,8 +393,7 @@ export function researchCanAdvance(tasks: readonly TaskRecord[], groups: readonl
     if (memo.has(id)) return memo.get(id)!;
     memo.set(id, false);
     const node = nodes.get(id);
-    if (!node || node.status === 'blocked') return false;
-    if (isFinalCandidateReview(node.task) && !finalCandidateReviewReady(tasks)) return false;
+    if (!node || node.status === 'blocked' || isFinalCandidateReview(node.task)) return false;
     if (node.status === 'completed' && isAdvisoryTask(node.task)) {
       const ready = node.task.dependsOn.every(visit);
       memo.set(id, ready); return ready;

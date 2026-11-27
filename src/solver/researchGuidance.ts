@@ -15,7 +15,7 @@ import { materializeResearchToolHelp } from './researchToolHelp';
 import { buildResearchToolGuide } from './researchToolGuide';
 import { researchSkillIdentity } from './researchSkill';
 import { skillResearchContinuationSection } from './skillResearchContext';
-import { assignmentDeliveryFile, isAdvisoryTask, isFeasibilityReview, isFinalCandidateReview, leadPlanDeliveryFile, type CooperativeTask } from './tasks';
+import { assignmentDeliveryFile, isAdvisoryTask, isFeasibilityReview, isFinalCandidateReview, type CooperativeTask } from './tasks';
 
 /** Static shared guidance also serves a native single-task baseline without manufacturing solver state. */
 export function buildCommonResearchGuide(problem: SolverProblem,
@@ -72,10 +72,7 @@ export function buildCommonResearchContext(problem: SolverProblem, state: Readon
   let workContract: ContextBundle['workContract'];
   const taskContinuation = action?.kind === 'task' && !isFeasibilityReview(action.task) && !isFinalCandidateReview(action.task);
   if (action && cooperation) {
-    // deliveryGuidance contains legacy mathematical heuristics. The comparison keeps
-    // the actual ownership/evidence contract and obtains methods solely from the shared skill.
-    const contract = cooperativeWorkContract(action, cooperation.tasks, cooperation);
-    workContract = Object.fromEntries(Object.entries(contract).filter(([key]) => key !== 'deliveryGuidance')) as typeof contract;
+    workContract = cooperativeWorkContract(action, cooperation.tasks, cooperation);
     mandatory.push({ id: 'work-contract', kind: 'assignment', text: 'Host execution contract:\n' + JSON.stringify(workContract) });
     if (cooperation.leadDecisionInstruction && action.kind === 'lead') mandatory.push({ id: 'lead-decisions', kind: 'assignment',
       text: 'Required fields for this host decision:\n' + cooperation.leadDecisionInstruction });
@@ -125,34 +122,30 @@ export function cooperativeHelperProtocol(task: CooperativeTask, log: string): s
     (isAdvisoryTask(task) ? 'Restore your temporary Lean edits after the host acknowledges the submission and before ordinary findings delivery. ' : '');
 }
 
-export const leadPlanToolInstruction = 'Read Lead plan submission in .scratch/theoremos-help.md. Validate the draft JSON before publishing. Omit progressReview on the initial plan.\n';
+export const leadPlanToolInstruction = 'Use plan-apply from Lead plan submission in .scratch/theoremos-help.md. Omit progressReview on the initial plan.\n';
 
 export function cooperativeDeliveryProtocol(action: NonNullable<ContextAccess['assignment']>, taskLog?: string): string {
   if (action.kind === 'review') return 'Review the fixed candidate and matching evidence without editing it. ' +
     'Save one JSON object in RESEARCH.md: {"verdict":"accepted|changes_requested","summary":"...","evidenceRefs":[]}, then return. ';
   if (action.kind === 'lead') {
-    const nonce = action.initialPlanNonce ?? action.planNonce;
     return leadPlanToolInstruction + 'Publish a complete task graph covering every original target exactly once, preserving current checked contracts and active assignments. ' +
       'Tasks use {id,kind,objective,dependsOn}; typed lemma tasks also need proofPath, theoremName and a full closed Lean type. ' +
       'Copy exact original target names and proof paths from the fixed problem. Task status is active|paused|stopped, never host executionStatus. ' +
-      `Append one JSON line to ${leadPlanDeliveryFile(action)}: ` +
-      JSON.stringify({ kind: 'plan', baseVersion: action.planVersion, ...(nonce ? { dispatchNonce: nonce } : {}),
-        summary: 'route and current work', tasks: [] }) + '. Replace the empty tasks array with the actual complete graph. ' +
-      'Include researchDecisions, nextCheckDecisions and any progressReview requested by the host in that same object. ' +
+      'Save the plan or revision in .scratch/plan.json and run plan-apply --publish. ' +
+      'Include the decisions requested for this dispatch in the same object. ' +
       'Assign small shared foundation lemmas before their consumers and delegate exploratory computation. To stop work on a refuted group or proof route, use retireRoutes:[{routeId,reason,evidenceRefs}] in the current plan. ' +
-      'Alternatively save the complete graph in one math-plan JSON fence in RESEARCH.md and return. ' +
+      'To submit on return, omit --publish to save the validated decision in RESEARCH.md. ' +
       'Do not truncate delivery logs, modify run state, accept unchecked tasks or wait for human plan approval yourself. ';
   }
   if (action.kind === 'task') {
     const log = taskLog ?? assignmentDeliveryFile(action.assignment);
     const helpers = cooperativeHelperProtocol(action.task, log);
-    if (isAdvisoryTask(action.task)) return `Append {"kind":"research","finding":{"summary":"complete finding","conclusion":"supporting|refuted|inconclusive",` +
-      `"evidenceRefs":[],"remainingObligations":[],"lemmaRequests":[]}} as a JSON line to ${log}, then return. ` +
-      'Use exactly one conclusion value. Retain complete notes and reproducible evidence. Findings are advisory. ' +
-      'Leave Lean files as in the assignment seed on ordinary findings delivery. Do not truncate logs or submit fabricated proof receipts. ' + helpers;
+    if (isAdvisoryTask(action.task)) return 'Save findings and reproducible evidence in RESEARCH.md and return to complete the assignment. ' +
+      'Use research-observe from the generated tool help to share a finding during the turn. ' +
+      'Leave Lean files as in the assignment seed on ordinary findings delivery. ' + helpers;
     return 'Save only the assigned exact declaration in its allowed proof file; preserve other original goals, helper interfaces and seed proofs. ' +
-      `Append {"kind":"ready","summary":"saved assigned proof"} as a JSON line to ${log}, then stop writing and return. ` +
-      'Natural return also submits saved work. Do not run git add/commit or provide commit/targets/receipts; the host freezes and checks them. ' +
+      'Return after saving. The host selects and checks the assigned source. ' +
+      `For early handoff only, append {"kind":"ready","summary":"saved assigned proof"} to ${log} and stop editing. ` +
       'Conditional assignments use their fixed dependencies; no stub or additional assumption establishes unconditional acceptance. ' + helpers;
   }
   return 'Return saved evidence through the current host assignment; the host performs integration and proof acceptance. ';

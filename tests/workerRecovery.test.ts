@@ -70,14 +70,16 @@ describe('bounded role session recovery', () => {
     return { advance: (milliseconds: number) => { now += milliseconds; }, current: () => now };
   };
   const claim = { id: 'claim', kind: 'goal', objective: 'Prove the original claim', theoremName: 'Submission.claim' };
+  const finalAudit = { id: 'candidate_audit', kind: 'research', objective: 'Audit the fixed candidate', reviewScope: 'final-candidate' };
   const research = (options: MathAgentOptions, value: object) =>
     fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), JSON.stringify(value));
   /** Runs two cooperative workers, recording the assignment each worktree receives. */
   const cooperate = (assignments: Map<string, CooperativeAction>) => runSolver([...args, '--workers', '2'], directory,
-    { ...directSolverModules, M1: { ...directSolverModules.M1, execute: async (...input) => {
-      assignments.set(input[3].worktree, input[1].assignment!);
-      return directSolverModules.M1.execute(...input);
-    } } });
+    { ...directSolverModules,
+      M1: { ...directSolverModules.M1, execute: async (...input) => {
+        assignments.set(input[3].worktree, input[1].assignment!);
+        return directSolverModules.M1.execute(...input);
+      } } });
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -236,8 +238,7 @@ describe('bounded role session recovery', () => {
           expect(options.threadId).toBe(failedThread);
           expect(fs.readFileSync(proof(options), 'utf8')).toBe(original);
           fs.writeFileSync(proof(options), completed);
-        } else if (action.kind === 'review') research(options, { commit: action.seedCommit, verdict: 'accepted' });
-        else throw new Error(`unexpected recovery action: ${action.kind}`);
+        } else throw new Error(`unexpected recovery action: ${action.kind}`);
         return 'completed';
       }, 'upstream request failed: completed turn had no assistant output or tool operation');
       return { ...current, get lastFailureDiagnostic() { return diagnostic; } };
@@ -256,7 +257,7 @@ describe('bounded role session recovery', () => {
       worker.lastFailure?.reason === 'math_model_request_failed' &&
       worker.lastFailure.diagnostic?.reason === 'upstream_request_failed')).toBe(true);
     expect(state().cooperation.tasks[0].status).toBe('integrated');
-    expect(state().cooperation.review.status).toBe('accepted');
+    expect(state().cooperation.review).toBeUndefined();
     expect(host.official).toHaveBeenCalledOnce();
   });
 
@@ -531,7 +532,6 @@ describe('bounded role session recovery', () => {
         const action = assignments.get(options.workspace)!;
         if (action.kind === 'lead') research(options, { tasks: [{ ...claim, ownerId: 'engineer' }] });
         else if (action.kind === 'task') fs.writeFileSync(proof(options), completed);
-        else if (action.kind === 'review') research(options, { commit: action.seedCommit, verdict: 'accepted' });
         else throw new Error(`unexpected recovery action: ${action.kind}`);
         return 'completed';
       });
@@ -542,7 +542,7 @@ describe('bounded role session recovery', () => {
     });
     expect(state().workers.every((worker: { error?: string }) => !worker.error)).toBe(true);
     expect(state().cooperation.tasks[0].status).toBe('integrated');
-    expect(state().cooperation.review.status).toBe('accepted');
+    expect(state().cooperation.review).toBeUndefined();
     expect(events().filter(event => event.event === 'worker_failed')).toHaveLength(0);
     expect(events().filter(event => event.event === 'worker_cooling_down')).toEqual([
       expect.objectContaining({ workerId, cycle: 1, delayMs: 60_000 }),
@@ -601,7 +601,7 @@ describe('bounded role session recovery', () => {
     let proofTurns = 0;
     host.open.mockImplementation(async (options: MathAgentOptions) => session(options, async () => {
       const action = assignments.get(options.workspace)!;
-      if (action.kind === 'lead') research(options, { tasks: [claim] });
+      if (action.kind === 'lead') research(options, { tasks: [claim, finalAudit] });
       else if (action.kind === 'task') {
         proofTurns++; fs.writeFileSync(proof(options), completed); options.onUsage({ totalTokens: 11 });
         return 'failed';
@@ -630,24 +630,23 @@ describe('bounded role session recovery', () => {
         fs.writeFileSync(proof(options), proofTurns <= 3 ? draft : draft.replace('by sorry', 'by exact checkpoint_3'));
         options.onUsage({ totalTokens: 11 });
         return proofTurns <= 3 ? 'checkpoint' : 'completed';
-      } else if (action.kind === 'review') research(options, { commit: action.seedCommit, verdict: 'accepted' });
-      else throw new Error(`unexpected checkpoint action: ${action.kind}`);
+      } else throw new Error(`unexpected checkpoint action: ${action.kind}`);
       options.onUsage({ totalTokens: 8 }); return 'completed';
     }));
     expect(await cooperate(assignments)).toBe(0);
     expect(proofTurns).toBe(4);
     expect(events().filter(event => event.event === 'turn_checkpoint')).toHaveLength(3);
     expect(state().cooperation.tasks[0].status).toBe('integrated');
-    expect(state().cooperation.review.status).toBe('accepted');
+    expect(state().cooperation.review).toBeUndefined();
     expect(host.delay).not.toHaveBeenCalled(); expect(host.official).toHaveBeenCalledOnce();
   });
 
-  it('checks and integrates a saved proof once after a tool failure, then keeps the peer available for independent review', async () => {
+  it('checks and integrates a saved proof once after a tool failure, then keeps the peer available for an explicit review', async () => {
     const assignments = new Map<string, CooperativeAction>();
     let proofTurns = 0;
     host.open.mockImplementation(async (options: MathAgentOptions) => session(options, async () => {
       const action = assignments.get(options.workspace)!;
-      if (action.kind === 'lead') research(options, { tasks: [claim] });
+      if (action.kind === 'lead') research(options, { tasks: [claim, finalAudit] });
       else if (action.kind === 'task') {
         proofTurns++; fs.writeFileSync(proof(options), completed);
         options.onUsage({ totalTokens: 11 });

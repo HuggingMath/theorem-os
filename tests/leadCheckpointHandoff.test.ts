@@ -139,6 +139,8 @@ describe('Lead checkpoint waits for its required decision handoff', () => {
     f.command(() => f.write(f.revision(false)));
     await vi.advanceTimersByTimeAsync(0);
     expect(f.interrupt).not.toHaveBeenCalled();
+    expect(f.notify.mock.calls.map(([message]) => message)).toContainEqual(
+      expect.stringContaining('math_plan_research_decisions_missing'));
     expect(f.state.cooperation!.researchDecisions).toBeUndefined();
     await vi.advanceTimersByTimeAsync(30_000);
     f.command(() => f.write(f.revision()));

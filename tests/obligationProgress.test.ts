@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { captureObligationSnapshot, diffObligationProgress } from '../src/solver/obligationProgress';
-import { finalCandidateReviewReady } from '../src/solver/modules/search';
 import { hasTaskAcceptance, markTaskAcceptance, taskVersion, type RouteRecord, type TaskRecord } from '../src/solver/tasks';
 import type { ProofRoute } from '../src/solver/proofRoutes';
 import type { RouteBlocker } from '../src/solver/routeControl';
@@ -35,7 +34,7 @@ describe('obligation snapshots and observed progress', () => {
     expect(receipt).toMatchObject({ kind: 'baseline', at: 10, afterDigest: state.digest,
       obligations: { new: [], closed: [], reopened: [], removed: [], changed: [] }, goalFrontiers: [], routes: [] });
     expect(hasTaskAcceptance(input.integratedCheck!)).toBe(false);
-    expect(finalCandidateReviewReady([input, goal])).toBe(false);
+    expect(hasTaskAcceptance(goal.integratedCheck!)).toBe(false);
   });
 
   it('ignores dispatches, attempts, assignment metadata, route turns and mere task ordering', () => {
@@ -167,7 +166,6 @@ describe('obligation snapshots and observed progress', () => {
     expect(after.digest).toBe(before.digest); expect(after.obligations[0].closed).toBe(true);
     expect(diffObligationProgress(JSON.parse(JSON.stringify(before)), after)).toBeUndefined();
     expect(hasTaskAcceptance(restored[0].integratedCheck!)).toBe(false);
-    expect(finalCandidateReviewReady(restored)).toBe(false);
   });
 
   it('ignores receipts and commits changing during a replay of the same mathematical checkpoint', () => {
@@ -264,7 +262,7 @@ describe('proof-route progress', () => {
     expect(completed.obligations.closed.map(change => change.after.taskId)).toEqual(['goal']);
     expect(completed.routes[0].after!.connection).toBe('closed-by-original-check');
     expect(completed.goalFrontiers[0].after!.frontier).toEqual([]);
-    expect(completed.acceptance).toBe('not-assessed'); expect(finalCandidateReviewReady(tasks)).toBe(false);
+    expect(completed.acceptance).toBe('not-assessed'); expect(hasTaskAcceptance(goal.integratedCheck!)).toBe(false);
   });
 
   it('retains alternative frontiers and does not treat all alternative branches as mandatory', () => {

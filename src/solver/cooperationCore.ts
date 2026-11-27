@@ -11,7 +11,7 @@ import type { WorkerAccess } from './research';
 import type { SolverModules } from './modules';
 import { originalGoalTaskFocus, originalGoalFrontierSnapshot, plannedTaskDependencyIds, taskDependencyRecords } from './modules/search';
 import { type DeliveryRecord } from './deliveries';
-import { rejectedDeliveryReceipt, deliveryReceiptFeedback, type DeliveryReceipt } from './deliveryReceipts';
+import { assignmentDeliveryReceipts, rejectedDeliveryReceipt, deliveryReceiptFeedback, type DeliveryReceipt } from './deliveryReceipts';
 import { proofReadyRecord, type ProofReadyRecord } from './proofReady';
 import type { ProofCheck } from './modules/evidence';
 import { createTaskSourceProjector, isAttributedTaskProof, ownedSourceDigest, TaskProofCache, type TaskProof } from './cooperativeProof';
@@ -39,7 +39,7 @@ import { taskConnectionCheckCurrent } from './taskConnections';
 import { TaskTypePreflightCache } from './taskTypePreflight';
 import { currentCapacityExploration, plannedTaskRecords } from './capacityExploration';
 import { assignmentDeliveryFile, isFeasibilityReview, markTaskAcceptance, markTaskReferences, taskGroup, taskReferenceDependencies, type CooperativeTask, type TaskRecord, type CooperativeAction } from './tasks';
-import { digest, ReviewRecord, HumanEditRecord, CooperationState, TaskVersions, RETRY_DISPATCH, bounded } from './cooperationShared';
+import { digest, ReviewRecord, HumanEditRecord, CooperationState, TaskVersions, RETRY_DISPATCH, bounded, leadPlanPublicationTarget } from './cooperationShared';
 import { emptyLeadWakes, leadWakePending, reopenLeadWakes, requestLeadWake, type LeadWakeReason } from './leadWakes';
 import { MAX_INVALID_TASK_TRANSITIONS, setTaskStatus, type TaskStatus, type TaskTransitionCause } from './taskLifecycle';
 import { planApprovalStatus } from './planApproval';
@@ -91,7 +91,7 @@ export abstract class CooperationCore {
     requestReady?: () => Promise<void>; requestAdvisoryCheckpoint?: (commit: string) => void; cancelled?: boolean }>();
   private freshProofReady = new WeakMap<CooperativeAction, string>();
   protected notifications = new Set<Promise<void>>();
-  private deliveryReceiptNotifications = new Set<string>();
+  private deliveryReceiptNotifications = new WeakMap<DeliveryReceipt, object>();
   protected pendingPulse?: Promise<ReadonlyMap<string, Promise<void>>>;
   protected deliveryChecks = new Map<string, Promise<void>>();
   protected proofPublications = new Map<string, {
@@ -111,7 +111,6 @@ export abstract class CooperationCore {
   protected goalPathDecisions = new WeakMap<CooperativeAction, GoalPathDecisions>();
   /** Tasks on the routes of the currently stalled goals, recomputed with the stall itself. */
   protected goalPathStallTasks: ReadonlySet<string> = new Set();
-  protected publishedPlans = new WeakMap<CooperativeAction, { plan: ReturnType<typeof parseCooperationPlan>; version: string; responseDigest: string }>();
   protected checkingTaskInputs = new Map<string, Promise<void>>();
   protected leanSourceDigests = new Map<string, string>();
   protected timer?: NodeJS.Timeout;
@@ -701,7 +700,7 @@ export abstract class CooperationCore {
         ...(worker.id === this.lead.id ? { planTool: {
           problem: { targets: this.input.state.problem.targets, ownedFiles: this.input.state.problem.ownedFiles,
             frozenFiles: this.input.state.problem.frozenFiles, declarations: this.input.state.problem.declarations },
-          base: this.planPatchBase(), goalPath: scoped.goalPathReview,
+          base: this.planPatchBase(), goalPath: scoped.goalPathReview, publication: this.openLeadPublicationTarget(action),
         } satisfies PlanToolContext } : {}),
         ...(scoped.landedHelpers?.length ? { landedHelpers: scoped.landedHelpers } : {}),
         ...(scoped.retiredRoutes?.length ? { retiredRoutes: scoped.retiredRoutes } : {}),
@@ -729,6 +728,7 @@ export abstract class CooperationCore {
             canonicalProbe: node.assignment?.canonicalProbe,
             actualReferences: (node.integratedCheck ?? node.proof)?.references } : {}) })),
         deliveries: deliveries.map(({ evidence: _evidence, researchRecord: _researchRecord, ...record }) => record),
+        ...(scoped.humanGuidance?.length ? { humanGuidance: scoped.humanGuidance } : {}),
         deliveryReceipts: scoped.deliveryReceipts ?? [],
         proofReadyRecords: scoped.proofReadyRecords ?? [],
         proofSearchRecords: search ? { [search.taskId]: search } : {},
@@ -814,7 +814,8 @@ export abstract class CooperationCore {
       environmentDigest: this.input.state.environmentDigest, submission, error, now: Date.now(),
       receipts: this.archive.deliveryReceipts });
     const receipts = this.archive.deliveryReceipts ??= [];
-    const previous = receipts.find(item => item.id === receipt.id);
+    const previous = assignmentDeliveryReceipts(receipts, action.assignment, this.input.state.environmentDigest, worker.id)
+      .find(item => item.id === receipt.id);
     if (previous) return previous;
     receipts.push(receipt);
     const node = this.node(action.task.id);
@@ -823,18 +824,19 @@ export abstract class CooperationCore {
   }
   protected async notifyDeliveryReceipts(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>) {
     const active = this.active?.get(worker.id);
-    if (!active || active.action !== action || !this.current(action)) return;
-    const notified = this.deliveryReceiptNotifications ??= new Set();
-    for (const receipt of this.archive.deliveryReceipts ?? []) {
-      if (receipt.status !== 'needs-correction' || receipt.workerId !== worker.id || receipt.assignmentKey !== assignmentDeliveryFile(action.assignment) ||
-          receipt.environmentDigest !== this.input.state.environmentDigest || notified.has(receipt.id)) continue;
+    if (!active || active.action !== action) return;
+    const current = () => this.active.get(worker.id) === active && !active.cancelled &&
+      !this.stopping && !this.input.signal.aborted && this.current(action);
+    if (!current()) return;
+    const notified = this.deliveryReceiptNotifications ??= new WeakMap();
+    for (const receipt of assignmentDeliveryReceipts(this.archive.deliveryReceipts, action.assignment, this.input.state.environmentDigest, worker.id)) {
+      if (receipt.status !== 'needs-correction' || notified.get(receipt) === active) continue;
       // Reserve this receipt while its soft notice waits, without blocking later worker deliveries.
-      notified.add(receipt.id);
+      notified.set(receipt, active);
       const pending = Promise.resolve().then(async () => {
-        if (this.active.get(worker.id) !== active || !this.current(action)) throw new Error('math_notification_assignment_changed');
-        await active.notify(deliveryReceiptFeedback(receipt));
+        if (current() && receipt.status === 'needs-correction') await active.notify(deliveryReceiptFeedback(receipt));
       }).catch(() => {
-        notified.delete(receipt.id);
+        if (notified.get(receipt) === active) notified.delete(receipt);
         this.input.emit('delivery_receipt_notification_deferred', { workerId: worker.id, receiptId: receipt.id });
       });
       const notifications = this.notifications ??= new Set();
@@ -843,10 +845,7 @@ export abstract class CooperationCore {
   }
   protected resolveDeliveryReceipts(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>,
     replacesReceipt?: unknown, complete = false) {
-    const scoped = (this.archive.deliveryReceipts ?? []).filter(receipt => receipt.workerId === worker.id &&
-      receipt.assignmentKey === assignmentDeliveryFile(action.assignment) && receipt.taskId === action.assignment.taskId &&
-      receipt.taskDigest === action.assignment.taskDigest && receipt.seedCommit === action.assignment.seedCommit &&
-      receipt.environmentDigest === this.input.state.environmentDigest);
+    const scoped = assignmentDeliveryReceipts(this.archive.deliveryReceipts, action.assignment, this.input.state.environmentDigest, worker.id);
     const byId = new Map(scoped.map(receipt => [receipt.id, receipt]));
     const replaced = new Set<string>();
     let id = typeof replacesReceipt === 'string' ? replacesReceipt : undefined;
@@ -855,18 +854,15 @@ export abstract class CooperationCore {
       if (!receipt || receipt.status === 'superseded') break;
       replaced.add(id); id = receipt.replacesReceipt;
     }
+    const node = this.node(action.task.id);
     for (const receipt of scoped) {
       if (receipt.status !== 'needs-correction' || !complete && !replaced.has(receipt.id)) continue;
       receipt.status = 'recorded';
-      const node = this.node(action.task.id);
-      if (node.feedback === deliveryReceiptFeedback({ ...receipt, status: 'needs-correction' }))
+      if (node?.feedback === deliveryReceiptFeedback({ ...receipt, status: 'needs-correction' }))
         node.feedback = undefined;
     }
-    const pending = this.archive.deliveryReceipts?.findLast(receipt => receipt.status === 'needs-correction' &&
-      receipt.workerId === worker.id && receipt.assignmentKey === assignmentDeliveryFile(action.assignment) &&
-      receipt.environmentDigest === this.input.state.environmentDigest);
-    const node = this.node(action.task.id);
-    if (pending && !node.feedback) node.feedback = deliveryReceiptFeedback(pending);
+    const pending = scoped.findLast(receipt => receipt.status === 'needs-correction');
+    if (pending && node && !node.feedback) node.feedback = deliveryReceiptFeedback(pending);
   }
   protected receiveProofReady(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>, submissionId: string) {
     const created = proofReadyRecord({ assignment: action.assignment, workerId: worker.id, submissionId,
@@ -960,6 +956,15 @@ export abstract class CooperationCore {
     return !node.nextCheckId || this.archive.nextChecks?.some(record => record.id === node.nextCheckId &&
       record.status === 'pending' && currentNextCheck(record, this.archive, this.explorationIdentity)) === true;
   }
+  protected leadPublication(action: CooperativeAction) {
+    if (action.kind !== 'lead') return;
+    const nonce = action.initialPlanNonce ?? action.planNonce;
+    const publication = this.archive.planPublication ?? this.archive.initialPlanPublication;
+    return publication?.nonce === nonce ? publication : undefined;
+  }
+  protected openLeadPublicationTarget(action?: CooperativeAction) {
+    if (action?.kind === 'lead' && this.current(action) && !this.leadPublication(action)) return leadPlanPublicationTarget(action);
+  }
   current(action: CooperativeAction) {
     if (action.kind === 'assemble') return !this.failure && !this.stopping && this.liveWorkers.has(this.lead.id) && this.canAssemble(action.seedCommit);
     if (action.kind === 'lead' && this.assemblyYieldedLeads.has(action)) return false;
@@ -974,7 +979,7 @@ export abstract class CooperationCore {
         digest(node.task) === action.taskDigest && this.statementReviewAllowed(node.task));
     }
     if (action.kind === 'lead') {
-      const version = this.publishedPlans.get(action)?.version ?? action.planVersion;
+      const version = this.leadPublication(action)?.planVersion ?? action.planVersion;
       return version === undefined || version === this.archive.planVersion;
     }
     if (action.kind === 'review') {

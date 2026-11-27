@@ -248,13 +248,9 @@ it('keeps executable parallel-work guidance mandatory for Lead decisions', () =>
     assignment: { kind: 'lead', seedCommit: baseCommit, planVersion: 'v1', planNonce: 'dispatch' },
     frozenContexts: input([]).frozenContexts, maxOptionalContextBytes: 0 });
   expect(context.workContract).toMatchObject({ stage: 'route-planning', output: 'validated-task-graph', acceptance: 'host-plan-validation' });
-  const guidance = context.workContract && 'deliveryGuidance' in context.workContract ? context.workContract.deliveryGuidance : '';
-  expect(guidance).toContain('distinct scope relative to in-flight work');
-  expect(guidance).toContain('concrete first construction, proof step or discriminating check');
-  expect(guidance).toContain('intended consumer with its application');
-  expect(guidance).toContain('give the Engineer executable proof work');
-  expect(guidance).toContain('no task is required merely to occupy an idle worker');
-  expect(guidance).toContain('infinite family of objects');
+  expect(context.workContract).not.toHaveProperty('deliveryGuidance');
+  expect(context.instructions).toContain('Delegate unresolved library or mathematical searches as research tasks');
+  expect(context.continuationMessage).not.toContain('Delegate unresolved library or mathematical searches as research tasks');
   expect(context.message).toContain(JSON.stringify(context.workContract));
   expect(context.continuationMessage).toContain(JSON.stringify(context.workContract));
   expect(context.manifest).toMatchObject({ maxOptionalBytes: 0, optionalBytes: 0 });
@@ -275,13 +271,9 @@ it.each(['research', 'sketch', 'capacity-exploration'] as const)(
       frozenContexts: input([]).frozenContexts, maxOptionalContextBytes: 0 });
     expect(context.workContract).toMatchObject({ stage: kind === 'capacity-exploration' ? kind : 'investigation',
       acceptance: 'advisory-only', sourcePolicy: 'read-only' });
-    const guidance = context.workContract && 'deliveryGuidance' in context.workContract ? context.workContract.deliveryGuidance : '';
-    expect(guidance).toContain('publish it promptly in lemmaRequests');
-    expect(guidance).toContain('full closed Lean type and actual typed input dependencies');
-    expect(guidance).toContain('distinct scope, first construction or Lean step, and intended consumer');
-    expect(guidance).toContain('do not keep researching an already implementable step');
-    expect(guidance).toContain('finite reduction or a uniform argument');
-    expect(guidance).toContain('separate proof assignment and independent checking');
+    expect(context.workContract).not.toHaveProperty('deliveryGuidance');
+    expect(context.instructions).toContain('lemmaRequests');
+    expect(context.continuationMessage).not.toContain('For a substantive finding or unresolved gap');
     expect(context.message).toContain(JSON.stringify(context.workContract));
     expect(context.continuationMessage).toContain(JSON.stringify(context.workContract));
     expect(context.manifest).toMatchObject({ maxOptionalBytes: 0, optionalBytes: 0 });
@@ -477,8 +469,7 @@ it('projects advisory deliveries into recoverable references without duplicating
   expect(visible.actualReferences).toBeUndefined();
   expect(visible.actualReferenceSource.sourceCommit).toBe(proof.references!.sourceCommit);
   expect(context.message).not.toMatch(/LOCAL_ONLY_ARTIFACT_HEADER|LOCAL_ONLY_DIAGNOSTICS|DUPLICATE_DELIVERY_RECEIPT/u);
-  expect(compiledGraph(context.message)[0].evidence.references.inputs).toHaveLength(proof.references!.inputs.length);
-  expect(compiledDictionary(context.message).entries).toHaveLength(2);
+  expect(contextLine(context.message, 'Lean references for consumer:')).toEqual(proof.references);
   expect(context.manifest.omitted).toContainEqual({ id: 'delivery:recoverable:details', kind: 'delivery', reason: 'advisory-details-by-reference' });
   expect(context.manifest.usedBytes).toBeLessThan(16000);
   expect(record).toEqual(original);
@@ -773,26 +764,7 @@ it('fails closed for unavailable frozen context instead of substituting a contex
 });
 
 const contextLine = (message: string, label: string) => JSON.parse(message.split(`${label}\n`)[1].split('\n')[0]);
-const encodedGraph = (message: string): any[] => contextLine(message, 'Lead task graph and host feedback:');
-const compiledGraph = (message: string): any[] => {
-  const dictionary = message.includes('Complete evidence reference dictionary (mandatory, recorded-not-replayed):')
-    ? compiledDictionary(message) : undefined;
-  return encodedGraph(message).map(row => {
-    if (!row.evidence) return row;
-    if (row.evidence.taskDigest === null) row.evidence.taskDigest = row.taskDigest;
-    if (row.integratedCommit === null) row.integratedCommit = row.evidence.commit;
-    if (row.checkedSourceDigest === null) row.checkedSourceDigest = row.evidence.sourceDigest;
-    for (const receipt of row.evidence.verification.receipts)
-      if (receipt.targetCommit === null) receipt.targetCommit = row.evidence.verification.targetCommit;
-    if (row.evidence.references?.tasks) row.evidence.references.tasks = row.evidence.references.tasks.map((entry: number) => dictionary!.entries[entry]);
-    return row;
-  });
-};
-const compiledDictionary = (message: string): { entries: any[]; digests: string[]; projectRelative: string;
-  encoding: string; digestExpansion: string } =>
-  contextLine(message, 'Complete evidence reference dictionary (mandatory, recorded-not-replayed):');
-const expandedProofSource = (row: any) => row.source && { commit: row.evidence.commit, path: row.source.path,
-  sourceDigest: row.evidence.sourceDigest, ...(row.evidence.references ? { inputsFrom: 'evidence.references.inputs' } : {}) };
+const compiledGraph = (message: string): any[] => contextLine(message, 'Lead task graph and host feedback:');
 
 function referenceProof(task: CooperativeTask, sourceCommit = proofCommit): TaskProof {
   const input = { file: 'Submission.lean', name: 'shared_support', digest: 'same-interface-digest' },
@@ -805,183 +777,46 @@ function referenceProof(task: CooperativeTask, sourceCommit = proofCommit): Task
       ({ ...result, receiptId: `receipt-${task.id}`, targetCommit: 'd'.repeat(40) })) } };
 }
 
-it('losslessly expands deduplicated references, their order, proof source paths and all mandatory evidence identities', () => {
-  const tasks = [lemma('first'), lemma('second')], proofs = tasks.map(task => referenceProof(task));
-  // Equal objects with different property insertion order still share one dictionary entry.
-  proofs[1].references!.inputs[0] = { digest: 'same-interface-digest', name: 'shared_support', file: 'Submission.lean' };
-  const context = compileTaskContext(input(tasks.map((task, index) => ({ ...node(task), status: 'integrated', integratedCheck: proofs[index] }))));
-  const graph = compiledGraph(context.message), dictionary = compiledDictionary(context.message);
-  expect(dictionary.entries).toHaveLength(2);
-  expect(context.manifest.included).toContainEqual(expect.objectContaining({ id: 'evidence-reference-dictionary', required: true }));
-  expect(context.manifest.included).toContainEqual(expect.objectContaining({ id: 'proof-source-reference-encoding', required: true }));
-  for (const [index, row] of graph.entries()) {
-    const references = row.evidence.references, original = proofs[index].references!;
-    for (const key of ['inputs', 'proof', 'statement'] as const)
-      expect(references[key].map((id: number) => dictionary.entries[id])).toEqual(original[key]);
-    expect(references.inputs[0]).toBe(references.inputs[1]);
-    expect(references.sourceCommit).toBe(original.sourceCommit);
-    expect(dictionary.digests[references.contextDigest]).toBe(original.contextDigest);
-    expect(dictionary.digests[references.environmentDigest]).toBe(original.environmentDigest);
-    expect(references.root).toEqual(original.root);
-    expect(references.tasks).toEqual(original.tasks);
-    expect(row.type).toBe(tasks[index].type);
-    expect(row.evidence.conditions).toEqual(proofs[index].conditions);
-    expect(row.evidence.verification.receipts).toEqual(proofs[index].verification.results);
-    expect(row.source.inputs).toBeUndefined();
-    expect(row.source.evidenceFrom).toBe('evidence');
-    expect(expandedProofSource(row)).toEqual({ commit: proofs[index].commit,
-      path: `${problem.projectRelative}/${tasks[index].proofPath}`, sourceDigest: proofs[index].sourceDigest,
-      inputsFrom: 'evidence.references.inputs' });
-    const expandedSources = references.inputs.map((id: number) => ({ ...dictionary.entries[id],
-      commit: references.sourceCommit, path: `${dictionary.projectRelative}/${dictionary.entries[id].file}` }));
-    expect(expandedSources).toEqual(original.inputs.map(item => ({ ...item, commit: original.sourceCommit,
-      path: `${problem.projectRelative}/${item.file}` })));
-  }
+it('shows exact proof identities and available Lean references without a decoding step', () => {
+  const task = lemma('current'), dependency = lemma('needed'), unrelated = lemma('unrelated');
+  const current = { ...task, dependsOn: [dependency.id] };
+  const proof = referenceProof(dependency, '1'.repeat(40));
+  const records = [node(current), { ...node(dependency), status: 'integrated' as const, integratedCheck: proof },
+    { ...node(unrelated), status: 'integrated' as const, integratedCheck: referenceProof(unrelated) }];
+  const original = structuredClone(records);
+  const context = compileTaskContext(input(records, assign(current)));
+  const row = compiledGraph(context.message).find(task => task.id === dependency.id);
+  expect(row.evidence).toMatchObject({ commit: proof.commit, path: path.posix.join(problem.projectRelative, dependency.proofPath!),
+    sourceDigest: proof.sourceDigest, taskDigest: proof.taskDigest,
+    verification: { targetCommit: proof.verification.targetCommit, receipts: proof.verification.results },
+    references: { sourceCommit: proof.references!.sourceCommit, environmentDigest: proof.references!.environmentDigest,
+      contextDigest: proof.references!.contextDigest } });
+  expect(contextLine(context.message, 'Lean references for needed:')).toEqual(proof.references);
+  expect(context.message).not.toContain('Lean references for unrelated:');
+  expect(context.message).not.toContain('Complete evidence reference dictionary');
+  expect(records).toEqual(original);
 });
 
-it('renders a mandatory digest dictionary when all declaration reference arrays are empty', () => {
-  const task = lemma('empty_references'), proof = referenceProof(task);
-  proof.references = { ...proof.references!, inputs: [], statement: [], proof: [] };
-  const original = structuredClone(proof), context = compileTaskContext(input([
-    { ...node(task), status: 'integrated', integratedCheck: proof },
-  ])), dictionary = compiledDictionary(context.message), references = compiledGraph(context.message)[0].evidence.references;
-  expect(dictionary.encoding).toBe('evidence-reference-indices-v3');
-  expect(dictionary.entries).toEqual([]);
-  expect(dictionary.digests).toEqual([proof.references.environmentDigest, proof.references.contextDigest]);
-  expect(dictionary.digestExpansion).toContain('environmentDigest or contextDigest');
-  expect(dictionary.digestExpansion).toContain('exact original digest string');
-  expect(context.manifest.included).toContainEqual(expect.objectContaining({ id: 'evidence-reference-dictionary', required: true }));
-  expect({ ...references, environmentDigest: dictionary.digests[references.environmentDigest],
-    contextDigest: dictionary.digests[references.contextDigest] }).toEqual(proof.references);
-  expect(proof).toEqual(original);
-});
-
-it('restores identical and distinct environment and context digests without changing any evidence identity', () => {
-  const tasks = [lemma('shared'), lemma('distinct_context'), lemma('distinct_environment')],
-    proofs = tasks.map((task, index) => referenceProof(task, String(index + 1).repeat(40)));
-  proofs[0].references = { ...proofs[0].references!, environmentDigest: 'a'.repeat(64), contextDigest: 'a'.repeat(64) };
-  proofs[1].references = { ...proofs[1].references!, environmentDigest: 'a'.repeat(64), contextDigest: 'b'.repeat(64) };
-  proofs[2].references = { ...proofs[2].references!, environmentDigest: 'c'.repeat(64), contextDigest: 'b'.repeat(64) };
-  const original = structuredClone(proofs), context = compileTaskContext(input(tasks.map((task, index) =>
-    ({ ...node(task), status: 'integrated', integratedCheck: proofs[index] })))),
-    graph = compiledGraph(context.message), dictionary = compiledDictionary(context.message);
-  expect(dictionary.digests).toEqual(['a'.repeat(64), 'b'.repeat(64), 'c'.repeat(64)]);
-  expect(graph[0].evidence.references.environmentDigest).toBe(graph[0].evidence.references.contextDigest);
-  for (const [index, row] of graph.entries()) {
-    const references = row.evidence.references;
-    expect({ ...references, environmentDigest: dictionary.digests[references.environmentDigest],
-      contextDigest: dictionary.digests[references.contextDigest],
-      ...Object.fromEntries(['inputs', 'statement', 'proof'].map(key =>
-        [key, references[key].map((id: number) => dictionary.entries[id])])),
-    }).toEqual(proofs[index].references);
-    expect(row.evidence.commit).toBe(proofs[index].commit);
-    expect(row.evidence.verification.targetCommit).toBe(proofs[index].verification.targetCommit);
-    expect(row.evidence.verification.receipts).toEqual(proofs[index].verification.results);
-    expect(row.evidence.conditions).toEqual(proofs[index].conditions);
-  }
-  expect(proofs).toEqual(original);
-});
-
-it('expands shared source metadata for conditional and unconditional proofs without conflating the source or verifier commits', () => {
-  const dependency = lemma('condition'), conditional = { ...lemma('conditional', [dependency.id]), conditional: true },
-    unconditional = lemma('unconditional'), withReferences = referenceProof(unconditional, '1'.repeat(40)),
-    withoutReferences = checked(conditional, [{ taskId: dependency.id, taskDigest: taskVersion(dependency) }]);
-  const context = compileTaskContext(input([{ ...node(unconditional), status: 'integrated', integratedCheck: withReferences },
-    { ...node(conditional), status: 'conditional', proof: withoutReferences }, node(dependency)]));
-  const encoding = contextLine(context.message, 'Complete proof source reference encoding (mandatory, recorded-not-replayed):'),
-    graph = compiledGraph(context.message);
-  expect(encoding.encoding).toBe('proof-source-evidence-v2');
-  expect(encoding.expansion).toContain('row.evidence.commit');
-  expect(encoding.expansion).toContain('otherwise omit inputsFrom');
-  expect(expandedProofSource(graph[0])).toEqual({ commit: withReferences.commit, sourceDigest: withReferences.sourceDigest,
-    path: `${problem.projectRelative}/${unconditional.proofPath}`, inputsFrom: 'evidence.references.inputs' });
-  expect(expandedProofSource(graph[1])).toEqual({ commit: withoutReferences.commit, sourceDigest: withoutReferences.sourceDigest,
-    path: `${problem.projectRelative}/${conditional.proofPath}` });
-  expect(graph[0].evidence.references.sourceCommit).toBe('1'.repeat(40));
-  expect(graph[0].evidence.verification.targetCommit).toBe('d'.repeat(40));
-  expect(expandedProofSource(graph[0]).commit).toBe(proofCommit);
-  expect(graph[1].evidence.conditions).toEqual(withoutReferences.conditions);
-  expect(graph[1]).toMatchObject({ status: 'active', executionStatus: 'conditional' });
-});
-
-it('shares identical reference metadata without conflating distinct source commits or changed input digests', () => {
-  const tasks = [lemma('one'), lemma('two'), lemma('three')], commits = ['1'.repeat(40), '2'.repeat(40), '3'.repeat(40)],
-    proofs = tasks.map((task, index) => referenceProof(task, commits[index]));
-  proofs[2].references!.inputs = proofs[2].references!.inputs.map(item => ({ ...item, digest: 'changed-interface-digest' }));
-  const context = compileTaskContext(input(tasks.map((task, index) => ({ ...node(task), status: 'integrated', integratedCheck: proofs[index] }))));
-  const graph = compiledGraph(context.message), dictionary = compiledDictionary(context.message);
-  expect(graph[0].evidence.references.inputs).toEqual(graph[1].evidence.references.inputs);
-  expect(graph[0].evidence.references.sourceCommit).not.toBe(graph[1].evidence.references.sourceCommit);
-  expect(graph.map(row => row.evidence.references.sourceCommit)).toEqual(commits);
-  expect(graph[0].evidence.references.inputs).not.toEqual(graph[2].evidence.references.inputs);
-  expect(dictionary.entries[graph[2].evidence.references.inputs[0]].digest).toBe('changed-interface-digest');
-  expect(graph[0].evidence.commit).toBe(proofCommit);
-  expect(graph[0].evidence.verification.targetCommit).toBe('d'.repeat(40));
-});
-
-it.each(['.', 'generated\\p\\'])('reconstructs source paths with the original POSIX join rule for project %s', projectRelative => {
-  const task = lemma('source_path'), proof = referenceProof(task);
-  const context = compileTaskContext({ ...input([{ ...node(task), status: 'integrated', integratedCheck: proof }]),
-    problem: { ...problem, projectRelative } });
-  const row = compiledGraph(context.message)[0], dictionary = compiledDictionary(context.message);
-  expect(dictionary.projectRelative).toBe(projectRelative.replaceAll('\\', '/'));
-  expect(row.source.path).toBe(path.posix.join(dictionary.projectRelative, task.proofPath!));
-  for (const id of row.evidence.references.inputs) {
-    const restoredPath = path.posix.join(dictionary.projectRelative, dictionary.entries[id].file);
-    expect(restoredPath).toBe(path.posix.join(projectRelative.replaceAll('\\', '/'), proof.references!.inputs[0].file));
-  }
-});
-
-it('fits a large repeated-reference graph in the unchanged byte budget while preserving every exact task interface', () => {
+it('keeps exact interfaces and locators under budget when complete evidence inventories are too large', () => {
   const tasks = Array.from({ length: 60 }, (_, index) => lemma(`checkpoint${index}`, [],
     `∀ n : Nat, ${'n = n ∧ '.repeat(80)}True`));
   const inputs = Array.from({ length: 60 }, (_, index) => ({ file: 'Submission.lean',
-    name: `shared_long_declaration_name_${index}`, digest: String(index).padStart(64, '0') })),
-    declarationRefs = inputs.map(({ file, name }) => ({ file, name }));
+    name: `shared_long_declaration_name_${index}`, digest: String(index).padStart(64, '0') }));
+  const declarationRefs = inputs.map(({ file, name }) => ({ file, name }));
   const records = tasks.map(task => ({ ...node(task), status: 'integrated' as const, integratedCheck: {
     ...referenceProof(task), references: { ...referenceProof(task).references!, inputs, proof: declarationRefs, statement: declarationRefs },
   } }));
-  const context = compileTaskContext(input(records)), graph = compiledGraph(context.message),
-    dictionary = compiledDictionary(context.message);
+  const context = compileTaskContext(input(records)), graph = compiledGraph(context.message);
+  expect(Buffer.byteLength(canonicalMathJson(records))).toBeGreaterThan(DEFAULT_TASK_CONTEXT_BYTES);
   expect(context.manifest.usedBytes).toBeLessThanOrEqual(DEFAULT_TASK_CONTEXT_BYTES);
-  expect(context.manifest.requiredTaskIds).toHaveLength(tasks.length);
+  expect(context.manifest.requiredTaskIds).toEqual(tasks.map(task => task.id));
   expect(graph.map(row => row.type)).toEqual(tasks.map(task => task.type));
-  const expanded = graph.map(row => {
-    const references = row.evidence.references;
-    const arrays = Object.fromEntries(['inputs', 'proof', 'statement'].map(key =>
-      [key, references[key].map((id: number) => dictionary.entries[id])]));
-    return { ...row, evidence: { ...row.evidence, references: { ...references, ...arrays,
-      environmentDigest: dictionary.digests[references.environmentDigest],
-      contextDigest: dictionary.digests[references.contextDigest] } }, source: {
-      ...expandedProofSource(row),
-      inputs: arrays.inputs.map((item: any) => ({ ...item, commit: references.sourceCommit,
-        path: `${dictionary.projectRelative}/${item.file}` })),
-    } };
-  });
-  expect(Buffer.byteLength(canonicalMathJson(expanded))).toBeGreaterThan(DEFAULT_TASK_CONTEXT_BYTES);
-  expect(dictionary.entries).toHaveLength(inputs.length + declarationRefs.length);
-});
-
-it('shares exact task reference metadata and proof fields without losing receipt targets or array order', () => {
-  const tasks = [lemma('first'), lemma('second')], proofs = tasks.map(task => referenceProof(task));
-  const references = [{ taskId: tasks[0].id, taskDigest: taskVersion(tasks[0]) },
-    { taskId: tasks[1].id, taskDigest: taskVersion(tasks[1]) }];
-  for (const proof of proofs) proof.references!.tasks = [references[1], references[0], references[1]];
-  const context = compileTaskContext(input(tasks.map((task, index) => ({ ...node(task), status: 'integrated', integratedCheck: proofs[index] })))),
-    raw = encodedGraph(context.message), dictionary = compiledDictionary(context.message), graph = compiledGraph(context.message);
-  expect(dictionary.entries.filter(entry => 'taskId' in entry)).toEqual([references[1], references[0]]);
-  for (const [index, row] of raw.entries()) {
-    expect(row.evidence.references.tasks).toEqual(raw[0].evidence.references.tasks);
-    expect(row.evidence.references.tasks[0]).toBe(row.evidence.references.tasks[2]);
-    expect(row.evidence.taskDigest).toBeNull();
-    expect(row.integratedCommit).toBeNull();
-    expect(row.checkedSourceDigest).toBeNull();
-    expect(row.evidence.verification.receipts[0].targetCommit).toBeNull();
-    expect(graph[index].evidence.references.tasks).toEqual(proofs[index].references!.tasks);
-    expect(graph[index].evidence.taskDigest).toBe(proofs[index].taskDigest);
-    expect(graph[index].integratedCommit).toBe(proofs[index].commit);
-    expect(graph[index].checkedSourceDigest).toBe(proofs[index].sourceDigest);
-    expect(graph[index].evidence.verification.receipts).toEqual(proofs[index].verification.results);
+  expect(context.message).toContain('matching task ID in worktree-root COOPERATION.json tasks');
+  for (const [index, row] of graph.entries()) {
+    const proof = records[index].integratedCheck;
+    expect(row.evidence).toMatchObject({ commit: proof.commit, sourceDigest: proof.sourceDigest,
+      taskDigest: proof.taskDigest, verification: { receipts: proof.verification.results } });
+    expect(row.evidence.references.inputs).toBeUndefined();
   }
 });
 
@@ -990,11 +825,8 @@ it('does not replace distinct or absent failed receipt targets with an enclosing
   proof.passed = false;
   proof.verification.results = [{ receiptId: 'distinct', status: 'kernel_rejected', targetCommit: 'e'.repeat(40) },
     { receiptId: 'absent', status: 'kernel_rejected' }] as TaskProof['verification']['results'];
-  const context = compileTaskContext(input([{ ...node(task), proof }])), row = encodedGraph(context.message)[0];
+  const context = compileTaskContext(input([{ ...node(task), proof }])), row = compiledGraph(context.message)[0];
   expect(row.evidence.verification.receipts).toEqual(proof.verification.results);
-  expect(compiledGraph(context.message)[0].evidence.verification.receipts).toEqual(proof.verification.results);
-  expect(row.integratedCommit).toBeUndefined();
-  expect(row.checkedSourceDigest).toBeUndefined();
 });
 
 const lead = { kind: 'lead' as const, seedCommit: baseCommit };
@@ -1250,7 +1082,7 @@ it('fits a mature Lead graph with many direct checked inputs without raising the
   for (const helper of helpers) {
     const row = graph.find(row => row.id === helper.task.id);
     expect(row.evidence.verification.receipts).toEqual(helper.integratedCheck!.verification.results);
-    expect(expandedProofSource(row)).toMatchObject({ commit: helper.integratedCheck!.commit,
+    expect(row.evidence).toMatchObject({ commit: helper.integratedCheck!.commit,
       sourceDigest: helper.integratedCheck!.sourceDigest });
   }
   expect(context.message).toContain('COMPLETE_OPEN_TASK_DESCRIPTION');
@@ -1407,7 +1239,6 @@ it('uses host-checked actual dependencies without reviving an unused planned inp
     .toEqual([{ taskId: 'b', taskDigest: taskVersion(lemma('b')) }]);
   const unused = compiledGraph(context.message).find(row => row.id === 'a');
   expect(unused?.evidence).toBeUndefined();
-  expect(unused?.source).toBeUndefined();
   expect(context.message).not.toContain('STALE_UNUSED_A_SOURCE');
   expect(context.message).not.toContain('STALE_UNUSED_A_RECEIPT');
 });

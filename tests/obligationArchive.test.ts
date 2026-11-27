@@ -5,8 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from '../src/solver/archive';
 import { buildRunInspection, renderRunInspection } from '../src/solver/inspection';
 import { captureObligationSnapshot, diffObligationProgress } from '../src/solver/obligationProgress';
-import { finalCandidateReviewReady } from '../src/solver/modules/search';
-import { taskVersion, type TaskRecord } from '../src/solver/tasks';
+import { hasTaskAcceptance, taskVersion, type TaskRecord } from '../src/solver/tasks';
 import type { TaskProof } from '../src/solver/cooperativeProof';
 
 const roots: string[] = [];
@@ -41,7 +40,7 @@ describe('persisted mathematical progress', () => {
     expect(renderRunInspection(report)).toContain('Mathematical changes');
     expect(diffObligationProgress(restored.cooperation!.progressSnapshot,
       captureObligationSnapshot(restored.cooperation!.tasks, { environmentDigest: 'environment' }))).toBeUndefined();
-    expect(finalCandidateReviewReady(restored.cooperation!.tasks)).toBe(false);
+    expect(hasTaskAcceptance(restored.cooperation!.tasks[0].integratedCheck!)).toBe(false);
   });
 
   it('keeps legacy checkpoints without mathematical progress readable', () => {

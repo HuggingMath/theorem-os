@@ -409,7 +409,7 @@ describe('isolated Web worker bridge', () => {
     await expect(handleWebWorkerCommand({ type: 'edit', proposal: { ...proposal, id: 'stale', baseVersion: 'stale' } }, options)).rejects.toThrow('version_conflict');
   });
 
-  it.each(['edit-preview', 'edit'] as const)('rejects an unowned proofPath in %s with its proposal id and repair details before opening the queue', async type => {
+  it.each(['edit-preview', 'edit'] as const)('rejects an unowned proofPath in %s with its proposal id and repair details without appending', async type => {
     const f = fixture(), before = fs.readFileSync(f.stateFile);
     const proposal = { ...exportRunPlan(f.state), id: 'invalid-proof-path' };
     proposal.tasks = proposal.tasks.map(task => task.id === 'goal' ? { ...task, proofPath: 'generated/problem/Submission.lean' } : task);
@@ -421,16 +421,27 @@ describe('isolated Web worker bridge', () => {
     expect(result.reason).toContain('Use an owned proofPath');
     expect(fs.readFileSync(f.stateFile)).toEqual(before);
     expect(fs.existsSync(path.join(path.dirname(f.stateFile), 'edits.jsonl'))).toBe(false);
-    expect(fs.existsSync(path.join(path.dirname(f.stateFile), 'edits.lock'))).toBe(false);
   });
 
-  it('keeps malformed edit queue persistence distinct from a rejected proposal', async () => {
+  it('rejects an unavailable preferred owner during both preview and submission', async () => {
+    const f = fixture(), before = fs.readFileSync(f.stateFile), options = { activeRunFile: f.activeRunFile };
+    const proposal = { ...exportRunPlan(f.state), id: 'missing-preferred-owner' };
+    proposal.tasks = proposal.tasks.map(task => task.id === 'goal' ? { ...task, preferredOwnerId: 'missing-worker' } : task);
+    const rejected = { id: proposal.id, status: 'rejected', baseVersion: proposal.baseVersion, reason: 'math_plan_task_owner_unavailable' };
+    expect(await handleWebWorkerCommand({ type: 'edit-preview', proposal }, options)).toEqual(rejected);
+    expect(await handleWebWorkerCommand({ type: 'edit', proposal }, options)).toEqual(rejected);
+    expect(fs.readFileSync(f.stateFile)).toEqual(before);
+    expect(fs.existsSync(path.join(path.dirname(f.stateFile), 'edits.jsonl'))).toBe(false);
+  });
+
+  it('keeps an incomplete edit queue distinct from a rejected proposal', async () => {
     const f = fixture(), before = fs.readFileSync(f.stateFile);
     const proposal = { ...exportRunPlan(f.state), id: 'valid-proposal' };
-    const log = path.join(path.dirname(f.stateFile), 'edits.jsonl'), damaged = '{invalid-json}\n';
-    fs.writeFileSync(log, damaged);
-    await expect(handleWebWorkerCommand({ type: 'edit', proposal }, { activeRunFile: f.activeRunFile })).rejects.toThrow(SyntaxError);
-    expect(fs.readFileSync(log, 'utf8')).toBe(damaged);
+    const log = path.join(path.dirname(f.stateFile), 'edits.jsonl'), partial = '{"id":';
+    fs.writeFileSync(log, partial);
+    await expect(handleWebWorkerCommand({ type: 'edit', proposal }, { activeRunFile: f.activeRunFile }))
+      .rejects.toThrow('math_edit_incomplete_log');
+    expect(fs.readFileSync(log, 'utf8')).toBe(partial);
     expect(fs.readFileSync(f.stateFile)).toEqual(before);
   });
 
@@ -566,6 +577,32 @@ describe('isolated Web worker bridge', () => {
     expect(await handleWebWorkerCommand(approval('late'), options)).toMatchObject({ status: 'rejected',
       reason: 'math_plan_approval_run_inactive' });
     expect(fs.readFileSync(log, 'utf8').split('\n').filter(Boolean)).toHaveLength(1);
+  });
+
+  it('queues approvals past malformed records and counts only valid requests toward the limit', async () => {
+    const f = fixture(), options = { activeRunFile: f.activeRunFile };
+    const planVersion = 'plan-v1';
+    const approval = (id: string) => ({ type: 'plan-approval', approval: { id, planVersion } });
+    const log = path.join(path.dirname(f.stateFile), 'plan-approvals.jsonl');
+    f.state.planApproval = true; f.save();
+    const damaged = '{broken\n'.repeat(64) + 'null\n' +
+      JSON.stringify({ ...approval('owner').approval, unexpected: true }) + '\n';
+    fs.writeFileSync(log, damaged);
+
+    expect(await handleWebWorkerCommand(approval('owner'), options)).toMatchObject({ status: 'queued' });
+    expect(await handleWebWorkerCommand(approval('owner'), options)).toMatchObject({ status: 'already_queued' });
+    expect(fs.readFileSync(log, 'utf8')).toBe(damaged + JSON.stringify(approval('owner').approval) + '\n');
+
+    fs.appendFileSync(log, Array.from({ length: 63 }, (_, index) => JSON.stringify(approval(`previous-${index}`).approval) + '\n').join(''));
+    expect(await handleWebWorkerCommand(approval('over-limit'), options)).toMatchObject({ status: 'rejected',
+      reason: 'math_plan_approval_limit' });
+    expect(await handleWebWorkerCommand(approval('previous-62'), options)).toMatchObject({ status: 'already_queued' });
+
+    fs.appendFileSync(log, '{"id":');
+    const partial = fs.readFileSync(log);
+    await expect(handleWebWorkerCommand(approval('owner'), options)).rejects.toThrow('math_plan_approval_incomplete_log');
+    await expect(handleWebWorkerCommand(approval('new'), options)).rejects.toThrow('math_plan_approval_incomplete_log');
+    expect(fs.readFileSync(log)).toEqual(partial);
   });
 
   it('reports unavailable sources as partial and retains recorded checks without accepting them', async () => {

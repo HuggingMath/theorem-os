@@ -54,9 +54,9 @@ describe('immediate advisory observation publication', () => {
     expect(help.usage).toContain('--finding FILE');
     const context = buildResearchContext(f.problem, f.state, { root, worktree: f.peer.worktree,
       environment: {}, taskText: 'Investigate the synthetic construction.', retrievalRoot: f.directory, assignment: f.action });
-    expect(context.instructions).toContain('--finding FILE');
-    expect(context.instructions).not.toContain('FINDING_JSON');
-    expect(context.instructions).toContain('```sh\n' + help.example + '\n```');
+    expect(context.instructions).toContain('Use research-observe from .scratch/theoremos-help.md');
+    expect(context.toolHelp?.text).toContain('research-observe --worktree');
+
 
     const commands = path.join(f.directory, 'commands');
     fs.mkdirSync(commands);

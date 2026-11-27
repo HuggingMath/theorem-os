@@ -124,27 +124,21 @@ describe('Lead scheduling checkpoint control responses', () => {
     vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  it('corrects a saved incomplete Lead decision in the same dispatch without publishing the draft', async () => {
+  it('reports a saved incomplete Lead decision at checkpoint handoff without publishing the draft', async () => {
     const action = await start(), before = structuredClone(state.cooperation!.tasks);
     await cooperative.pulse();
     expect(notify).not.toHaveBeenCalled(); // The inherited accepted graph is still just the dispatch seed.
     write({ ...graph(), tasks: [...graph().tasks, proposal] });
     await cooperative.pulse();
-    expect(notify).toHaveBeenCalledOnce();
-    const message = notify.mock.calls[0][0];
-    expect(message).toContain('math_plan_research_decisions_missing');
-    expect(message).toContain('proposal-delivery');
-    expect(message).toContain(leadPlanDeliveryFile(action));
-    expect(message).toContain('has not accepted the plan or any proof');
+    expect(notify).not.toHaveBeenCalled();
+    expect(cooperative.leadCheckpointHandoff(action)?.reason).toContain('math_plan_research_decisions_missing');
+    expect(cooperative.leadCheckpointInstruction(action)).toContain('proposal-delivery');
     expect(state.cooperation!.tasks).toEqual(before);
     expect(state.cooperation!.researchDecisions).toBeUndefined();
     expect(state.cooperation!.planPublication).toBeUndefined();
     expect(state.cooperation!.planRejection).toBeUndefined();
-    await cooperative.pulse(); await cooperative.pulse();
-    expect(notify).toHaveBeenCalledOnce();
     write({ ...graph(), tasks: [...graph().tasks, proposal], ...decide('adopt') });
-    await cooperative.pulse();
-    expect(notify).toHaveBeenCalledOnce();
+    expect(cooperative.leadCheckpointHandoff(action)).toBeUndefined();
     expect(state.cooperation!.tasks).toEqual(before);
     await checkpoint(action);
     expect(state.cooperation!.tasks.find(node => node.task.id === proposal.id)?.status).toBe('pending');
@@ -161,7 +155,6 @@ describe('Lead scheduling checkpoint control responses', () => {
       fs.writeFileSync(notes(), text); await cooperative.pulse();
     }
     expect(notify).not.toHaveBeenCalled();
-    expect(events.some(item => item.event === 'lead_draft_correction_requested')).toBe(false);
   });
 
   it('ignores an unpublished draft after its dispatch has already published a valid decision', async () => {
@@ -191,17 +184,6 @@ describe('Lead scheduling checkpoint control responses', () => {
     cooperative.deactivate(workers[0]);
     await cooperative.pulse();
     expect(notify).not.toHaveBeenCalled();
-    expect(pendingProposals()).toHaveLength(1);
-  });
-
-  it('retries a failed correction notification without losing or accepting the saved draft', async () => {
-    await start();
-    notify.mockRejectedValueOnce(new Error('fixture_request_boundary_unavailable'));
-    write({ ...graph(), tasks: [...graph().tasks, proposal] });
-    await cooperative.pulse(); await Promise.resolve();
-    await cooperative.pulse();
-    expect(notify).toHaveBeenCalledTimes(2);
-    expect(state.cooperation!.planPublication).toBeUndefined();
     expect(pendingProposals()).toHaveLength(1);
   });
 
@@ -246,7 +228,7 @@ describe('Lead scheduling checkpoint control responses', () => {
     expect(reminder).toContain('researchDecisions: ["proposal-delivery"]');
     expect(reminder).toContain('task graph stays unchanged');
     expect(JSON.parse(reminder.match(/Current response template[^\n]*\n([^\n]+)\n/u)![1])).toMatchObject({
-      kind: 'plan', dispatchNonce: action.planNonce, baseVersion: action.planVersion, upsert: [],
+      baseVersion: action.planVersion, upsert: [],
     });
     expect(reminder).not.toContain('return without a revision');
     await checkpoint(action);
@@ -383,7 +365,7 @@ describe('Lead scheduling checkpoint control responses', () => {
     }
     write({ ...graph(), ...decide('decline') });
     await cooperative.pulse();
-    expect(notify.mock.calls.at(-1)?.[0]).toContain('math_plan_progress_review_missing');
+    expect(cooperative.leadCheckpointHandoff(action)?.reason).toContain('math_plan_progress_review_missing');
     expect(state.cooperation!.goalProgress!.pending?.id).toBe(progress.pending.id);
     expect(state.cooperation!.researchDecisions).toBeUndefined();
   });

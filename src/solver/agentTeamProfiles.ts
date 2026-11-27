@@ -101,7 +101,7 @@ export function resolveNewMemberProfiles(skill: MathAgentSkill, message: string,
     'math_team_profile_unresolved: ' + (emptyHeader ? 'empty Profiles: header' : JSON.stringify(profiles.evidence.unresolved)) +
     '. Use only comma-separated IDs or slugs from the pinned Skill (references/team-roles.md or references/domain-experts.md)' +
     (cards?.length ? ' or asset:<assetId> from this run\'s personal expert catalogue' : '') + '. ' +
-    'For example, put "Profiles: prover" alone on the first line. Put descriptions or custom expertise in the body; the header is optional.');
+    'Put "Profiles: prover" on its own line before the assignment, after the optional Route: line in native messages. The Profiles: line is optional. Describe custom expertise in the body.');
   return profiles;
 }
 

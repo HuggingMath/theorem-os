@@ -92,11 +92,21 @@ describe('operation-specific team tool contracts', () => {
     const finite = agentTeamToolDefinition('lead', true);
     expect(finite.inputSchema).not.toHaveProperty('oneOf');
     expect(finite.inputSchema.properties).toHaveProperty('budget');
-    expect(finite.description).toContain('coordinate: required decision, reason, nextStep;');
+  });
+
+  it.each([false, true])('keeps coordinate off the Lead menu with finite budget = %s while accepting explicit legacy calls', async finite => {
+    const tool = agentTeamToolDefinition('lead', finite);
+    expect((tool.inputSchema as Json).properties.operation.enum).not.toContain('coordinate');
+    expect(tool.inputSchema.properties).not.toHaveProperty('decision');
+    expect(tool.description).not.toContain('coordinate');
     const invalid = agentTeamRequestSchema.safeParse({ operation: 'coordinate', decision: 'continue' });
-    if (invalid.success) throw new Error('Incomplete finite-budget operation must remain invalid.');
-    expect(agentTeamArgumentFeedback('lead', true, { operation: 'coordinate' }, invalid.error).contract.required)
-      .toEqual(['operation', 'decision', 'reason', 'nextStep']);
+    if (invalid.success) throw new Error('Incomplete legacy operation must remain invalid.');
+    expect(agentTeamArgumentFeedback('lead', finite, { operation: 'coordinate' }, invalid.error).allowedOperations)
+      .not.toContain('coordinate');
+    const f = fixture('lead'), note = { decision: 'continue', reason: 'Checked the interface.', nextStep: 'Explore the bound.' };
+    const result = await f.call({ operation: 'coordinate', ...note }, 'legacy-coordinate');
+    expect(result.value).toMatchObject({ ok: true, advisory: true });
+    expect(f.state.agentTeam?.coordination).toMatchObject({ ...note, revision: 1 });
   });
 
   it('returns the exact selected operation contract for a missing recipient or extra identity', () => {

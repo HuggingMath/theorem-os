@@ -1,8 +1,7 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { assertMathCanonicalPath, isMathPathWithin } from '../math/paths';
 import { canonicalMathJson, mathDigest, readMathText } from '../math/mathRuntimeIo';
-import { MAX_DELIVERY_LINE_BYTES, MAX_RESEARCH_NOTES_BYTES } from './deliveries';
+import { appendDeliveryEvent, MAX_RESEARCH_NOTES_BYTES } from './deliveries';
 import { prepareResearchDelivery, ResearchAdmissionError, type ResearchAdmissionScope } from './researchAdmission';
 import { researchPublicationNotes } from './researchPublication';
 import { assignmentDeliveryFile, taskVersion, type TaskAssignment, type TaskRecord } from './tasks';
@@ -33,7 +32,10 @@ export function queueResearchObservation(input: {
     identity: { problemReceiptDigest: delivery.problemReceiptDigest, environmentDigest: delivery.environmentDigest },
     tasks: context.tasks, deliveries: context.deliveries, ...(context.nextChecks ? { nextChecks: context.nextChecks } : {}),
     ...(context.proofSearchRecords ? { proofSearchRecords: context.proofSearchRecords } : {}) };
-  const admission = prepareResearchDelivery({ kind: 'event', value: input.finding }, scope);
+  const object = typeof input.finding === 'object' && input.finding !== null && !Array.isArray(input.finding)
+    ? input.finding as Record<string, unknown> : undefined;
+  const { guidanceDecisions, ...finding } = object ?? {};
+  const admission = prepareResearchDelivery({ kind: 'event', value: object ? finding : input.finding }, scope);
   if (admission.status === 'rejected') throw new ResearchAdmissionError(admission);
   const probes = input.probes?.map(file => ({ source: path.relative(worktree, local(file)),
     code: readMathText(local(file), MAX_RESEARCH_NOTES_BYTES) }));
@@ -47,12 +49,9 @@ export function queueResearchObservation(input: {
     if (Object.values(sources).reduce((bytes, source) => bytes + Buffer.byteLength(source), 0) > MAX_RESEARCH_NOTES_BYTES)
       throw new Error('math_observation_sources_too_large');
   }
-  const value = { kind: 'research', finding: admission.finding, ...(probes ? { probes } : {}), ...(sources ? { sources } : {}) };
-  const file = assignmentDeliveryFile(delivery.assignment), output = local(file);
-  const line = JSON.stringify(value) + '\n';
-  if (Buffer.byteLength(line) > MAX_DELIVERY_LINE_BYTES) throw new Error('math_observation_too_large');
-  const fd = fs.openSync(output, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW, 0o600);
-  try { fs.writeFileSync(fd, line); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  const value = { kind: 'research', finding: admission.finding, guidanceDecisions, ...(probes ? { probes } : {}), ...(sources ? { sources } : {}) };
+  const file = assignmentDeliveryFile(delivery.assignment);
+  appendDeliveryEvent(worktree, file, value);
   return { status: 'queued', authority: 'advisory-unverified',
     submissionId: mathDigest(canonicalMathJson({ file, value })), file,
     taskId: delivery.assignment.taskId, taskDigest: delivery.assignment.taskDigest,

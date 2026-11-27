@@ -35,7 +35,7 @@ import { agentTeamProfileSelection, resolveNewMemberProfiles, resolveAgentTeamPr
 import { writeWorkerProject } from './workerProject';
 import { agentTeamRequestSchema as request, agentTeamToolDefinition as teamTool,
   agentTeamMemberOperations as memberOperations, agentTeamArgumentFeedback, agentTeamMessageRouteFeedback,
-  agentTeamOperationAllowed } from './agentTeamTool';
+  agentTeamOperationAllowed, legacyHelperSubmissionSchema } from './agentTeamTool';
 import type { ModelRequestGate } from '../runtime/modelRequest';
 import { LeanEnvironmentHealthCheckError } from '../runtime/leanHealthCheck';
 import { prepareAgentTeamWorkspace } from './agentTeamWorkspace';
@@ -251,9 +251,14 @@ export class AgentResearchTeam {
     return { definitions: [definition], call: async (name, args, context) => {
       context.signal.throwIfAborted();
       if (name !== definition.name) throw new Error('math_team_tool_unknown');
-      const parsed = request.safeParse(args);
+      const parsed = args && typeof args === 'object' && 'operation' in args && args.operation === 'submit_helpers'
+        ? legacyHelperSubmissionSchema.safeParse(args)
+        : request.safeParse(args);
       if (!parsed.success) return agentTeamArgumentFeedback(actor, this.budgetControlsEnabled, args, parsed.error, transport);
-      const operation = parsed.data;
+      const received = parsed.data;
+      const operation = received.operation === 'submit_helpers'
+        ? { ...received, operation: 'submit' as const, helpersOnly: true }
+        : received;
       if (this.nativeAgentControlEnabled && !agentTeamOperationAllowed(actor, this.budgetControlsEnabled, transport, operation.operation))
         return { ok: false, error: 'math_team_native_operation_required',
           hint: 'Use an advertised mathematical host operation. Native collaboration tools manage this run\'s agent transport.' };
@@ -267,7 +272,7 @@ export class AgentResearchTeam {
       }
       if (operation.operation === 'route_summary') return agentTeamRouteSummary(this.archive, operation);
       const key = canonicalMathJson([actor, context.threadId, context.turnId, context.callId]);
-      const digest = mathDigest(canonicalMathJson(operation));
+      const digest = mathDigest(canonicalMathJson(received));
       // Serializing mutations also prevents concurrent spawn/adoption calls from racing capacity or source checks.
       const apply = this.serial.then(async () => {
         context.signal.throwIfAborted();
@@ -819,8 +824,7 @@ export class AgentResearchTeam {
           artifacts: delivery.artifacts.map(artifact => ({ id: artifact.id, declaration: artifact.declaration,
             proof: artifact.proof })), originalProblemAcceptance: 'not-assessed' };
       }
-      case 'submit':
-      case 'submit_helpers': {
+      case 'submit': {
         if (actor === 'lead') throw new Error('math_team_child_submission_required');
         const worker = this.worker(actor), task = worker.tasks.find(item => item.status === 'running');
         if (!task || task.cancelRequested || task.pauseRequested || !this.live.has(actor)) throw new Error('math_team_task_not_running');
@@ -835,7 +839,7 @@ export class AgentResearchTeam {
           ownedFiles: this.input.state.problem.ownedFiles,
           hint: 'Declaration file paths are relative to the Lean project. Use an exact owned file path; ' +
             'put helpers in an editable owned Lean file or keep exploratory files under .scratch. No nomination was saved; correct the declarations and submit again.' };
-        if (operation.operation === 'submit_helpers') {
+        if (operation.helpersOnly) {
           task.helperSubmission = operation.declarations;
           task.summary = operation.summary;
           task.pauseRequested = { at: Date.now(), kind: 'handoff', reason: 'Standalone helper handoff. The assignment remains open.' };
@@ -1063,7 +1067,7 @@ export class AgentResearchTeam {
           { workerId: worker.id, taskId: task.id, turnId, completedCompactions, graceMs: sliceSettings.graceMs });
         const active = entry.session;
         void active?.notify?.(
-          'Use theoremos_team submit_helpers for standalone helpers. Write fewer than 20 lines in worktree-root RESEARCH.md covering what is established, the exact obstruction, and the next route or smaller obligation. Save your files and return after the current request and tools settle.',
+          'Use theoremos_team submit with helpersOnly:true for standalone helpers. Write fewer than 20 lines in worktree-root RESEARCH.md covering what is established, the exact obstruction, and the next route or smaller obligation. Save your files and return after the current request and tools settle.',
           active.advisoryNotifications === 'native-history' ? { mode: 'advisory' } : { waitForRequest: true }).catch(() => {});
       },
       interrupt: () => {
@@ -1385,7 +1389,7 @@ export class AgentResearchTeam {
       const ready = delivery.declarations.slice(0, 8).map(item => item.name).join(', ');
       const more = delivery.declarations.length - 8;
       const checked = 'Lean checked ' + ready + (more > 0 ? ' and ' + more + ' more' : '') +
-        '. Use inspect with this deliveryId for exact types and evidence, then adopt into the workspace that needs the declarations.';
+        '. Use this deliveryId to adopt into the workspace that needs the declarations. Inspect it for exact types or evidence as needed.';
       this.event(worker.id, 'lead', 'delivery', checked + (task.summary ? '\n' + task.summary : ''),
         { taskId: task.id, deliveryId: delivery.id, researchArtifactId: task.researchArtifactId });
     } catch (error) {

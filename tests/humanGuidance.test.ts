@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { queueHumanGuidance, deliverHumanGuidance, readHumanGuidance, recordHumanGuidanceDecisions, withdrawHumanGuidance,
   humanGuidanceInputSchema, type HumanGuidanceCandidate, type HumanGuidanceInput, type HumanGuidanceDecisionInput } from '../src/solver/humanGuidance';
 import { webGuidanceSchema } from '../apps/web/collaborationValidation';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { runInspectionSnapshot } from '../src/solver/inspection';
+import { buildResearchContext } from '../src/solver/modules/context';
 import { assignmentDeliveryFile, taskVersion, type CooperativeAction } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { webWorkerFixture } from './helpers/webWorkerBridge';
@@ -106,19 +108,38 @@ describe('independent host guidance input', () => {
 
   it('uses the cooperative host checkpoint and preserves role/task ownership', async () => {
     const f = fixture(), input = guidanceFor(f); await queueHumanGuidance(f.output, input);
-    const worker = { id: 'engineer', role: 'engineer' as const, worktree: f.worktree, ownedFiles: f.state.problem.ownedFiles };
-    const lead = { ...worker, id: 'solver', role: 'lead' as const };
+    const workerWorktree = path.join(path.dirname(f.stateFile), 'engineer');
+    execFileSync('git', ['-C', f.worktree, 'worktree', 'add', '--detach', '--quiet', workerWorktree, f.currentCommit]);
+    const worker = { id: 'engineer', role: 'engineer' as const, worktree: workerWorktree, ownedFiles: f.state.problem.ownedFiles };
+    const lead = { ...worker, id: 'solver', role: 'lead' as const, worktree: f.worktree };
     const node = f.state.cooperation!.tasks[1];
     const assignment = { taskId: 'goal', taskDigest: taskVersion(f.goal), workerId: worker.id, seedCommit: f.currentCommit };
     node.assignment = assignment; node.status = 'running';
     const host = cooperativeResearch({ state: f.state, workers: [lead, worker], retrievalRoot: f.directory });
     const notify = vi.fn(async (_message: string) => {});
-    host.activate(worker, { kind: 'task', task: node.task, assignment }, async () => {}, notify);
+    const action: CooperativeAction = { kind: 'task', task: node.task, assignment };
+    host.activate(worker, action, async () => {}, notify);
     await host.pulse(worker.id);
     expect(notify).toHaveBeenCalledOnce();
     expect(readHumanGuidance(f.stateFile, f.state.runId)[0]).toMatchObject({ status: 'delivered', deliveredTo: ['engineer'] });
     host.deactivate(worker);
     expect(node.assignment).toBe(assignment); expect(node.task).toEqual(f.goal);
+
+    const scoped = host.contextState(action, worker);
+    const problem = { ...f.state.problem, declarations: { 'Submission.lean': [{ name: 'goal', header: 'goal : True' }] } };
+    const context = buildResearchContext(problem, { ...f.state, problem, cooperation: scoped }, { root: f.directory,
+      worktree: workerWorktree, retrievalRoot: f.directory, environment: {}, taskText: 'Prove the original goal.', assignment: action });
+    for (const message of [context.message, context.continuationMessage]) {
+      expect(message).toContain('COOPERATION.json.humanGuidance');
+      expect(message).toContain(input.id);
+      expect(message).toContain('guidanceDecisions');
+      expect(message).not.toContain(input.text);
+    }
+    host.activate(worker, action, async () => {}, notify);
+    const readView = (worktree: string) => JSON.parse(fs.readFileSync(path.join(worktree, 'COOPERATION.json'), 'utf8'));
+    expect(readView(workerWorktree).humanGuidance).toEqual([expect.objectContaining({ id: input.id, text: input.text, taskRef: input.taskRef })]);
+    expect(readView(f.worktree).humanGuidance).toBeUndefined();
+    host.deactivate(worker);
   });
 
   it('delivers a complete 128 KiB advisory candidate to the actual assigned agent without executing or writing it', async () => {

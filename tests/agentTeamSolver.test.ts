@@ -250,7 +250,7 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
     expect(childResumes[0]!.params.dynamicTools).toBeUndefined();
     const childToolSchema = childStart.params.dynamicTools[0].inputSchema;
     const childOperations = ['progress', 'yield', 'history', 'message', 'poll', 'wait', 'inspect', 'inspect-research',
-      'submit', 'submit_helpers', 'route_summary'];
+      'submit', 'route_summary'];
     expect(childToolSchema.properties.operation.enum).toEqual(childOperations);
     expect(childToolSchema.oneOf.map((branch: { properties: { operation: { enum: string[] } } }) =>
       branch.properties.operation.enum[0])).toEqual(childOperations);
@@ -272,7 +272,7 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
 
     const leadTrace = trace(worktree), leadFrames = leadTrace.filter(frame => frame.direction === 'host');
     const leadToolSchema = leadFrames.find(frame => frame.method === 'thread/start')!.params.dynamicTools[0].inputSchema;
-    expect(leadToolSchema.properties.operation.enum).toEqual(['spawn', 'assign', 'amend', 'finish', 'coordinate', 'budget',
+    expect(leadToolSchema.properties.operation.enum).toEqual(['spawn', 'assign', 'amend', 'finish', 'budget',
       'resume', 'history', 'publish', 'cancel', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop',
       'retire_route', 'route_summary']);
     expect(leadToolSchema).not.toHaveProperty('oneOf');

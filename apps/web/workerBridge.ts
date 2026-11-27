@@ -10,7 +10,7 @@ import { buildRunInspection, exportRunPlan, readRunInspection } from '../../src/
 import { queuePlanApproval, queueRunEdit } from '../../src/solver/humanEdit';
 import { planApprovalInputSchema } from '../../src/solver/planApproval';
 import { humanGuidanceInputSchema, queueHumanGuidance, readHumanGuidance, withdrawHumanGuidance } from '../../src/solver/humanGuidance';
-import { parseCooperationPlan, taskGroup, taskVersion, type TaskRecord } from '../../src/solver/tasks';
+import { taskVersion, type TaskRecord } from '../../src/solver/tasks';
 import { allowedKnowledgeFile, buildTheoremKnowledge, validateTheoremKnowledge, type TheoremKnowledgeBase } from '../../src/solver/theoremKnowledge';
 import { importKnowledgeRuns } from '../../src/solver/theoremKnowledgeRuns';
 import { proofReceiptsMatch, type ProofCheck } from '../../src/solver/modules/evidence';
@@ -326,42 +326,6 @@ export function createWebWorkerBridge(options: {
   return { capture };
 }
 
-function previewEdit(state: SolverRunState, proposal: unknown) {
-  const proposed = parseCooperationPlan(state.problem, proposal), previous = new Map(state.cooperation?.tasks.map(node => [node.task.id, node.task]) ?? []);
-  const changes: { taskId: string; fields: string[] }[] = [];
-  const oldGroups = new Map(state.cooperation?.groups?.map(record => [record.group.id, record.group]) ?? []);
-  const affected = new Set<string>(), mathematical = new Set<string>();
-  for (const task of proposed.tasks) {
-    const before = previous.get(task.id), fields: string[] = [];
-    if (!before) fields.push('added');
-    else for (const key of new Set([...Object.keys(before), ...Object.keys(task)])) {
-      if (canonicalMathJson((before as Record<string, unknown>)[key] ?? null) !== canonicalMathJson((task as Record<string, unknown>)[key] ?? null)) fields.push(key);
-    }
-    const group = proposed.groups.find(item => item.id === taskGroup(task)), oldGroup = oldGroups.get(taskGroup(task));
-    if (group && oldGroup) for (const key of new Set([...Object.keys(group), ...Object.keys(oldGroup)])) {
-      if (canonicalMathJson((group as Record<string, unknown>)[key] ?? null) !== canonicalMathJson((oldGroup as Record<string, unknown>)[key] ?? null)) fields.push(`group.${key}`);
-    }
-    if (fields.length) { changes.push({ taskId: task.id, fields }); affected.add(task.id); }
-    if (!before || taskVersion(before) !== taskVersion(task) || fields.some(field => ['group.objective', 'group.revision'].includes(field))) mathematical.add(task.id);
-  }
-  for (const id of previous.keys()) if (!proposed.tasks.some(task => task.id === id)) { changes.push({ taskId: id, fields: ['removed'] }); affected.add(id); mathematical.add(id); }
-  if (canonicalMathJson(state.cooperation?.proofRoutes ?? []) !== canonicalMathJson(proposed.proofRoutes ?? [])) {
-    for (const route of [...(state.cooperation?.proofRoutes ?? []), ...(proposed.proofRoutes ?? [])]) {
-      affected.add(route.targetTaskId); mathematical.add(route.targetTaskId);
-      const existing = changes.find(change => change.taskId === route.targetTaskId);
-      if (existing) { if (!existing.fields.includes('proofRoutes')) existing.fields.push('proofRoutes'); }
-      else changes.push({ taskId: route.targetTaskId, fields: ['proofRoutes'] });
-    }
-  }
-  for (let changed = true; changed;) {
-    changed = false;
-    for (const task of proposed.tasks) if (!mathematical.has(task.id) && task.dependsOn.some(id => mathematical.has(id))) {
-      mathematical.add(task.id); affected.add(task.id); changed = true;
-    }
-  }
-  return { affectedTaskIds: [...affected], changes };
-}
-
 const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('edit-preview'), proposal: z.record(z.unknown()) }).strict(),
   z.object({ type: z.literal('edit'), proposal: z.record(z.unknown()) }).strict(),
@@ -378,8 +342,8 @@ export async function handleWebWorkerCommand(value: unknown, options: { activeRu
   const bridge = createWebWorkerBridge({ ...active, libraryRestart: command.type === 'capture' ? active.libraryRestart : undefined });
   if (command.type === 'capture') return { id: 'capture', status: 'captured',
     ...await bridge.capture({ includeCatalog: true, force: true, waitMs: 5_000 }) };
-  const { state, stateFile } = readRunInspection(active.output);
   if (command.type === 'guidance') {
+    const { state, stateFile } = readRunInspection(active.output);
     try {
       const previous = bridgeMeta(path.join(active.directory, 'web-bridge.json'), active.webRunId, state.runId);
       const alreadyQueued = readHumanGuidance(stateFile, state.runId).some(record => record.id === command.guidance.id);
@@ -427,15 +391,15 @@ export async function handleWebWorkerCommand(value: unknown, options: { activeRu
       throw error;
     }
   }
-  let impact: ReturnType<typeof previewEdit>;
-  try { impact = previewEdit(state, command.proposal); }
-  catch (error) {
-    // The pure preview rejects invalid plans before the edit queue is opened. Queue failures stay uncertain.
+  try {
+    const commandDigest = mathDigest(canonicalMathJson(command.proposal));
+    const result = await queueRunEdit(active.output, command.proposal, command.type === 'edit-preview');
+    return { ...result, commandDigest };
+  } catch (error) {
+    // Plan errors are decided before appending. Lease and persistence failures still propagate.
     const reason = error instanceof Error ? error.message : '';
     if (/^math_plan_[a-z_]+(?::|$)/u.test(reason))
       return { id: command.proposal.id, status: 'rejected', reason, baseVersion: command.proposal.baseVersion };
     throw error;
   }
-  const result = await queueRunEdit(active.output, command.proposal, command.type === 'edit-preview');
-  return { ...result, baseVersion: command.proposal.baseVersion, ...impact, commandDigest: mathDigest(canonicalMathJson(command.proposal)) };
 }

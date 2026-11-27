@@ -180,8 +180,7 @@ export function leadPlanPublicationTarget(action: CooperativeAction | undefined)
 }
 
 export const LEAD_PLAN_REPAIR_INSTRUCTION =
-  'Validate the candidate JSON from the Lead worktree with theorem-os plan-validate --file .scratch/plan.json. ' +
-  'Use theorem-os plan-apply --file .scratch/plan.json to save a validated plan in RESEARCH.md.';
+  'Use plan-apply from the generated Lead tool help to validate and submit the corrected .scratch/plan.json.';
 
 /** Reuse the saved diagnostic across turns while always targeting the current dispatch. */
 export function leadPlanPublicationFeedback(action: CooperativeAction | undefined,
@@ -189,11 +188,8 @@ export function leadPlanPublicationFeedback(action: CooperativeAction | undefine
   const rejection = state.planPublicationRejection, target = leadPlanPublicationTarget(action);
   if (!target || !rejection || rejection.baseVersion !== state.planVersion) return;
   return 'Host rejected a Lead publication before accepting it:\n' + JSON.stringify(rejection) + '\n' +
-    'Correct the reported error and append a new complete JSON event using the current publication target: ' +
-    JSON.stringify(target) + '. ' +
-    'Preserve the log and use the current assignment protocol; a saved rejection may come from an earlier dispatch. ' +
-    'Keep kind:"plan", baseVersion and any dispatchNonce at the top level of the same event as tasks or upsert/remove; ' +
-    'a bare plan patch is not a publication event. Only the first valid publication in a dispatch is accepted. This intake feedback grants no proof acceptance. ' +
+    'Correct the reported error and use plan-apply --publish for the current dispatch. ' +
+    'Only the first valid publication in a dispatch is accepted. ' +
     LEAD_PLAN_REPAIR_INSTRUCTION;
 }
 export const deliveryInputFields = (record: DeliveryRecord) => ({

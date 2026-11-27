@@ -537,7 +537,7 @@ bun scripts/test-web-runtime.ts
 
 最后一项派生带明确 fixture 标记的测试镜像，用模拟 Codex app-server 生成候选，执行真实 Lean 检查。共 7 个场景：标准库正确 / 错误候选、运行中取消、创建时取消，以及 Mathlib 正确 / 错误候选和运行中取消；Mathlib 取消场景还核对设备权限、匿名卷和删除结果。不会调用模型或使用真实 Key。可用 `--case mathlib-valid` 单独排查；Mathlib 冷准备可能持续数分钟。报告写入 `out/web-runtime-smoke/report.json`，测试镜像默认自动删除。
 
-`test:web-cooperative-runtime` 单独验证真实 Docker 多 Agent 协作，使用离线 Codex 替身生成工作材料，执行真实 host、命令通道和 Lean 检查：Lead 发布计划，Engineer 实际接收指定任务版本的指导并完成第一个目标；人工修改计划后，已检查任务的版本失效，两个目标重新检查；独立 Researcher/Reviewer 审阅固定候选，最终由 S3 验收完整原题。测试还核对预览只读、重复 edit 只应用一次、归档证据和容器清理。默认从 `theorem-os-worker:local` 派生一次性测试镜像，可用 `--base-image TAG` 指定已构建镜像；报告与原始证据写入 `out/web-cooperative-smoke/`。本机此流程已通过，两个目标的 recheck 与最终 `evaluated_passed` 均由真实 Lean 产生。
+`test:web-cooperative-runtime` 单独验证真实 Docker 多 Agent 协作，使用离线 Codex 替身生成工作材料，执行真实 host、命令通道和 Lean 检查：Lead 发布计划，Engineer 实际接收指定任务版本的指导并完成第一个目标；人工修改计划后，已检查任务的版本失效，两个目标重新检查；完整候选通过 Lean 检查后直接由 S3 验收原题。测试还核对预览只读、重复 edit 只应用一次、归档证据和容器清理。默认从 `theorem-os-worker:local` 派生一次性测试镜像，可用 `--base-image TAG` 指定已构建镜像；报告与原始证据写入 `out/web-cooperative-smoke/`。本机此流程已通过，两个目标的 recheck 与最终 `evaluated_passed` 均由真实 Lean 产生。
 
 已验证标准库和 Mathlib 的正确 / 错误证明、取消及容器清理；浏览器到 HTTP、Docker 和真实 Mathlib/Lean 的完整流程也通过验收，并检查了下载和 320–1440 像素布局。实际运行结果写入各次测试报告。不同服务商的 Responses API 兼容性与付费模型行为需要使用者通过自己的账户验证。
 

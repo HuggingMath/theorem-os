@@ -4,7 +4,7 @@ Use this reference only for a host-assigned cooperative role. The model chooses 
 
 ## Shared rules
 
-The current assignment and `.scratch/theoremos-help.md` provide exact paths, interfaces, versions, nonce and feedback. They supersede old dispatch values. Use only exposed tools within current permissions. The host owns task assignment, isolation, integration, approvals and budgets; create additional agents only when it permits them.
+The current assignment and `.scratch/theoremos-help.md` provide exact paths, interfaces and feedback. They supersede old dispatch values. Use only exposed tools within current permissions. The host owns task assignment, isolation, integration, approvals and budgets; create additional agents only when it permits them.
 
 Append complete newline-terminated JSON events to the current delivery log. A missing log is normal; create it by appending. Preserve earlier events. In an assignment-scoped task log, omitted `id`, `taskId`, `taskDigest` and `kind` are supplied by the host (`kind` defaults to `progress`); supplied task identity must match the assignment. Explicit event and task IDs use `[A-Za-z0-9_-]{1,64}`.
 
@@ -12,15 +12,12 @@ Edit only assigned source paths. Preserve other seed proofs and frozen declarati
 
 ## Lead plan
 
-Leave Lean sources unchanged and delegate Lean diagnostics to workers. Omit `progressReview` on the initial plan. Save the draft in `.scratch/plan.json` and run `theorem-os plan-validate --file .scratch/plan.json` before publishing or running `plan-apply`. Publish one JSON line to the current Lead delivery log:
+Leave Lean sources unchanged and delegate Lean diagnostics to workers. Omit `progressReview` on the initial plan. Save your plan or revision with any [required decisions](#required-lead-decisions) in `.scratch/plan.json`. Use the command from Lead plan submission in `.scratch/theoremos-help.md`.
 
-```json
-{"kind":"plan","baseVersion":"CURRENT_BASE_VERSION","dispatchNonce":"CURRENT_DISPATCH_NONCE","summary":"route and consumers","tasks":[]}
-```
+- To dispatch work during the turn, run `theorem-os plan-apply --publish --file .scratch/plan.json`. It validates the draft and binds the current dispatch. Publish once, save concise route notes and return promptly.
+- To submit on return, run `theorem-os plan-apply --file .scratch/plan.json`. It validates the draft and atomically replaces the plan block in `RESEARCH.md`. A revision saved this way includes its `baseVersion` from `COOPERATION.json.planVersion`.
 
-Replace dispatch values from the assignment; omit `dispatchNonce` if none is supplied. Replace the empty `tasks` array with the complete graph. The first plan covers every original target exactly once. Keep checked task contracts and active unrelated assignments stable. Publish once per dispatch, save concise route notes and return promptly without polling approval or copying the published graph into other responses.
-
-When returning without live publication, save the graph or revision as a JSON file with any [required decision fields](#required-lead-decisions). From the Lead worktree, run `theorem-os plan-validate --file .scratch/plan.json` to see field-level issues, then `theorem-os plan-apply --file .scratch/plan.json` to replace the plan block in `RESEARCH.md` atomically. Both commands also read JSON from stdin. `planVersion` in the result fingerprints the validated draft. Use `COOPERATION.json.planVersion` as the accepted `baseVersion` for a revision. Return after saving so the host can check the draft against live state.
+The first plan covers every original target exactly once. Keep checked task contracts and active unrelated assignments stable.
 
 For `idleWorkers` with `m3-no-ready`, `dependency-blocked` or `m5-no-selection`, inspect M3 readiness, role/owner and saved-assignment pins. Publish an executable revision, name the concrete running dependency when waiting, or explicitly pause the route. Returning an unchanged accepted graph does not resolve that continuous idle episode.
 
@@ -38,7 +35,7 @@ Typed declaration final name components must be unique and must not reuse frozen
 
 Proof `dependsOn` names actual typed inputs. Advisory dependencies are inspection inputs rather than proof premises. Only untyped research/sketch may use `consumerGoalIds` to name original goals; connect typed helpers through consumer dependencies or [proof routes](#optional-task-forms).
 
-Optional task metadata includes `premises`, `informalProof` (at most 2000 characters), `citations` (at most 8 references, 300 characters each), `researchSource` (`mathlib`, `verified-library`, `public-literature`; advisory tasks only), and `reviewScope` (`feasibility` or `final-candidate`; advisory tasks only). Final-candidate review waits for freshly checked original goals. Blueprints and citations do not change proof contracts. For statement-meaning review, use `statementReview:true` with `informalStatement` and the assignment's review interface.
+Optional task metadata includes `premises`, `informalProof` (at most 2000 characters), `citations` (at most 8 references, 300 characters each), `researchSource` (`mathlib`, `verified-library`, `public-literature`; advisory tasks only), and `reviewScope` (`feasibility` or `final-candidate`; advisory tasks only). Active final-candidate entries send their objectives to one fixed Reviewer after the host checks the complete candidate. The verdict is saved in the run’s review record. Blueprints and citations do not change proof contracts. For statement-meaning review, use `statementReview:true` with `informalStatement` and the assignment's review interface.
 
 Optional `groups` carry `id`, `objective`, `status`, `revision`, `engineerId`, `maxTurns` and `maxConcurrent`. Tasks use `groupId` and `sharing` (`group` or `problem`); cross-group inputs require problem sharing. Use `ownerId` only for an intentional reservation. Omitting it does not release an existing assignment. Do not copy host-owned capacity explorations or pending-check tasks into the editable graph or use their IDs as proof premises.
 
@@ -75,31 +72,29 @@ A proof or research worker can publish standalone helpers before finishing its a
 
 The host snapshots the saved files and independently checks the helpers and their same-file helper dependencies. Keep the original target and its unfinished body intact. The host publishes checked signatures with their canonical commit. Other workers can inspect that commit or reuse the helpers in their next seeded worktree. Publishing a helper does not complete the assignment.
 
-Save the assigned exact declaration in its allowed proof file, then append:
+Save the assigned exact declaration in its allowed proof file and return for host checking. For an early handoff, append:
 
 ```json
 {"kind":"ready","summary":"saved assigned proof"}
 ```
 
-Omit `commit` and `targets`; the host selects and freezes the source for the assigned declaration. Stop writing and return. Natural return also submits saved work. Read `COOPERATION.json.proofReadyRecords` for the specific result. A new attempt after failure uses a new event ID; an unchanged submission is deduplicated. Unconfirmed writer shutdown causes host quarantine rather than acceptance.
+Omit `commit` and `targets`; the host selects and freezes the source for the assigned declaration. Stop writing after the early handoff. Read `COOPERATION.json.proofReadyRecords` for the specific result. A new attempt after failure uses a new event ID; an unchanged submission is deduplicated. Unconfirmed writer shutdown causes host quarantine rather than acceptance.
 
 Unfinished typed work may deliver an intermediate [research finding](#research-delivery) without changing its proof obligation. A progress event such as `{"summary":"current result and remaining gap"}` does not complete or accept the proof.
 
 ## Research delivery
 
-Save findings and reproducible evidence in `RESEARCH.md`, then append:
+Save findings and reproducible evidence in `RESEARCH.md`. Return with those notes to complete the advisory assignment. To share useful progress or request a Lead decision during the turn, save the finding object in `.scratch/finding.json` and use `research-observe` from the generated tool help.
 
 ```json
-{"kind":"research","finding":{"summary":"argument, assumptions and remaining gap","conclusion":"inconclusive","needsDecision":true,"evidenceRefs":[],"remainingObligations":[],"lemmaRequests":[]}}
+{"summary":"argument, assumptions and remaining gap","conclusion":"inconclusive","remainingObligations":[]}
 ```
 
-Choose one `conclusion`: `supporting`, `refuted` or `inconclusive`. Use `refuted` only for a concrete refutation of the scoped claim; failed search or an unknown inference is inconclusive. `summary` is nonempty; optional `premises` and `remainingObligations` are string arrays. Set `needsDecision:true` for a route decision. Findings remain advisory.
+Use `supporting`, `refuted` or `inconclusive`. Reserve `refuted` for a concrete refutation of the scoped claim. Optionally include `premises`, `evidenceRefs`, `mathematicalGap`, `blockers`, `checkOutcome`, `lemmaRequests` or `replacesReceipt`. Set `needsDecision:true` when Lead must choose a route or resolve a blocker. Lemma requests need new IDs and complete typed definitions in the same route group. They become proof assignments after Lead adoption.
 
-Put `lemmaRequests`, `mathematicalGap`, `blockers`, `checkOutcome` and `replacesReceipt` **inside `finding`**. Lemma requests need new IDs and complete typed task definitions (`kind:"lemma"`, objective, theorem name, closed type, owned proof path and dependencies) in the same route group. They become proof assignments only after Lead adoption; proposals do not authorize source edits.
+Use `--probe FILE` to retain the code of a Lean probe. Leave advisory assignment sources as in their seed when delivering findings. For a typed assignment, use `--snapshot-sources` when the finding depends on changed saved Lean sources. Ordinary findings remain advisory.
 
-Advisory research/sketch leaves Lean files as in the assignment seed on delivery. A typed finding that relies on changed supporting Lean sources must bind those sources: outer event `sources` maps **every currently allowed owned, nonfrozen Lean path** to its complete UTF-8 content, at most 1,000,000 bytes total. Serialize from files. Exact allowed paths come from the current assignment. Without `sources` or `commit`, the finding is bound to its seed; a supporting immutable `commit` must descend from that seed. These two fields are mutually exclusive. The normal flow uses host source snapshots, not worker-created commits.
-
-If exposed by current help, `theorem-os research-observe --worktree WORKTREE --finding FINDING_FILE [--probe LEAN_FILE] [--snapshot-sources]` validates and records this report. `--finding` takes a file containing the finding object, not inline JSON or the outer delivery event.
+When the host requests a context checkpoint, save your current notes and any drafts, publish useful findings or plans, run the checkpoint command in the request, then return.
 
 ## Independent review
 
@@ -113,7 +108,7 @@ Choose `accepted` or `changes_requested`; identify the exact change for the latt
 
 ## Gaps, blockers and checks
 
-Use these fields when reporting a scoped unresolved inference; they do not refute the original problem or create proof premises. A research event nests them in `finding`; a progress event may carry `mathematicalGap` or `blockers` at the top level.
+Use these fields when reporting a scoped unresolved inference; they do not refute the original problem or create proof premises. Put them in the finding file passed to `research-observe`.
 
 ### Mathematical gap
 
@@ -139,7 +134,7 @@ Optional `blockerId` refers to an existing blocker for this task/route. Optional
 
 ### Assigned check outcome
 
-Complete a pending host check with `finding.checkOutcome`:
+Complete a pending host check with `checkOutcome` in the finding:
 
 ```json
 {"checkId":"ASSIGNED_CHECK_ID","conclusion":"inconclusive","summary":"scoped result","evidenceRefs":[]}
@@ -162,13 +157,13 @@ Read the current assignment's referenced `COOPERATION.json` records and feedback
 
 A delivery's `summarySource` points to its full finding in the context manifest. If that section was omitted for budget, retrieve notes using `savedSource.commit` and `savedSource.notesPath`; omission does not mean no result was saved. A "Saved Lead draft pending integration" similarly retains interrupted source work at a fixed commit. Inspect it with `git show COMMIT:PROJECT_RELATIVE_PATH`, then recover useful declarations through typed tasks against current canonical sources, preserving integrated proofs. Drafts still require normal host checking.
 
-For intake corrections, inspect **every** `deliveryReceipts` row scoped to this worker, task, task digest, seed, assignment and environment with status `needs-correction`. Match any supplied receipt index/count/digest. Append a complete corrected research event with `finding.replacesReceipt` set to that receipt ID; preserve the log and earlier evidence. If the correction is rejected, replace its new receipt. Each independent rejected submission needs its own correction; only the verified replacement chain is resolved.
+For intake corrections, read each `needs-correction` row in the current assignment’s `COOPERATION.json.deliveryReceipts`. Rerun `research-observe` with `replacesReceipt` set to that receipt ID in the corrected finding file. If the correction is rejected, replace its new receipt. Each independent rejected submission needs its own correction; only the verified replacement chain is resolved.
 
 Correcting an earlier **valid** finding is different: update the active note's conclusion, cite the immutable old commit/finding digest, identify the bad inference, and retain corrected evidence and remaining gap. Publish a new `needsDecision:true` finding; Lead then revises or rechecks the affected route. Do not rewrite archived findings.
 
 ### Delivered guidance
 
-Only for guidance actually delivered to this assignment, include top-level `guidanceDecisions`, outside `finding`:
+Only for guidance actually delivered to this assignment, include `guidanceDecisions` in the plan, finding file or final response:
 
 ```json
 [{"guidanceId":"DELIVERED_ID","status":"accepted","reason":"specific reason","evidenceRefs":[]}]

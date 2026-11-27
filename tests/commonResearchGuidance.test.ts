@@ -6,7 +6,7 @@ import { agentTeamOperationAllowed } from '../src/solver/agentTeamTool';
 import { buildResearchContext, finalizeResearchDispatch } from '../src/solver/modules/context';
 import { researchSkillIdentity } from '../src/solver/researchSkill';
 import { buildSkillResearchContext } from '../src/solver/skillResearchContext';
-import { assignmentDeliveryFile, leadPlanDeliveryFile, taskVersion, type CooperativeTask } from '../src/solver/tasks';
+import { assignmentDeliveryFile, taskVersion, type CooperativeTask } from '../src/solver/tasks';
 import { localExample, solverState } from './helpers/solver';
 
 const roots: string[] = [];
@@ -134,8 +134,9 @@ describe('common mathematical guidance across research strategies', () => {
     f.state.cooperation = { tasks: [], leadDecisionInstruction: 'Include researchDecisions for delivery d1.' };
     const context = buildResearchContext(f.problem, f.state, { ...f.access, assignment: action });
     expect(context.message).toContain('Include researchDecisions for delivery d1.');
-    expect(context.instructions).toContain(leadPlanDeliveryFile(action));
-    expect(context.instructions).toContain('frozen-publication-nonce');
+    expect(context.message).toContain(JSON.stringify(action));
+    expect(fs.readFileSync(path.join(f.workspace, '.scratch/theoremos-help.md'), 'utf8'))
+      .toContain('plan-apply --publish --file .scratch/plan.json');
     expect(context.instructions).toContain('Leave all Lean sources unchanged');
     expect(context.instructions).toContain('covering every original target exactly once');
     for (const text of ['Before expanding an uncertain decomposition', 'hardest substantive inference',

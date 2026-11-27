@@ -9,7 +9,7 @@ import { commitSolverSources } from '../src/solver/problem';
 import { prepareResearchDelivery } from '../src/solver/researchAdmission';
 import { researchCheckpointLocalInputDigest } from '../src/solver/researchCheckpoints';
 import { queueResearchObservation } from '../src/solver/researchObservation';
-import { assignmentDeliveryFile, leadPlanDeliveryFile, parseCooperationPlan, taskVersion } from '../src/solver/tasks';
+import { assignmentDeliveryFile, leadPlanDeliveryFile, parseCooperationPlan, taskVersion, type CooperativeAction } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 
@@ -52,12 +52,13 @@ async function fixture(constructionDependencies = ['goal_0']) {
   };
   const record = await publishGap();
   const identity = { problemReceiptDigest: example.problem.receiptDigest, environmentDigest: state.environmentDigest };
-  const publishOutcome = async () => {
+  const publishOutcome = async (beforePublish?: (action: Extract<CooperativeAction, { kind: 'task' }>) => void) => {
     const checkAction = await cooperation.next(checker, { maxTurns: Infinity, remainingMs: Infinity });
     if (checkAction?.kind !== 'task') throw new Error('missing check assignment');
     expect(checkAction.task.id).toBe(record.taskId);
     expect(cooperation.started(checker, checkAction)).toBe(true);
     cooperation.activate(checker, checkAction, async () => {}, async () => {});
+    beforePublish?.(checkAction);
     queueResearchObservation({ worktree: checker.worktree, finding: { summary: 'The membership inference is still unknown.',
       checkOutcome: { checkId: record.id, conclusion: 'inconclusive', summary: 'The available assumptions do not yet provide a membership argument.', evidenceRefs: [] } } });
     await cooperation.pulse(checker.id);
@@ -176,14 +177,31 @@ describe('scoped next check lifecycle', () => {
   });
 
   it('requires the shown outcome to receive an explicit decision and keeps it in full and same-thread contexts', async () => {
-    const f = await fixture(); await f.publishOutcome();
+    const f = await fixture();
+    const access = { root: f.directory, environment: {}, retrievalRoot: f.directory, taskText: 'Prove the original target.',
+      maxOptionalContextBytes: 0 };
+    const draft = buildResearchContext(f.problem, { ...f.state, cooperation: f.cooperation.contextState(f.action, f.author) },
+      { ...access, worktree: f.author.worktree, assignment: f.action });
+    for (const message of [draft.message, draft.continuationMessage]) {
+      expect(message).toContain(f.record.id);
+      expect(message).not.toContain('checkOutcome:');
+      expect(message).not.toContain('guidanceDecisions:');
+    }
+    await f.publishOutcome(action => {
+      const context = buildResearchContext(f.problem, { ...f.state, cooperation: f.cooperation.contextState(action, f.checker) },
+        { ...access, worktree: f.checker.worktree, assignment: action });
+      expect(context.message).toContain(f.record.id);
+      expect(context.message).toContain('checkOutcome:');
+      expect(context.message).toContain('with research-observe');
+    });
     const lead = await f.leadDecision();
-    const context = buildResearchContext(f.problem, { ...f.state, cooperation: lead.view }, { root: f.directory,
-      worktree: f.workspace, environment: {}, retrievalRoot: f.directory, taskText: 'Prove the original target.',
-      assignment: lead.leadAction, maxOptionalContextBytes: 0 });
+    const context = buildResearchContext(f.problem, { ...f.state, cooperation: lead.view },
+      { ...access, worktree: f.workspace, assignment: lead.leadAction });
     for (const text of [context.message, context.continuationMessage]) {
       expect(text).toContain(f.record.id); expect(text).toContain(f.record.outcome!.deliveryId);
       expect(text).toContain('inconclusive');
+      expect(text).toContain('nextCheckDecisions');
+      expect(text).not.toContain('checkOutcome:');
     }
     await lead.publish();
     expect(f.state.cooperation!.planPublicationRejection?.reason).toContain('math_plan_next_check_decision_required');

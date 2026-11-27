@@ -4,7 +4,7 @@ import path from 'node:path';
 
 export const cooperativeEditId = 'web-cooperative-edit';
 export const cooperativeGuidanceMarker = 'WEB_COOPERATIVE_PROVE_FIRST';
-export const cooperativeReviewMarker = 'WEB_COOPERATIVE_RELEASE_REVIEW';
+export const cooperativeSecondProofMarker = 'WEB_COOPERATIVE_PROVE_SECOND';
 
 function workContract(message) {
   for (const line of message.split('\n')) {
@@ -35,11 +35,6 @@ export function createCooperativeFixture({ workspace, source, message, instructi
     fs.appendFileSync(path.join(workspace, file), JSON.stringify({ kind: 'ready', summary: `Saved ${taskId} for independent host checking.` }) + '\n');
     complete();
   };
-  const finishReview = () => {
-    notes({ commit: contract.input.seedCommit, verdict: 'accepted',
-      summary: 'Offline independent reviewer inspected the fixed two-target candidate; only host Lean/S3 checks can accept it.' });
-    complete();
-  };
   if (contract.stage === 'route-planning') {
     const revised = edited();
     const tasks = [
@@ -62,17 +57,16 @@ export function createCooperativeFixture({ workspace, source, message, instructi
       // Keep Lead active while the Engineer receives human guidance on its own turn.
     }
   } else if (contract.stage === 'formal-proof') {
-    if (contract.input.taskId !== 'goal_1' || edited()) pending = setTimeout(finishProof, 50);
-  } else if (contract.stage !== 'candidate-review') {
+    if (contract.input.taskId === 'goal_1' && edited()) pending = setTimeout(finishProof, 50);
+  } else {
     throw new Error('web_fixture_unexpected_cooperative_stage');
   }
   return {
     steer(text) {
-      if (contract.stage === 'formal-proof' && text.includes(cooperativeGuidanceMarker)) {
+      if (contract.stage === 'formal-proof' && text.includes(
+        contract.input.taskId === 'goal_1' ? cooperativeGuidanceMarker : cooperativeSecondProofMarker)) {
         receivedGuidance = text;
         clearTimeout(pending); pending = setTimeout(finishProof, 100);
-      } else if (contract.stage === 'candidate-review' && text.includes(cooperativeReviewMarker)) {
-        clearTimeout(pending); pending = setTimeout(finishReview, 100);
       }
     },
     cancel() { clearTimeout(pending); },

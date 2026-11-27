@@ -1,11 +1,11 @@
-import { parseCooperationPlan, isAdvisoryTask as advisory } from './tasks';
+import { parseCooperationPlan, isActiveFinalCandidateReview, isAdvisoryTask as advisory } from './tasks';
 import { assertPlanTaskTypeContracts } from './taskTypeContract';
 import fs from 'node:fs';
 import path from 'node:path';
 import { canonicalMathJson, mathDigest, readMathText } from '../math/mathRuntimeIo';
 import { commitSolverSources, committedSource, git, solverProofImports, withSolverWorktree } from './problem';
 import { originalGoalTaskFocus, routeAllowsTask, taskCanStart, plannedTaskDependencyIds } from './modules/search';
-import { readMathResponse as block, parseMathResponse, isPlanFence as planFence, MAX_RESEARCH_NOTES_BYTES } from './deliveries';
+import { readMathResponse as block, parseMathResponse, replacePlanInNotes, MAX_RESEARCH_NOTES_BYTES } from './deliveries';
 import { applyTaskChanges, ownedSourceDigest, taskChanges } from './cooperativeProof';
 import { statementSnapshot } from './statementReview';
 import { proofReferencesUnchanged } from './proofReferences';
@@ -13,14 +13,14 @@ import { captureObligationSnapshot } from './obligationProgress';
 import { taskConnectionCheckCurrent } from './taskConnections';
 import { keepRespacedObjectives, taskGroup, taskVersion, taskProofContractVersion, taskReferenceDependencies, invalidatedTaskIds, type TaskRecord,
   type CooperativeAction } from './tasks';
-import { digest, HumanEditRecord, InitialPlanPublication, RETRY_DISPATCH, DispatchResult, bounded, deliveryInputFields, readCooperationPlan,
+import { digest, HumanEditRecord, InitialPlanPublication, RETRY_DISPATCH, DispatchResult, deliveryInputFields, readCooperationPlan,
   type LeadPlan } from './cooperationShared';
 import { formatPlanJson, liftNestedPlanPatch, type PlanPatchBase } from './planPatch';
 import { PlanValidationError, type PlanIssue } from './planDiagnostics';
 import { collapseTaskFamilies } from './taskFamilies';
 import { dropLeadWakes, LEAD_MAX_BACKOFF } from './leadWakes';
 import { CooperationIntegration } from './cooperationIntegration';
-import { researchRouteGroups, researchWorkerCanNode } from './modules/organization';
+import { assertPlanAssignments, researchRouteGroups } from './modules/organization';
 import { currentCapacityExploration } from './capacityExploration';
 import { currentNextCheck, prepareNextCheckDecisions } from './nextChecks';
 import { prepareGoalProgressDecision, requireGoalProgressDecision } from './goalProgress';
@@ -67,16 +67,13 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     const { text: source } = this.leadNotes();
     // The accepted graph is already durable. Leave a large journal intact and use the live plan channel.
     if (source === undefined) return;
-    const plan = '```math\n' + formatPlanJson({ tasks: collapseTaskFamilies(this.plannedTasks().map(node => node.task)), groups: this.archive.groups?.map(route => route.group),
-      ...(this.archive.proofRoutes?.length ? { proofRoutes: this.archive.proofRoutes } : {}) }) + '\n```';
-    // Replace the first plan fence and drop the rest, so an applied revision cannot be read again.
-    let replaced = false;
-    const synced = source.replace(/```([a-z-]+)\s*\n([\s\S]*?)\n```/gu, (fence, label: string, body: string) => {
-      if (!planFence(label, body)) return fence;
-      if (replaced) return '';
-      replaced = true; return plan;
-    });
-    fs.writeFileSync(file, replaced ? synced : plan + '\n' + bounded(source, 8000));
+    const notes = replacePlanInNotes(source, formatPlanJson({
+      tasks: collapseTaskFamilies(this.plannedTasks().map(node => node.task)),
+      groups: this.archive.groups?.map(route => route.group),
+      ...(this.archive.proofRoutes?.length ? { proofRoutes: this.archive.proofRoutes } : {}),
+    }));
+    if (Buffer.byteLength(notes) > MAX_RESEARCH_NOTES_BYTES) return;
+    if (notes !== source) fs.writeFileSync(file, notes);
     this.archive.planEdited = false;
   }
   /** The accepted Lead graph that a plan revision is written against; family members are rederived on parse. */
@@ -88,13 +85,13 @@ export abstract class CooperationPlanning extends CooperationIntegration {
   /** A dispatch's own live publication already applied its revision; the final notes may repeat it against the dispatch base. */
   protected readLeadPlan(action?: CooperativeAction): LeadPlan {
     const base = this.planPatchBase();
-    const rebased = Boolean(action?.kind === 'lead' && this.current(action) && this.publishedPlans.has(action) &&
-      action.planVersion && action.planVersion !== base?.version);
+    const dispatchBase = action && this.current(action) ? this.leadPublication(action)?.baseVersion : undefined;
+    const rebased = dispatchBase !== undefined && dispatchBase !== base?.version;
     // A rebased repeat of an applied publication already answered the review it was written against.
     const goalPath = rebased ? undefined : this.goalPathReview();
     try {
       return readCooperationPlan(this.input.state.problem, this.lead.worktree, base, {
-        acceptedBaseVersions: [...(base ? [base.version] : []), ...(rebased ? [(action as { planVersion: string }).planVersion] : [])],
+        acceptedBaseVersions: [...(base ? [base.version] : []), ...(rebased ? [dispatchBase] : [])],
         rebased, restoring: !action, goalPath });
     } catch (error) { throw new InvalidLeadPlanDraft(error); }
   }
@@ -354,18 +351,8 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     const progressDecision = requiredProgressDecision
       ? prepareGoalProgressDecision(requiredProgressDecision, this.archive.goalProgress, plan,
         this.archive.nextChecks, this.archive.tasks) : undefined;
-    for (const task of tasks) if (task.ownerId || task.preferredOwnerId) {
-      const owner = this.input.workers.find(worker => worker.id === (task.ownerId ?? task.preferredOwnerId));
-      const previous = this.archive.tasks.find(node => node.task.id === task.id);
-      const ownershipTask = previous?.capacityExploration ? { ...task, status: 'active' as const } : task;
-      if (!owner || !researchWorkerCanNode(owner, { ...(previous ?? { status: 'pending', attempts: 0 }), task: ownershipTask }))
-        throw new Error('math_plan_task_owner_unavailable');
-    }
-    const configuredGroups = researchRouteGroups(groups, this.input.workers).map(group => {
-      if (group.engineerId && !this.input.workers.some(worker => worker.id === group.engineerId && worker.role === 'engineer'))
-        throw new Error('math_plan_group_engineer_unavailable');
-      return { ...group };
-    });
+    assertPlanAssignments(plan, this.archive.tasks, this.input.workers);
+    const configuredGroups = researchRouteGroups(groups, this.input.workers);
     return { plan, nextCheckDecisions, researchDecisions, progressDecision, configuredGroups, shown, retirement };
   }
   protected async acceptPlan(planInput?: LeadPlan, edit?: HumanEditRecord,
@@ -377,10 +364,12 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     const { plan, nextCheckDecisions, researchDecisions, progressDecision, configuredGroups, shown, retirement } = this.preparePlan(
       planInput ?? this.readLeadPlan(leadAction), decidingAction, restoringPlan);
     const { tasks, proofRoutes } = plan;
-    const seedNotes = publication ? this.leadNotes(publication.action.seedCommit) : undefined;
-    const publicationResponseDigest = seedNotes?.text !== undefined ? this.proposedPlanDigest(seedNotes.text) : seedNotes?.digest;
     const previousGroups = new Map(this.archive.groups?.map(record => [record.group.id, record]));
     const current = new Map(this.archive.tasks.map(node => [node.task.id, node]));
+    const previousReviewIds = this.archive.tasks.filter(({ task }) => isActiveFinalCandidateReview(task)).map(({ task }) => task.id);
+    const reviewIds = tasks.filter(isActiveFinalCandidateReview).map(task => task.id);
+    // Scheduling status does not change a task's version. A pause or resume can still change the Reviewer's questions.
+    const reviewScopeChanged = reviewIds.length !== previousReviewIds.length || reviewIds.some(id => !previousReviewIds.includes(id));
     const invalidated = this.planInvalidation(plan);
     const proofChanges = this.planInvalidation(plan, true);
     const revalidate = new Set([...invalidated].filter(id => !proofChanges.has(id) && current.get(id)?.status === 'integrated'));
@@ -416,7 +405,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       this.stopRetiredRouteTasks();
     }
     this.syncProofRoutes();
-    if (invalidated.size) { this.archive.review = undefined; this.lastAssembly = undefined; }
+    if (invalidated.size || reviewScopeChanged) { this.archive.review = undefined; this.lastAssembly = undefined; }
     const retiredWork: (() => Promise<void>)[] = [];
     for (const [id, active] of this.active) {
       if (active.action.kind === 'review' && !this.archive.review && !active.cancelled) { active.cancelled = true; void active.interrupt().catch(() => {}); }
@@ -484,8 +473,6 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       this.archive.planPublication = { ...publication.receipt, planVersion: this.archive.planVersion };
       if (publication.action.kind === 'lead' && publication.action.initialPlanNonce)
         this.archive.initialPlanPublication = this.archive.planPublication;
-      this.publishedPlans.set(publication.action, { plan, version: this.archive.planVersion,
-        responseDigest: publicationResponseDigest! });
     }
     // Preserve a Lead's own initial publication, but reclaim turns superseded by a newer plan.
     for (const active of this.active.values()) if (active.action.kind === 'lead' && !this.current(active.action) && !active.cancelled) {

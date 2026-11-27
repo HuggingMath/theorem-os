@@ -32,6 +32,7 @@ import { inspectKnowledgeUses } from './knowledgeUsage';
 import { checkKnowledgeApplications } from './knowledgeApplications';
 import { parseMathResponse, readMathResponse } from './deliveries';
 import { readCheckpointNotesDigest, savedContextCheckpoint } from './contextCheckpoint';
+import { checkpointCommand, researchToolCommand } from './researchToolGuide';
 import { committedSource } from './problem';
 import type { ContinuationSnapshot } from './continuationInput';
 import type { MathTools } from '../math/mathTools';
@@ -405,14 +406,8 @@ export async function runResearchWorkers(input: {
       const currentCheckpointNotesDigest = () => savedContextCheckpoint(research, worker.worktree);
       const researchFindingInstruction = (assignment?: CooperativeAction) => {
         if (assignment?.kind !== 'task' || !['research', 'sketch'].includes(assignment.task.kind)) return '';
-        return 'If an established finding is useful to another task or a scoped gap requires a route decision, save the exact argument, ' +
-          'assumptions, evidence and unresolved inference in worktree-root RESEARCH.md and publish it now. ' +
-          'Append one complete JSON line to ' + JSON.stringify(path.join(worker.worktree, assignmentDeliveryFile(assignment.assignment))) +
-          ': ' + JSON.stringify({ kind: 'research', finding: { summary: 'REPLACE_WITH_THE_SAVED_ARGUMENT_AND_EVIDENCE',
-            conclusion: 'inconclusive', remainingObligations: ['REPLACE_WITH_THE_PRECISE_UNRESOLVED_INFERENCE'] } }) + '. ' +
-          'Replace the example fields with the actual saved finding; use supporting or refuted only when the evidence supports that conclusion. ' +
-          'Add needsDecision:true inside finding only when Lead must choose a route or resolve a blocker; ordinary progress does not need a decision. ' +
-          'Do not invent a finding to satisfy this reminder. Publication remains advisory and does not accept a proof. ';
+        return 'If a finding can help a peer or requires a Lead decision, save the argument and exact gap in RESEARCH.md ' +
+          'and publish it with research-observe from the worktree root. ';
       };
       const proofFindingInstruction = 'If a precise mathematical finding needs a Lead decision, publish it through the current assignment log, ' +
         'or save a JSON math-result code block in RESEARCH.md with summary, conclusion ("refuted" for an actual counterexample), ' +
@@ -438,10 +433,8 @@ export async function runResearchWorkers(input: {
           'A local check or a DONE note is not host acceptance. For an unfinished declaration, use the checkpoint acknowledgment below. ' : '') +
         (file && request?.requestId ? (proof ? 'Only if the assigned declaration remains unfinished, after saving all notes and source drafts, ' :
           'After saving all notes and source drafts and publishing any findings or planning decisions, ') +
-          'finish this checkpoint by appending one complete JSON line to ' + JSON.stringify(path.join(worker.worktree, file)) +
-          ': ' + JSON.stringify({ kind: 'checkpoint', requestId: request.requestId, notesDigest: 'SHA256_OF_SAVED_RESEARCH_MD' }) +
-          '. notesDigest is the lowercase hex SHA-256 of the exact saved RESEARCH.md bytes, as printed by sha256sum RESEARCH.md. ' +
-          'Append this control event last, then stop editing and return. ' +
+          'run this command to acknowledge the checkpoint, then stop editing and return:\n' +
+          checkpointCommand(researchToolCommand(input.root, modules.M4.tools), worker.worktree, file, request.requestId) + '\n' +
           'Unchanged but accurate notes and an unfinished argument are allowed; this event yields writing and never claims a proof. ' +
           'A notes save alone is not checkpoint completion.' : '');
       };
@@ -777,7 +770,7 @@ export async function runResearchWorkers(input: {
             noProgressStreak, protected: false, reason: 'no-durable-progress' });
           let noticeSequence = 0;
           const sendNotice = () => {
-            if (!current() || noticeSent || assignment?.kind === 'lead' && cooperation?.planSnapshot(assignment)) return;
+            if (!current() || noticeSent || assignment?.kind === 'lead' && cooperation?.hasLeadPublication(assignment)) return;
             noticeSent = true;
             const sequence = ++noticeSequence;
             noticeDelivery = activeSession.notify ? 'pending' : 'unavailable';
@@ -785,7 +778,7 @@ export async function runResearchWorkers(input: {
             void Promise.resolve().then(() => {
               // An accepted live plan already fulfilled this decision, including while human approval
               // is pending. Recheck at delivery in case publication raced the queued notification.
-              if (!current() || assignment?.kind === 'lead' && cooperation?.planSnapshot(assignment)) return;
+              if (!current() || assignment?.kind === 'lead' && cooperation?.hasLeadPublication(assignment)) return;
               // A goal turn is never yielded, so its reminder must not promise a checkpoint that will
               // not come: it asks for the durable handoff and leaves the writing turn running.
               return activeSession.notify?.(assignment?.kind === 'task' && isFeasibilityReview(assignment.task)
@@ -798,14 +791,9 @@ export async function runResearchWorkers(input: {
                 ? 'Save the current mathematical argument, the exact unresolved step and useful references in RESEARCH.md now. ' +
                   'This turn keeps running: no checkpoint will interrupt or end it, so save notes incrementally and continue proving.'
                 : initialPlan
-                ? cooperation?.initialPlanSnapshot(assignment)
-                  ? 'The first plan is already published. Save the current argument and precise unresolved inference in RESEARCH.md, ' +
-                    'then return promptly; eligible peers can continue the published work and later Lead decisions use their evidence.'
-                  : 'If the first plan is still unpublished, publish it now before further searches or experiments: append the complete ' +
-                    'plan JSON line to this assignment\'s delivery log as described in your instructions. A direct goal task for each ' +
-                    'original target plus research tasks for specific open questions is a valid first plan; later Lead turns refine it. ' +
-                    'If the host accepted it while this notice was waiting, save the current argument and exact uncertainties in ' +
-                    'RESEARCH.md and return promptly. This is a reminder, not an interruption.'
+                ? 'If the first plan is still unpublished, publish it now with plan-apply --publish from the Lead tool help. ' +
+                  'Start with a direct goal task for each original target and separate research tasks for specific open questions. ' +
+                  'Save the route and uncertainties in RESEARCH.md and return once the host has the plan.'
                 : revision
                 ? 'Decide now, before further searches or experiments. ' + cooperation!.leadCheckpointInstruction(assignment!) +
                   'Delegate any open search as a research task instead of ' +
@@ -847,8 +835,9 @@ export async function runResearchWorkers(input: {
           let handoffRequested = false;
           const cut = (boundary: 'request-returned' | 'wait-limit' | 'notice-failed') => {
             if (!current() || compactionStartedAt !== undefined || checkpointRequested || readyRequested) return;
-            if (boundary === 'request-returned' && assignment?.kind === 'lead' && noticeDelivery === 'delivered' &&
-                cooperation?.leadCheckpointNeedsHandoff(assignment)) {
+            const leadHandoff = boundary === 'request-returned' && assignment?.kind === 'lead' && noticeDelivery === 'delivered'
+              ? cooperation?.leadCheckpointHandoff(assignment) : undefined;
+            if (leadHandoff && assignment?.kind === 'lead') {
               // Reading the current graph is not a decision. Give this dispatch the remainder of
               // the same wait window to save a complete answer before freezing its workspace.
               if (!handoffRequested) {
@@ -857,7 +846,10 @@ export async function runResearchWorkers(input: {
                   remainingMs: Math.max(0, advisoryRequestWaitMs - (Date.now() - waitStartedAt)) });
                 void Promise.resolve().then(() => {
                   if (!current() || checkpointRequested || readyRequested) return;
-                  return activeSession.notify?.(cooperation!.leadCheckpointInstruction(assignment) +
+                  const handoff = cooperation!.leadCheckpointHandoff(assignment);
+                  if (!handoff) return;
+                  const correction = handoff.reason ? 'Correct the saved math-plan draft. ' + handoff.reason + '\n' : '';
+                  return activeSession.notify?.(correction + cooperation!.leadCheckpointInstruction(assignment) +
                     'Save the complete decision now, before another search. The host is waiting only until the existing ' +
                     'checkpoint deadline; reading the inherited plan or saving prose does not answer the required decisions.');
                 }).catch(error => {
@@ -914,7 +906,7 @@ export async function runResearchWorkers(input: {
             // Notes may become visible before their writing tool finishes; wait for its result before freezing them.
             const waitForHandoffTool = noticeDelivery === 'delivered' && (researchAssignment || assignment?.kind === 'lead');
             const pendingLeadHandoff = handoff && noticeDelivery === 'delivered' && assignment?.kind === 'lead' &&
-              cooperation?.leadCheckpointNeedsHandoff(assignment);
+              cooperation?.leadCheckpointHandoff(assignment);
             const modelOutputStale = lastModelOutputAt === undefined || Date.now() - lastModelOutputAt > advisoryModelStreamingMs;
             if ((requestWaited && !handoff) || (toolsRunning ? !waitForHandoffTool : modelOutputStale && !pendingLeadHandoff)) {
               clearTimeout(requestWaitTimer); checkpoint(); return;
@@ -1343,9 +1335,16 @@ export async function runResearchWorkers(input: {
       };
       const maintainContext = async (assignment?: CooperativeAction): Promise<'unchanged' | 'compacted' | 'rotated'> => {
         const recoverNative = nativeContextRecovery === 'pending';
-        if (skillMode && !recoverNative || !research.threadId || !session || !sessionHasHistory) return 'unchanged';
-        const threadId = research.threadId, lastInputTokens = Math.max(session.lastInputTokens ?? 0, research.lastInputTokens ?? 0);
+        if (skillMode && !recoverNative || !research.threadId) return 'unchanged';
+        const threadId = research.threadId;
         const notesDigest = currentCheckpointNotesDigest();
+        if (!session) {
+          if (!notesDigest) return 'unchanged';
+          emit('context_checkpoint_ready', { threadId, notesDigest });
+          await rotateSession('context'); return 'rotated';
+        }
+        if (!sessionHasHistory) return 'unchanged';
+        const lastInputTokens = Math.max(session.lastInputTokens ?? 0, research.lastInputTokens ?? 0);
         if (!recoverNative && lastInputTokens < 96_000 && !notesDigest) return 'unchanged';
         if (recoverNative) nativeContextRecovery = 'attempted';
         if (session.compact && (recoverNative || compactedUsageVersion !== contextUsageVersion || notesDigest)) {
@@ -1421,7 +1420,7 @@ export async function runResearchWorkers(input: {
         }
         lastCheck = research.check; save();
         if (research.check.passed) {
-          if (cooperation && !cooperation.reviewed(research.check)) { cooperation.requireReview(research.check); return; }
+          if (cooperation && !cooperation.candidateReady(research.check)) return;
           state.check = research.check; state.candidate = candidate;
           if (parallel) state.winningWorker = worker.id;
           winner = { worktree: worker.worktree, check: research.check };

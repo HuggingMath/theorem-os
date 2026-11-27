@@ -110,7 +110,7 @@ export function taskReferenceDependencies(node: TaskRecord): DeliveryRecord['dep
 }
 export const markTaskReferences = (proof: TaskProof) => checkedReferences.add(proof);
 export const hasTaskReferences = (proof: TaskProof) => checkedReferences.has(proof);
-// Restored JSON cannot authorize final-candidate dispatch before the host rechecks it.
+// Archived receipts do not count as task acceptances in the current process.
 const freshTaskAcceptances = new WeakMap<TaskProof, string>();
 const acceptanceIdentity = (proof: TaskProof) => canonicalMathJson({ commit: proof.commit, sourceDigest: proof.sourceDigest,
   taskDigest: proof.taskDigest, conditions: proof.conditions, projection: proof.projection, verification: proof.verification && {
@@ -178,6 +178,8 @@ export const assumableLemma = (task: CooperativeTask | undefined): boolean =>
   Boolean(task && task.kind === 'lemma' && task.type?.trim() && !isDefinitionTask(task));
 export const isFinalCandidateReview = (task: CooperativeTask) => isAdvisoryTask(task) &&
   (task.reviewScope === 'final-candidate' || task.id === 'independent_candidate_review');
+export const isActiveFinalCandidateReview = (task: CooperativeTask) =>
+  isFinalCandidateReview(task) && (task.status ?? 'active') === 'active';
 export const isFeasibilityReview = (task: CooperativeTask) => isAdvisoryTask(task) &&
   task.reviewScope === 'feasibility' && !isFinalCandidateReview(task);
 /** Pin a deferred decision's `waitsOn` ids to their current typed, non-advisory task versions. `invalid` rejects a malformed

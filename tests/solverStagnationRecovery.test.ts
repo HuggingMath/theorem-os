@@ -135,7 +135,7 @@ describe('durable checkpoint before context rotation', () => {
       expect(events).toContainEqual({ event: 'context_rotation_deferred', details: { workerId: 'researcher',
         threadId: 'checkpoint-thread-1', reason: 'checkpoint-not-published', lastInputTokens: 100_000 } });
       expect(held.messages[1]).toMatch(/RESEARCH\.md/u);
-      expect(held.messages[1]).toMatch(/needsDecision/u);
+      expect(held.messages[1]).toMatch(/research-observe/u);
       expect(check).not.toHaveBeenCalled(); expect(state.check).toBeUndefined();
       expect(state.cooperation!.tasks.find(node => node.task.id === 'investigate')?.proof).toBeUndefined();
       held.finish.resolve('checkpoint'); await expect(completion).resolves.toBeUndefined();
@@ -184,7 +184,7 @@ describe('durable checkpoint before context rotation', () => {
     expect(held.executedThreads).toEqual(['checkpoint-thread-1', 'checkpoint-thread-1']);
     expect(events.filter(item => item.event === 'context_restarted')).toEqual([]);
     expect(held.messages[1]).toMatch(/RESEARCH\.md/u);
-    expect(held.messages[1]).toMatch(/needsDecision/u);
+    expect(held.messages[1]).toMatch(/research-observe/u);
     expect(state.workers![1].previousThreadIds ?? []).toEqual([]);
     expect(check).not.toHaveBeenCalled(); expect(state.check).toBeUndefined();
     held.finish.resolve('checkpoint'); await expect(completion).resolves.toBeUndefined();
@@ -254,7 +254,7 @@ describe('durable checkpoint before context rotation', () => {
     expect(open.mock.calls.at(-1)![0].threadId).toBe('deduplicated-thread');
     expect(events.filter(item => item.event === 'context_checkpoint_requested')).toHaveLength(1);
     expect(events.filter(item => item.event === 'context_restarted')).toEqual([]);
-    expect(messages.slice(1).every(message => /RESEARCH\.md/u.test(message) && /needsDecision/u.test(message))).toBe(true);
+    expect(messages.slice(1).every(message => /RESEARCH\.md/u.test(message) && /research-observe/u.test(message))).toBe(true);
     expect(check).not.toHaveBeenCalled(); expect(state.check).toBeUndefined();
     done[2].resolve('checkpoint'); await expect(completion).resolves.toBeUndefined();
   });
@@ -309,7 +309,7 @@ describe('durable checkpoint before context rotation', () => {
     }]);
     expect(notify).toHaveBeenCalledOnce();
     expect(notify.mock.calls[0][0]).toMatch(/RESEARCH\.md/u);
-    expect(notify.mock.calls[0][0]).toMatch(/needsDecision/u);
+    expect(notify.mock.calls[0][0]).toMatch(/research-observe/u);
     inputTokens = 105_000;
     activity!({ event: 'reasoning' }); await Promise.resolve();
     expect(notify).toHaveBeenCalledOnce(); expect(interrupt).not.toHaveBeenCalled();

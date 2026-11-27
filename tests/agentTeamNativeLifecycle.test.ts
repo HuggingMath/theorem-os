@@ -446,17 +446,18 @@ describe('native AgentControl preserves the mathematical team lifecycle', () => 
   });
 
   it('can reuse a yielded worker for a different route and return to its original task', async () => {
-    const f = fixture(); await f.spawn('analyst', 'Route: initial\nInvestigate the first approach.');
+    const f = fixture(); await f.spawn('analyst', 'Route: initial\nProfiles: prover, D006\nInvestigate the first approach.');
     const worker = f.state.agentTeam!.workers[0], original = worker.tasks[0];
+    expect(original).toMatchObject({ routeId: 'initial', profileEvidence: { selected: ['prover', 'D006'] } });
     expect(await f.tool({ operation: 'yield', reason: 'Awaiting a dependency.' }, worker.id)).toMatchObject({ status: 'pending-writer-stop' });
     await f.sessions[0].complete();
     await expect.poll(() => f.team.hasActiveWorkers).toBe(false);
     const followup = (text: string) => f.native('send', { caller: ROOT, target: { kind: 'id', threadId: worker.native!.threadId },
       input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text } } });
-    await followup('Route: other\nCheck an independent approach while the first waits.');
+    await followup('Route: other\nProfiles: engineer\nCheck an independent approach while the first waits.');
     expect(worker.tasks).toHaveLength(2);
     expect(original.status).toBe('paused');
-    expect(worker.tasks[1]).toMatchObject({ routeId: 'other', status: 'running' });
+    expect(worker.tasks[1]).toMatchObject({ routeId: 'other', status: 'running', profileEvidence: { selected: ['engineer'] } });
     expect(f.sessions[1].message).toContain('Check an independent approach');
     await f.sessions[1].complete();
     await expect.poll(() => f.team.hasActiveWorkers).toBe(false);

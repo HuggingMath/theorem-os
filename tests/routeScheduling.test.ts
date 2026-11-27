@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { SolverProblem } from '../src/solver/problem';
 import { describeProofRoutes, type ProofRoute } from '../src/solver/proofRoutes';
 import { recordRouteBlockers, refreshRouteBlockers, type RouteBlocker } from '../src/solver/routeControl';
-import { continuationResearchTasks, criticalPathResearchTasks, finalCandidateReviewReady, plannedTaskDependencyIds,
+import { continuationResearchTasks, criticalPathResearchTasks, plannedTaskDependencyIds,
   readyResearchTasks, researchCanAdvance, routeAllowsTask, selectedTaskRoute, taskCanStart, taskDependenciesReady } from '../src/solver/modules/search';
-import { parseCooperationPlan, taskVersion, type CooperativeTask, type TaskRecord } from '../src/solver/tasks';
+import { freshlyAccepted, parseCooperationPlan, taskVersion, type CooperativeTask, type TaskRecord } from '../src/solver/tasks';
 import { integratedProof } from './helpers/taskProof';
 
 const problem = { ownedFiles: ['Submission.lean'], targets: [{ theoremName: 'Submission.goal', proofPath: 'Submission.lean' }],
@@ -92,11 +92,11 @@ describe('alternative route scheduling', () => {
     expect(taskVersion(goal.task)).toBe(version);
     expect(goal.task.conditional).toBeUndefined();
     expect(goal.status).toBe('pending');
-    expect(finalCandidateReviewReady([input, goal])).toBe(false);
+    expect(freshlyAccepted(goal, taskVersion(goal.task))).toBe(false);
     checked(input);
     expect(readyResearchTasks([input, goal])).toEqual([goal]);
     expect(taskDependenciesReady(goal.task, [input, goal])).toBe(true);
-    expect(finalCandidateReviewReady([input, goal])).toBe(false);
+    expect(freshlyAccepted(goal, taskVersion(goal.task))).toBe(false);
   });
 
   it('passes route contracts through the plan parser without rewriting frozen goal dependencies', () => {
@@ -261,10 +261,10 @@ describe('alternative route scheduling', () => {
     const { b, c, closeB, goal, tasks, routes } = fixture();
     checked(b); checked(c); checked(closeB, [b, c]);
     expect(taskCanStart(goal.task, tasks)).toBe(true);
-    expect(finalCandidateReviewReady(tasks)).toBe(false);
+    expect(freshlyAccepted(goal, taskVersion(goal.task))).toBe(false);
     expect(describeProofRoutes(routes, tasks).routes[1].connection).toBe('awaiting-original-check');
     checked(goal, [closeB]);
-    expect(finalCandidateReviewReady(tasks)).toBe(true);
+    expect(freshlyAccepted(goal, taskVersion(goal.task))).toBe(true);
     expect(describeProofRoutes(routes, tasks).routes[1].connection).toBe('closed-by-original-check');
   });
 });
