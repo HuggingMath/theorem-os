@@ -1,5 +1,5 @@
 import type { SolverWorkerState } from './archive';
-import { deliveryFinding, type DeliveryRecord } from './deliveries';
+import { researchFindingRequestsDecision, type DeliveryRecord } from './deliveries';
 import type { TaskRecord } from './tasks';
 
 export type IdlePeerEpisode = { since: number; at: number; count: number };
@@ -69,11 +69,6 @@ export function idlePeersAwaitingLead(workers: readonly SolverWorkerState[], lea
   }
   return { due, dueAt };
 }
-const needsDecision = (record: DeliveryRecord) => {
-  try { const finding = JSON.parse(deliveryFinding(record) ?? 'null'); return finding?.needsDecision === true || finding?.conclusion === 'refuted'; }
-  catch { return false; }
-};
-
 export const leadInboxBasis = (tasks: readonly TaskRecord[], planVersion: string | undefined, at = Date.now()): LeadInboxBasis =>
   ({ at, planVersion, statuses: Object.fromEntries(tasks.map(node => [node.task.id, node.status])) });
 
@@ -108,7 +103,7 @@ export function leadInbox(basis: LeadInboxBasis | undefined, input: { tasks: rea
       producer: record.producer, ...(record.taskId ? { taskId: record.taskId } : {}),
       summary: Buffer.byteLength(record.summary) > SUMMARY_BYTES
         ? Buffer.from(record.summary).subarray(0, SUMMARY_BYTES).toString('utf8').replace(/�$/u, '') + '…' : record.summary,
-      ...(record.kind === 'research' && needsDecision(record) ? { needsDecision: true as const } : {}),
+      ...(record.kind === 'research' && researchFindingRequestsDecision(record) ? { needsDecision: true as const } : {}),
       ...(record.lemmaRequests?.length ? { lemmaRequests: record.lemmaRequests.length } : {}) })),
     omittedDeliveries: Math.max(0, fresh.length - MAX_DELIVERIES),
     statusChanges: changes.slice(0, MAX_STATUS_CHANGES), omittedStatusChanges: Math.max(0, changes.length - MAX_STATUS_CHANGES),

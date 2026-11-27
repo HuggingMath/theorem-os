@@ -200,6 +200,7 @@ export const deliveryInputFields = (record: DeliveryRecord) => ({
   taskId: record.taskId, taskDigest: record.taskDigest, kind: record.kind, status: record.status,
   summary: record.summary, evidenceRefs: record.evidenceRefs, dependencies: record.dependencies,
   remainingObligations: record.remainingObligations, lemmaRequests: record.lemmaRequests, findingDigest: record.findingDigest,
+  leadDecisionRequested: record.leadDecisionRequested,
   mathematicalGap: record.mathematicalGap, mathematicalGapScope: record.mathematicalGapScope,
   checkOutcome: record.checkOutcome, checkOutcomeScope: record.checkOutcomeScope,
   sourceUses: record.sourceUses, searchCheckpoint: record.searchCheckpoint,

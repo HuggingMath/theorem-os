@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readSolverRunState, type SolverRunState } from '../src/solver/archive';
+import { readSolverRunState, writeSolverRunState, type SolverRunState } from '../src/solver/archive';
 import { leadResearchInputs } from '../src/solver/contextCompiler';
 import type { CooperativeResearch } from '../src/solver/cooperation';
 import { leadWakePending } from '../src/solver/leadWakes';
@@ -10,7 +10,7 @@ import { directSolverModules } from '../src/solver/modules';
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import { committedSource, commitSolverSources, git, type SolverProblem } from '../src/solver/problem';
 import * as problemSource from '../src/solver/problem';
-import { taskVersion, type CooperativeTask } from '../src/solver/tasks';
+import { assignmentDeliveryFile, taskVersion, type CooperativeTask } from '../src/solver/tasks';
 import { taskConnectionCheckCurrent } from '../src/solver/taskConnections';
 import { TaskTypePreflightCache } from '../src/solver/taskTypePreflight';
 import { captureResearchBasis, researchSourceDigest } from '../src/solver/researchRecords';
@@ -36,9 +36,11 @@ describe('isolated advisory research drafts', () => {
     leanChecks: [{ status: 'passed', path: 'RESEARCH.md', declarations: ['Candidate.probe'] }],
     lemmaRequests: [{ id: 'bridge', kind: 'lemma', objective: 'Prove the proposed bridge',
       theoremName: 'Candidate.bridge', type: 'True', proofPath: 'Submission.lean' }] });
-  const saveFinding = () => write(peer, finding(), '```lean\nnamespace Candidate\nlemma probe : True := by trivial\nend Candidate\n```\n');
-  const create = (current = state) => {
+  const leanProbe = '```lean\nnamespace Candidate\nlemma probe : True := by trivial\nend Candidate\n```\n';
+  const saveFinding = () => write(peer, finding(), leanProbe);
+  const create = (current = state, save?: (state: SolverRunState) => void) => {
     const instance = cooperativeResearch({ state: current, workers: [lead, peer, ...inputWorkers], retrievalRoot: directory,
+      save: () => save?.(current),
       modules: { ...directSolverModules, M2: { ...directSolverModules.M2,
         check: async () => { throw new Error('fixture_unexpected_verifier'); },
         checkTask: async () => { throw new Error('fixture_unexpected_verifier'); } } } });
@@ -260,12 +262,131 @@ describe('isolated advisory research drafts', () => {
     const wakes = state.cooperation!.leadWakes!.requested;
     const resumed = await task();
     const reversed = Object.fromEntries(Object.entries(finding()).reverse());
-    write(peer, reversed, '```lean\nnamespace Candidate\nlemma probe : True := by trivial\nend Candidate\n```\n');
+    write(peer, reversed, leanProbe);
     fs.writeFileSync(notes(), '# Expanded explanation before the same finding.\n\n' + fs.readFileSync(notes(), 'utf8'));
     await cooperative.deliver(peer, resumed, commitSolverSources(problem, peer.worktree), true);
     expect(state.cooperation!.deliveries!.filter(record => record.kind === 'research')).toEqual(previous);
     expect(state.cooperation!.leadWakes!.requested).toBe(wakes);
     expect(node('first_route').status).toBe('pending');
+  });
+
+  it('ignores a merged research submission ID on replay after restart', async () => {
+    const snapshot = path.join(directory, 'before-delivery-cursor.json');
+    let replay: { key: string; offset: number } | undefined;
+    cooperative = create(state, current => {
+      if (replay && current.cooperation?.cursors?.[replay.key] === replay.offset)
+        writeSolverRunState(snapshot, current);
+    });
+    const action = await task();
+    cooperative.activate(peer, action, async () => {}, async () => {});
+    const file = assignmentDeliveryFile(action.assignment), log = path.join(peer.worktree, file);
+    const value = { kind: 'research', finding: { conclusion: 'inconclusive', needsDecision: true,
+      summary: 'The same boundary finding delivered twice.' } };
+    const append = (id: string, finding = value.finding) => fs.appendFileSync(log, JSON.stringify({ ...value, id, finding }) + '\n');
+    const published = () => state.cooperation!.deliveries!.filter(record => record.kind === 'research');
+    append('first_submission');
+    await cooperative.pulse(peer.id);
+    expect(published()).toHaveLength(1);
+    const [delivery] = published();
+    replay = { key: `${peer.id}/${file}`, offset: fs.statSync(log).size };
+    append('merged_submission');
+    await cooperative.pulse(peer.id);
+    expect(published().map(record => record.id)).toEqual([delivery.id]);
+
+    // Recover from the save that preceded advancing past the second JSONL entry.
+    state = readSolverRunState(snapshot);
+    expect(state.cooperation!.cursors![replay.key]).toBe(replay.offset);
+    cooperative = create(); await cooperative.restore();
+    const resumed = await task();
+    expect(assignmentDeliveryFile(resumed.assignment)).toBe(file);
+    cooperative.activate(peer, resumed, async () => {}, async () => {});
+    const freeze = vi.spyOn(problemSource, 'withSolverWorktree');
+    await cooperative.pulse(peer.id);
+    expect(state.cooperation!.cursors![replay.key]).toBe(fs.statSync(log).size);
+
+    append('merged_submission', { ...value.finding, summary: 'Changed text under the same submission ID.' });
+    await cooperative.pulse(peer.id);
+    expect.soft(freeze).not.toHaveBeenCalled();
+    expect(published().map(record => [record.id, record.summary])).toEqual([[delivery.id, value.finding.summary]]);
+  });
+
+  it.each([{ needsDecision: true }, {}])('deduplicates a checkpoint finding across both submission paths after restart (%j)', async decision => {
+    const value = { ...finding(), ...decision };
+    const action = await task();
+    action.assignment.researchBasis = captureResearchBasis(action.task, { problemReceiptDigest: problem.receiptDigest,
+      environmentDigest: state.environmentDigest, tasks: state.cooperation!.tasks,
+      sourceDigest: researchSourceDigest(Object.fromEntries(problem.ownedFiles.map(file => [file,
+        committedSource(peer.worktree, action.assignment.seedCommit, `${problem.projectRelative}/${file}`)]))) });
+    write(peer, value, leanProbe);
+    const checkpointCommit = commitSolverSources(problem, peer.worktree);
+    await cooperative.deliver(peer, action, checkpointCommit, true, 'scheduling-checkpoint');
+    const published = () => state.cooperation!.deliveries!.filter(record => record.kind === 'research' && record.status !== 'superseded');
+    const inbox = () => leadResearchInputs(published(), new Map(state.cooperation!.tasks.map(node => [node.task.id, node])),
+      state.cooperation!.researchDecisions);
+    const [checkpoint] = published();
+    expect(checkpoint.researchRecord?.complete).toBe(false);
+    expect(inbox()).toEqual([checkpoint]);
+
+    await restart();
+    const resumed = await task();
+    expect(resumed.assignment.assignmentId).toBe(action.assignment.assignmentId);
+    const wakes = state.cooperation!.leadWakes!.requested;
+    cooperative.activate(peer, resumed, async () => {}, async () => {});
+    fs.appendFileSync(path.join(peer.worktree, assignmentDeliveryFile(resumed.assignment)),
+      JSON.stringify({ kind: 'research', finding: value, commit: checkpointCommit }) + '\n');
+    await cooperative.pulse(peer.id);
+    expect(state.cooperation!.deliveryReceipts ?? []).toEqual([]);
+    expect(published()).toHaveLength(1);
+    expect(inbox().map(record => record.id)).toEqual([checkpoint.id]);
+    expect(state.cooperation!.leadWakes!.requested).toBe(wakes);
+    expect(node('first_route').status).toBe('running');
+
+    await cooperative.deliver(peer, resumed, commitSolverSources(problem, peer.worktree));
+    expect(node('first_route')).toMatchObject({ status: 'completed', researchCompletion: { complete: true } });
+    expect(published()).toHaveLength(1);
+    expect(published()[0]).toMatchObject({ id: checkpoint.id, findingDigest: checkpoint.findingDigest });
+    expect(published()[0].researchRecord).toEqual(node('first_route').researchCompletion);
+    expect(inbox()).toHaveLength(1);
+    expect(state.cooperation!.leadWakes!.requested).toBe(wakes);
+  });
+
+  it.each(['refuted', 'supporting'] as const)('reuses the explicit %s finding when a later checkpoint requests Lead review', async conclusion => {
+    const value = { conclusion, summary: 'The exact local case and its probe.',
+      leanChecks: [{ status: 'passed', path: 'RESEARCH.md', declarations: ['Candidate.probe'] }] };
+    const action = await task();
+    write(peer, value, leanProbe);
+    const commit = commitSolverSources(problem, peer.worktree);
+    const archive = () => state.cooperation!;
+    const published = () => (archive().deliveries ?? []).filter(record => record.kind === 'research' && record.status !== 'superseded');
+    const inbox = () => leadResearchInputs(published(), new Map(archive().tasks.map(node => [node.task.id, node])),
+      archive().researchDecisions).map(record => record.id);
+
+    cooperative.activate(peer, action, async () => {}, async () => {});
+    fs.appendFileSync(path.join(peer.worktree, assignmentDeliveryFile(action.assignment)),
+      JSON.stringify({ kind: 'research', finding: value, commit }) + '\n');
+    await cooperative.pulse(peer.id);
+    expect(archive().deliveryReceipts ?? []).toEqual([]);
+    expect(published()).toHaveLength(1);
+    const { id, finding, findingDigest, commit: publicationCommit } = published()[0];
+    expect(inbox()).toEqual(conclusion === 'refuted' ? [id] : []);
+    const wakes = archive().leadWakes!.requested;
+    cooperative.deactivate(peer);
+
+    await cooperative.deliver(peer, action, commit, true, 'scheduling-checkpoint');
+    expect(published()).toHaveLength(1);
+    expect(published()[0]).toMatchObject({ id, finding, findingDigest, commit: publicationCommit });
+    expect(inbox()).toEqual([id]);
+    expect(archive().leadWakes!.requested).toBe(wakes + (conclusion === 'supporting' ? 1 : 0));
+    expect(node('first_route').status).toBe('pending');
+
+    await restart();
+    expect(inbox()).toEqual([id]);
+    const resumed = await task();
+    const resumedWakes = archive().leadWakes!.requested;
+    await cooperative.deliver(peer, resumed, commitSolverSources(problem, peer.worktree), true, 'scheduling-checkpoint');
+    expect(published()).toHaveLength(1);
+    expect(inbox()).toEqual([id]);
+    expect(archive().leadWakes!.requested).toBe(resumedWakes);
   });
 
   it('keeps checkpoint publications scoped and deduplicated through task switches and process recovery', async () => {

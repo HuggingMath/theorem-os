@@ -61,7 +61,7 @@ export type TaskRecord = { task: CooperativeTask; readonly status: 'pending' | '
   attempts: number; assignment?: TaskAssignment; proof?: TaskProof; integratedCheck?: TaskProof; feedback?: string; finding?: string;
   researchCompletion?: ResearchRecord;
   /** An unchanged conditional handoff yields to an executable input without abandoning its draft. */
-  connectionCheckpoint?: { basisDigest: string; inputDigest: string; outputDigest: string };
+  connectionCheckpoint?: { basisDigest: string; inputDigest: string; outputDigest: string; leadDeliveryId?: string; leadWake?: number };
   /** One source-contract correction belongs to this assignment, not equivalent mathematical tasks. */
   sourceRepair?: { taskDigest: string; workerId: string; assignmentId?: string; seedCommit: string;
     pending: boolean; startedAttempt?: number };

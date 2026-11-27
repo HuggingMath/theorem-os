@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 
-type GitOptions = { maxBuffer: number; timeout?: number; errorMessage?: string };
+type GitOptions = { maxBuffer: number; timeout?: number; errorMessage?: string; input?: Buffer };
 
 export type MathGitFailureDiagnostic = Readonly<{ command: string; exitCode: number | null;
   signal: NodeJS.Signals | null; code?: string; commit?: string; file?: string; stderr?: string }>;
@@ -15,7 +15,7 @@ export class MathGitError extends Error {
 /** Keep source bytes intact; callers own Git identity and tree-mode checks. */
 export const mathGitResult = (root: string, args: readonly string[], options: GitOptions) =>
   spawnSync('git', ['-C', root, ...args], {
-    maxBuffer: options.maxBuffer, timeout: options.timeout ?? 30_000,
+    maxBuffer: options.maxBuffer, timeout: options.timeout ?? 30_000, input: options.input,
   });
 
 export function mathGitBytes(root: string, args: readonly string[], options: GitOptions): Buffer {

@@ -1757,6 +1757,137 @@ describe('cooperative advisory scheduling checkpoints', () => {
     return run;
   }
 
+  it.each(['refuted', 'prose', 'jsonl', 'jsonl-context', 'restart', 'legacy-restart'] as const)(
+    'waits for Lead to decide the proof checkpoint (%s)', async report => {
+    const { state: initialState, workers, problem, check, controller } = connectionChain();
+    let state = initialState;
+    const producer = peerWorker({ directory, problem, workspace: workers[0].worktree }, 'producer', { role: 'prover' });
+    workers.push(producer);
+    state.workers!.push({ ...producer, phase: 'prepared', turns: 0 });
+    const bridge = state.cooperation!.tasks.find(node => node.task.id === 'connection_bridge')!;
+    bridge.task = { ...bridge.task, ownerId: producer.id, dependsOn: [] };
+    state.cooperation!.tasks = state.cooperation!.tasks.filter(node => node.task.id !== 'connection_leaf');
+
+    const [lead, worker] = workers;
+    const restart = report === 'restart' || report === 'legacy-restart';
+    const saved = path.join(directory, 'connection-wait.json');
+    const create = (save?: () => void) => cooperativeResearch({ state, workers, retrievalRoot: directory,
+      signal: controller.signal, save,
+      modules: { ...directSolverModules, M2: { ...directSolverModules.M2, check, checkTask: check, closeTask: undefined } } });
+    let cooperation = create(() => {
+      if (restart && !fs.existsSync(saved) && state.cooperation!.deliveries?.some(record => record.kind === 'research'))
+        writeSolverRunState(saved, state);
+    });
+    const budget = { maxTurns: Infinity, remainingMs: Infinity };
+    const consumer = async () => {
+      const action = await cooperation.next(worker, budget);
+      if (action?.kind !== 'task' || action.task.id !== 'connection_consumer')
+        throw new Error('fixture_expected_connection_consumer');
+      expect(cooperation.started(worker, action)).toBe(true);
+      return action;
+    };
+    const checkpoint = async (action: Awaited<ReturnType<typeof consumer>>, laterFindings = 0) => {
+      await cooperation.retainContextDraft(worker, action, commitSolverSources(problem, worker.worktree),
+        report === 'jsonl-context' ? 'context' : 'connection');
+      if (laterFindings) {
+        cooperation.activate(worker, action, async () => {}, async () => {});
+        const log = path.join(worker.worktree, assignmentDeliveryFile(action.assignment));
+        for (let index = 0; index < laterFindings; index++) {
+          fs.appendFileSync(log, JSON.stringify({ kind: 'research', finding: { conclusion: 'inconclusive',
+            needsDecision: true, summary: 'A later advisory finding on the connection, ' + index } }) + '\n');
+        }
+        await cooperation.pulse(worker.id);
+        cooperation.deactivate(worker);
+      }
+      cooperation.interrupted(worker, action);
+    };
+    const inbox = () => leadResearchInputs(state.cooperation!.deliveries ?? [],
+      new Map(state.cooperation!.tasks.map(node => [node.task.id, node])), state.cooperation!.researchDecisions);
+
+    const first = await consumer();
+    const jsonl = report === 'jsonl' || report === 'jsonl-context';
+    const laterCount = report === 'refuted' ? 8 : 0;
+    const value = { conclusion: 'refuted', summary: 'A witness refutes the proposed inference from the recorded premises.' };
+    const notes = report === 'prose' ? 'The exact proposed inference and a candidate witness are saved here for review.\n'
+      : '\x60\x60\x60math-result\n' + JSON.stringify(value) + '\n\x60\x60\x60\n';
+    if (jsonl) {
+      cooperation.activate(worker, first, async () => {}, async () => {});
+      fs.appendFileSync(path.join(worker.worktree, assignmentDeliveryFile(first.assignment)),
+        JSON.stringify({ kind: 'research', finding: { ...value, needsDecision: true } }) + '\n');
+      await cooperation.pulse(worker.id);
+      cooperation.deactivate(worker);
+      expect(inbox()).toHaveLength(1);
+    } else fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), notes);
+    // Fill the Lead inbox's eight-entry view with newer findings from the same
+    // assignment. They do not change the paused worker's mathematical inputs.
+    await checkpoint(first, laterCount);
+    if (report === 'prose') {
+      expect(inbox()).toHaveLength(0);
+      await checkpoint(await consumer());
+    }
+    const [finding, ...laterFindings] = inbox();
+    expect(laterFindings).toHaveLength(laterCount);
+    expect(finding.taskId).toBe('connection_consumer');
+    expect(JSON.parse(finding.finding!)).toMatchObject({ conclusion: report === 'prose' ? 'inconclusive' : 'refuted', needsDecision: true });
+    if (!jsonl) expect(committedSource(lead.worktree, finding.commit!, 'RESEARCH.md')).toBe(notes);
+    if (!restart) writeSolverRunState(saved, state);
+    const savedState = readSolverRunState(saved);
+    const savedConsumer = savedState.cooperation!.tasks.find(node => node.task.id === finding.taskId)!;
+    expect(savedConsumer.connectionCheckpoint?.leadDeliveryId).toBe(finding.id);
+    if (restart) {
+      expect(savedConsumer.status).toBe('running');
+      // Reproduce the archive written by earlier versions before the wait was bound.
+      if (report === 'legacy-restart') delete savedConsumer.connectionCheckpoint;
+      await cooperation.stop();
+      state = savedState; cooperation = create(() => {});
+      await cooperation.restore();
+      expect(inbox().map(record => record.id)).toEqual([finding.id]);
+    }
+
+    let redispatched = false;
+    const resumed = consumer().then(action => { redispatched = true; return action; });
+    void resumed.catch(() => {});
+    const leadTurn = async () => {
+      const decision = await cooperation.next(lead, budget);
+      if (decision?.kind !== 'lead') throw new Error('fixture_expected_lead_decision');
+      expect(cooperation.started(lead, decision)).toBe(true);
+      return decision;
+    };
+    const answer = async (decision: Awaited<ReturnType<typeof leadTurn>>, deliveryIds: string[]) => {
+      fs.writeFileSync(path.join(lead.worktree, 'RESEARCH.md'), '\x60\x60\x60math-plan\n' + JSON.stringify({
+        baseVersion: decision.planVersion, upsert: [], summary: 'Reviewed the presented findings.',
+        researchDecisions: deliveryIds.map(deliveryId => ({ deliveryId, outcome: 'decline',
+          reason: 'The proposed inference is not needed for the test route.' })),
+      }) + '\n\x60\x60\x60\n');
+      await cooperation.deliver(lead, decision, commitSolverSources(problem, lead.worktree));
+    };
+    const firstDecision = await leadTurn();
+    if (laterCount) {
+      const shown = laterFindings.map(item => item.id);
+      expect(cooperation.contextState(firstDecision, lead).leadResearchInputIds).toEqual(shown);
+      await answer(firstDecision, shown);
+      expect(state.cooperation!.error).toBeUndefined();
+    } else {
+      fs.writeFileSync(path.join(lead.worktree, 'RESEARCH.md'), 'The checkpoint still needs a decision.\n');
+      await cooperation.deliver(lead, firstDecision, commitSolverSources(problem, lead.worktree), true, 'scheduling-checkpoint');
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(inbox().map(item => item.id)).toEqual([finding.id]);
+    expect(redispatched).toBe(false);
+    const decision = await leadTurn();
+    expect(cooperation.contextState(decision, lead).leadResearchInputIds).toEqual([finding.id]);
+    await answer(decision, [finding.id]);
+    expect(state.cooperation!.error).toBeUndefined();
+    const next = await resumed;
+    expect(next.assignment.assignmentId).toBe(first.assignment.assignmentId);
+    expect(inbox()).toEqual([]);
+    await checkpoint(next);
+    expect(state.cooperation!.deliveries!.filter(record => record.kind === 'research')).toHaveLength(1 + laterFindings.length);
+    expect(check).not.toHaveBeenCalled();
+    expect(state.cooperation!.tasks.find(node => node.task.id === finding.taskId)?.proof).toBeUndefined();
+    await cooperation.stop();
+  });
+
   it('lets an unchanged connection checkpoint dispatch its owned transitive leaf with the consumer draft retained', async () => {
     const { state, workers, problem, check, controller, events, run } = connectionChain();
     const held = heldAdvisoryTurns(3, ['connection_consumer', 'connection_leaf']);

@@ -12,7 +12,7 @@ import { readyResearchTasks, taskCanStart } from '../src/solver/modules/search';
 import { committedSource, commitSolverSources, git, readSolverProblem, type SolverProblem } from '../src/solver/problem';
 import { automaticTaskConnection, createTaskConnectionCheck, freshTaskConnection, hasTaskConnectionCheck,
   taskConnectionCheckCurrent } from '../src/solver/taskConnections';
-import { freshlyAccepted, taskVersion, type CooperativeAction, type CooperativeTask, type TaskAssignment, type TaskRecord } from '../src/solver/tasks';
+import { assignmentDeliveryFile, freshlyAccepted, taskVersion, type CooperativeAction, type CooperativeTask, type TaskAssignment, type TaskRecord } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 import { verifiedBatch } from './helpers/verifier';
@@ -304,6 +304,101 @@ describe('host consumer connection lifecycle', () => {
     expect(node('goal_0').proof!.conditions).toBeUndefined();
     expect(node('goal_0').integratedCheck!.conditions).toBeUndefined();
     expect(checkedSources.every(source => conditionalPayloads(source).length === 0)).toBe(true);
+  });
+
+  it.each([
+    ['automatic', 'compatible'],
+    ['explicit', 'compatible'],
+    ['automatic', 'conflicting'],
+  ] as const)('refreshes a saved %s connection with a %s draft when its exact input integrates', async (mode, draftKind) => {
+    const worker = mode === 'automatic' ? workers[2] : workers[3];
+    if (mode === 'explicit') {
+      const tasks = state.cooperation!.tasks.map(item => item.task.id === 'goal_0'
+        ? { ...item.task, status: 'paused' as const } : item.task);
+      tasks.splice(tasks.findIndex(task => task.id === 'independent'), 1, { id: 'consumer', kind: 'lemma', conditional: true,
+        objective: 'Use the exact integrated prerequisite.', type: 'True', theoremName: 'Tutorial.consumer',
+        proofPath: 'Submission.lean', dependsOn: ['helper'], revision: 0, ownerId: worker.id });
+      await (cooperative as any).acceptPlan(parseCooperationPlan(problem, { tasks }));
+    }
+    const parent = await assigned(worker), consumer = node(parent.task.id);
+    expect(consumer.task.id).toBe(mode === 'automatic' ? 'goal_0' : 'consumer');
+    expect(Boolean(parent.assignment.connectionCheck)).toBe(mode === 'automatic');
+    const threadId = 'saved-connection-thread';
+    const record = { ...worker, phase: 'running' as const, turns: 1, threadId, sessionTaskId: parent.task.id,
+      sessionTaskVersion: parent.assignment.taskDigest, sessionAssignmentId: parent.assignment.assignmentId };
+    state.workers = [...(state.workers ?? []).filter(item => item.id !== worker.id), record];
+    const notes = 'Saved connection draft before the exact input integrated.\n';
+    fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), notes);
+    const conflicting = draftKind === 'conflicting';
+    const draftAnchor = conflicting ? 'theorem add_zero' : 'end Tutorial';
+    const draftLemma = conflicting ? 'lemma helper : True := by exact True.intro' : 'lemma old_draft_support : True := by trivial';
+    fs.writeFileSync(sourcePath(worker), fs.readFileSync(sourcePath(worker), 'utf8')
+      .replace(draftAnchor, `${draftLemma}\n${draftAnchor}`));
+    const previousCommit = commitSolverSources(problem, worker.worktree);
+    await cooperative.retainContextDraft(worker, parent, previousCommit, 'connection');
+    cooperative.interrupted(worker, parent);
+    const unchanged = await assigned(worker);
+    expect(unchanged.assignment).toBe(parent.assignment);
+    cooperative.interrupted(worker, unchanged);
+
+    await deliverInput(await assigned(workers[1]));
+    expect(node('helper').status).toBe('integrated');
+    expect(cooperative.current(parent)).toBe(true);
+    const current = await assigned(worker);
+    expect(current.assignment).toMatchObject({ workerId: worker.id, taskDigest: parent.assignment.taskDigest,
+      canonicalCommit: state.cooperation!.canonicalCommit });
+    expect(current.assignment.connectionCheck).toBeUndefined();
+    expect(assignmentDeliveryFile(current.assignment)).not.toBe(assignmentDeliveryFile(parent.assignment));
+    expect(committedSource(workspace, current.assignment.seedCommit, 'RESEARCH.md')).toBe(notes);
+    const proofPath = `${problem.projectRelative}/Submission.lean`;
+    const seedSource = committedSource(workspace, current.assignment.seedCommit, proofPath);
+    expect(seedSource).toContain('lemma helper : True := by trivial');
+    expect(seedSource).not.toContain(draftLemma);
+    const resumedSource = conflicting ? seedSource : seedSource.replace(draftAnchor, `${draftLemma}\n${draftAnchor}`);
+    expect(fs.readFileSync(sourcePath(worker), 'utf8')).toBe(resumedSource);
+    const restored = state.cooperation!.researchDrafts![parent.task.id];
+    expect(restored).toMatchObject({ assignmentId: current.assignment.assignmentId,
+      seedCommit: current.assignment.seedCommit, workerId: worker.id });
+    expect(committedSource(workspace, restored.commit, proofPath)).toBe(resumedSource);
+    if (conflicting) {
+      expect(committedSource(workspace, previousCommit, proofPath)).toContain(draftLemma);
+      expect(state.cooperation!.deliveries).toContainEqual(expect.objectContaining({ commit: previousCommit, status: 'advisory',
+        artifacts: expect.objectContaining({ artifacts: expect.arrayContaining([expect.objectContaining({ kind: 'owned-source' })]) }) }));
+    }
+    expect(state.workers.find(item => item.id === worker.id)?.threadId).toBe(threadId);
+    expect(cooperative.current(parent)).toBe(false);
+    const checkedBefore = checkedSources.length;
+    await cooperative.deliver(worker, parent, previousCommit);
+    expect(checkedSources).toHaveLength(checkedBefore);
+    expect(consumer).toMatchObject({ status: 'running', assignment: current.assignment });
+    expect(state.cooperation!.deliveries).toContainEqual(expect.objectContaining({ commit: previousCommit, status: 'superseded' }));
+
+    const source = fs.readFileSync(sourcePath(worker), 'utf8');
+    fs.writeFileSync(sourcePath(worker), mode === 'automatic'
+      ? source.replace('n + 0 = n := by sorry', 'n + 0 = n := by\n  have h : True := Tutorial.helper\n  rfl')
+      : source.replace('theorem add_zero', 'lemma consumer : True := by exact Tutorial.helper\ntheorem add_zero'));
+    await cooperative.deliver(worker, current, commitSolverSources(problem, worker.worktree));
+    expect(consumer.status).toBe('integrated');
+    expect(consumer.proof!.conditions).toBeUndefined();
+    expect(checkedSources.slice(checkedBefore).every(source => conditionalPayloads(source).length === 0)).toBe(true);
+  });
+
+  it('rebuilds a connection receipt with only the input still unproved', async () => {
+    const tasks = state.cooperation!.tasks.map(item => item.task.id === 'goal_0'
+      ? { ...item.task, dependsOn: ['helper', 'remaining_input'] } : item.task);
+    tasks.push({ id: 'remaining_input', kind: 'lemma', objective: 'Prove the other premise.', type: 'True',
+      theoremName: 'Tutorial.remaining_input', proofPath: 'Submission.lean', dependsOn: [], revision: 0, ownerId: 'observer' });
+    await (cooperative as any).acceptPlan(parseCooperationPlan(problem, { tasks }));
+    const worker = workers[2], first = await assigned(worker);
+    expect(first.assignment.connectionCheck?.assumedInputs?.map(input => input.taskId)).toEqual(['helper', 'remaining_input']);
+    cooperative.interrupted(worker, first);
+    await deliverInput(await assigned(workers[1]));
+    const current = await assigned(worker);
+    expect(current.assignment.connectionCheck?.assumedInputs).toEqual([
+      { taskId: 'remaining_input', taskDigest: taskVersion(node('remaining_input').task) },
+    ]);
+    expect(current.assignment.assignmentId).not.toBe(first.assignment.assignmentId);
+    expect(cooperative.current(current)).toBe(true);
   });
 
   it.each(['goal', 'lemma'] as const)('discharges a conditional %s after a later input declaration and preserves added helper order', async kind => {

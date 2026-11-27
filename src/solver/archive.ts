@@ -40,7 +40,7 @@ export type DispatchWaitObservation = {
   omittedCandidates: number;
   candidates: { taskId: string; taskDigest: string;
     reason: 'role' | 'engineer' | 'owner' | 'saved-assignment' | 'review-independence' | 'running-duplicate' |
-      'preparing-type' | 'synchronizing' | 'capacity-expired' | 'policy-no-selection' | 'dependency' | 'integration-queue' }[];
+      'preparing-type' | 'synchronizing' | 'capacity-expired' | 'awaiting-lead' | 'policy-no-selection' | 'dependency' | 'integration-queue' }[];
 };
 
 export type SolverWorkerState = Pick<SolverRunState, 'worktree' | 'threadId' | 'previousThreadIds' |
@@ -171,7 +171,7 @@ const dispatchWaitObservation = z.object({ observedAt: safeCount, endedAt: safeC
   candidateCount: safeCount, omittedCandidates: safeCount,
   candidates: z.array(z.object({ taskId: z.string(), taskDigest: z.string(),
     reason: z.enum(['role', 'engineer', 'owner', 'saved-assignment', 'review-independence', 'running-duplicate',
-      'preparing-type', 'synchronizing', 'capacity-expired', 'policy-no-selection', 'dependency', 'integration-queue']) })).max(16),
+      'preparing-type', 'synchronizing', 'capacity-expired', 'awaiting-lead', 'policy-no-selection', 'dependency', 'integration-queue']) })).max(16),
 }).refine(value => value.candidateCount === value.candidates.length + value.omittedCandidates);
 const planPublication = z.object({ nonce: z.string().min(1), file: z.string().regex(/^DELIVERIES-[a-f0-9]{64}\.jsonl$/u),
   offset: safeCount, eventDigest: z.string().regex(/^[a-f0-9]{64}$/u), baseVersion: z.string(), planVersion: z.string(),
@@ -271,7 +271,8 @@ const taskRecord = z.object({ task, status: z.enum(['pending', 'running', 'block
     environmentDigest: z.string().min(1), problemReceiptDigest: z.string().min(1), proof: z.boolean().optional() }).optional(),
   researchCompletion: researchRecordSchema.optional(),
   connectionCheckpoint: z.object({ basisDigest: z.string().regex(/^[a-f0-9]{64}$/u),
-    inputDigest: z.string().regex(/^[a-f0-9]{64}$/u), outputDigest: z.string().regex(/^[a-f0-9]{64}$/u) }).strict().optional(),
+    inputDigest: z.string().regex(/^[a-f0-9]{64}$/u), outputDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+    leadDeliveryId: z.string().min(1).optional(), leadWake: safeCount.optional() }).strict().optional(),
   attempts: count, proof: check.optional(), integratedCheck: check.optional(), assignment: z.object({ taskId: z.string(),
     taskDigest: z.string(), workerId: z.string(), seedCommit: z.string(), assignmentId: z.string().optional(),
     connectionCheck: connectionCheck.optional(), researchBasis: researchBasisSchema.optional(),
@@ -405,7 +406,8 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
     status: z.enum(['active', 'paused', 'stopped']), revision: count }).passthrough(), turns: count }).passthrough()).optional(),
     history: z.array(z.object({ task, proof: check.optional(), integratedCheck: check.optional(),
       researchCompletion: researchRecordSchema.optional() }).passthrough()).optional(),
-    deliveries: z.array(z.object({ researchRecord: researchRecordSchema.optional(),
+    deliveries: z.array(z.object({ researchRecord: researchRecordSchema.optional(), leadDecisionRequested: z.literal(true).optional(),
+      submissionAliases: z.array(z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/u)).optional(),
       searchCheckpoint: proofSearchCheckpointReferenceSchema.optional() }).passthrough()).optional(),
     nextChecks: z.array(nextCheckRecordSchema).optional(),
     deliveryReceipts: z.array(deliveryReceiptSchema).optional(), blockers: z.array(routeBlocker).optional(),

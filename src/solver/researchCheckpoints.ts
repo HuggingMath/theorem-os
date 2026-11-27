@@ -67,9 +67,10 @@ export function researchCheckpointLocalInputDigest(input: CheckpointInput, legac
 }
 
 export function researchCheckpointInputDigest(input: CheckpointInput & {
-  problem: SolverProblem; worktree: string; canonicalCommit: string;
+  problem: SolverProblem; worktree: string; canonicalCommit: string; includeDeliveries?: boolean;
 }) {
-  const deliveries = [...new Set(visibleDeliveries(input).map(record => canonicalMathJson(deliveryInputFields(record))))].sort();
+  const deliveries = input.includeDeliveries === false ? undefined
+    : [...new Set(visibleDeliveries(input).map(record => canonicalMathJson(deliveryInputFields(record))))].sort();
   return mathDigest(canonicalMathJson({ taskDigest: taskVersion(input.task), environmentDigest: input.environmentDigest,
     problemReceiptDigest: input.problemReceiptDigest,
     sourceDigest: ownedSourceDigest(input.problem, input.worktree, input.canonicalCommit),
