@@ -69,23 +69,23 @@ export function solutionRouteLayout(model: SolutionRoute, nodes: readonly Soluti
   }
   const boxes = new Map<string, Box>();
   for (const [rank, members] of columns) {
-    let y = 30;
+    let y = 34;
     for (const node of members) {
       const pending = [{ node, depth: 0 }];
       while (pending.length) {
         const item = pending.pop()!;
         if (boxes.has(item.node.id)) continue;
         const inset = Math.min(42, item.depth * 14);
-        boxes.set(item.node.id, { x: 30 + rank * 298 + inset, y, width: 238 - inset, height: 140 }); y += 162;
+        boxes.set(item.node.id, { x: 30 + rank * 308 + inset, y, width: 238 - inset, height: 144 }); y += 168;
         for (const child of [...children.get(item.node.id) ?? []].reverse()) pending.push({ node: child, depth: item.depth + 1 });
       }
-      y += 20;
+      y += 22;
     }
   }
   // A nested record can outlive its parent in a bounded trajectory page.
-  for (const node of nodes) if (!boxes.has(node.id)) boxes.set(node.id, { x: 30, y: 30 + boxes.size * 206, width: 238, height: 180 });
-  return { boxes, width: Math.max(298, ...[...boxes.values()].map(box => box.x + box.width + 30)),
-    height: Math.max(180, ...[...boxes.values()].map(box => box.y + box.height + 30)) };
+  for (const node of nodes) if (!boxes.has(node.id)) boxes.set(node.id, { x: 30, y: 34 + boxes.size * 206, width: 238, height: 180 });
+  return { boxes, width: Math.max(308, ...[...boxes.values()].map(box => box.x + box.width + 32)),
+    height: Math.max(196, ...[...boxes.values()].map(box => box.y + box.height + 32)) };
 }
 
 export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, options: Options = {}) {
@@ -124,6 +124,10 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
   function restoreDetailPosition(position: ReturnType<typeof detailPosition>) {
     const scroller = detailScroller();
     if (!position || !scroller) return;
+    if (expanded && !state.reading && position.top === 0 && scroller.classList.contains('solution-route-workspace')) {
+      scroller.scrollTop = 0;
+      return;
+    }
     if (!expanded && scroller !== document.scrollingElement) scroller.scrollIntoView({ block: 'nearest' });
     const anchor = detailAnchors()[position.index];
     if (anchor) scroller.scrollTop += anchor.getBoundingClientRect().top - scrollportTop(scroller) - position.offset;
@@ -227,18 +231,22 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
         ${model.nodes.some(node => node.origin === 'library') ? `<button type="button" data-solution-library aria-pressed="${state.library}">${word('库里的结论', 'Library results')} ${model.nodes.filter(node => node.origin === 'library').length}</button>` : ''}
         <div class="solution-route-view-controls" role="group" aria-label="${word('阅读方式', 'Reading view')}"><button type="button" data-solution-view="map" aria-pressed="${!state.reading}">${word('步骤图', 'Step graph')}</button><button type="button" data-solution-view="read" aria-pressed="${state.reading}">${word('阅读推导', 'Read reasoning')}</button></div>
         ${state.reading ? `<label class="solution-route-step-picker"><span>${word('当前步骤', 'Current step')}</span><select data-solution-reader-select aria-label="${word('跳转到路线中的步骤', 'Jump to a route step')}">${model.nodes.map((node, index) => `<option value="${html(node.id)}"${node.id === state.selected ? ' selected' : ''}>${String(index + 1).padStart(2, '0')} · ${html(node.title)}</option>`).join('')}</select><span>${model.nodes.findIndex(node => node.id === state.selected) + 1} / ${model.nodes.length}</span></label>` : ''}
-        <div role="group" aria-label="${word('路线图缩放', 'Route zoom')}"><button type="button" data-solution-zoom="out" aria-label="${word('缩小', 'Zoom out')}">−</button><button type="button" data-solution-zoom="reset" aria-label="${word('恢复原始大小', 'Reset zoom')}"><output>${Math.round(state.zoom * 100)}%</output></button><button type="button" data-solution-zoom="in" aria-label="${word('放大', 'Zoom in')}">＋</button><button type="button" data-solution-zoom="fit">${word('查看全图', 'Fit route')}</button>${options.compact && !state.reading ? `<button type="button" data-solution-detail-toggle aria-pressed="${state.detail}">${state.detail ? word('只看路线图', 'Map only') : word('打开步骤详情', 'Step details')}</button>` : ''}<button type="button" data-solution-expand aria-expanded="${expanded}">${expanded ? word('收起画布', 'Close canvas') : word('展开画布', 'Expand canvas')}</button></div></div>
+        <div class="solution-route-zoom-controls" role="group" aria-label="${word('路线图缩放', 'Route zoom')}"><button type="button" data-solution-zoom="out" aria-label="${word('缩小', 'Zoom out')}">−</button><button type="button" data-solution-zoom="reset" aria-label="${word('恢复原始大小', 'Reset zoom')}"><output>${Math.round(state.zoom * 100)}%</output></button><button type="button" data-solution-zoom="in" aria-label="${word('放大', 'Zoom in')}">＋</button><button type="button" data-solution-zoom="fit">${word('查看全图', 'Fit route')}</button>${options.compact && !state.reading ? `<button type="button" data-solution-detail-toggle aria-pressed="${state.detail}">${state.detail ? word('只看路线图', 'Map only') : word('打开步骤详情', 'Step details')}</button>` : ''}<button type="button" class="solution-route-expand-btn" data-solution-expand aria-expanded="${expanded}">${expanded ? word('收起画布', 'Close canvas') : word('展开画布', 'Expand canvas')}</button></div></div>
       <div class="solution-route-workspace"><div class="solution-route-viewport" tabindex="0" aria-label="${word('交互路线图，可拖动平移并选择步骤', 'Interactive route: drag to pan and select a step')}"><div class="solution-route-scaled"><div class="solution-route-canvas">
-      <svg class="solution-route-lines" width="${layout.width}" height="${layout.height}" aria-hidden="true"><defs><marker id="solution-arrow-${html(model.id.replace(/[^a-zA-Z0-9]/gu, ''))}" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7"/></marker></defs>${model.edges.filter(edge => ids.has(edge.from) && ids.has(edge.to)).map(edge => {
+      <svg class="solution-route-lines" width="${layout.width}" height="${layout.height}" aria-hidden="true"><defs><marker id="solution-arrow-${html(model.id.replace(/[^a-zA-Z0-9]/gu, ''))}" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M1,1 L6.5,3.5 L1,6" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>${model.edges.filter(edge => ids.has(edge.from) && ids.has(edge.to)).map(edge => {
         const a = layout.boxes.get(edge.from)!, b = layout.boxes.get(edge.to)!;
+        const targetNode = nodesById().get(edge.to);
+        const edgeTone = edge.kind === 'decision' ? 'human'
+          : targetNode?.status === 'failed' ? 'failed'
+            : targetNode?.status === 'passed' || targetNode?.kind === 'acceptance' ? 'passed' : 'neutral';
         const vertical = Math.abs(a.x - b.x) < 30;
         const x1 = vertical ? a.x + a.width / 2 : a.x + a.width, y1 = vertical ? a.y + a.height : a.y + a.height / 2;
         const x2 = vertical ? b.x + b.width / 2 : b.x, y2 = vertical ? b.y : b.y + b.height / 2;
-        const bend = Math.max(24, Math.abs(x2 - x1) / 2);
-        const d = vertical ? `M${x1} ${y1} C${x1} ${y1 + 20},${x2} ${y2 - 20},${x2} ${y2}` : `M${x1} ${y1} C${x1 + bend} ${y1},${x2 - bend} ${y2},${x2} ${y2}`;
-        return `<path d="${d}" data-solution-edge="${edge.kind}" data-from="${html(edge.from)}" data-to="${html(edge.to)}" data-connected="${edge.from === state.selected || edge.to === state.selected}" marker-end="url(#solution-arrow-${html(model.id.replace(/[^a-zA-Z0-9]/gu, ''))})"/>`;
+        const bend = Math.max(28, Math.abs(x2 - x1) * 0.52);
+        const d = vertical ? `M${x1} ${y1} C${x1} ${y1 + 22},${x2} ${y2 - 22},${x2} ${y2}` : `M${x1} ${y1} C${x1 + bend} ${y1},${x2 - bend} ${y2},${x2} ${y2}`;
+        return `<path d="${d}" data-solution-edge="${edge.kind}" data-edge-tone="${edgeTone}" data-from="${html(edge.from)}" data-to="${html(edge.to)}" data-connected="${edge.from === state.selected || edge.to === state.selected}" marker-end="url(#solution-arrow-${html(model.id.replace(/[^a-zA-Z0-9]/gu, ''))})"/>`;
       }).join('')}</svg>${visible.map((node, index) => {
-        return `<button type="button" class="solution-route-node" data-solution-node="${html(node.id)}" data-roadmap-node="${html(node.id)}" data-status="${node.status}"${node.origin ? ` data-origin="${node.origin}"` : ''} data-connected="${adjacent.has(node.id)}" aria-pressed="${node.id === state.selected}"><span class="solution-route-node-meta"><span>${String(index + 1).padStart(2, '0')} · ${node.origin ? originNames[model.locale][node.origin] : kindNames[model.locale][node.kind]}</span><span>${statusNames[model.locale][node.status]}</span></span><strong data-solution-prose>${html(node.title)}</strong>${node.summary ? `<span class="solution-route-node-summary" data-solution-prose>${html(node.summary)}</span>` : ''}</button>`;
+        return `<button type="button" class="solution-route-node" data-solution-node="${html(node.id)}" data-roadmap-node="${html(node.id)}" data-node-kind="${node.kind}" data-status="${node.status}"${node.origin ? ` data-origin="${node.origin}"` : ''} data-connected="${adjacent.has(node.id)}" aria-pressed="${node.id === state.selected}"><span class="solution-route-node-meta"><span>${String(index + 1).padStart(2, '0')} · ${node.origin ? originNames[model.locale][node.origin] : kindNames[model.locale][node.kind]}</span><span class="solution-route-node-status">${statusNames[model.locale][node.status]}</span></span><strong data-solution-prose>${html(node.title)}</strong>${node.summary ? `<span class="solution-route-node-summary" data-solution-prose>${html(node.summary)}</span>` : ''}</button>`;
       }).join('')}</div></div>${!visible.length ? `<p class="solution-route-empty">${word('没有匹配的步骤。换一个关键词，或清空搜索。', 'No matching steps. Try another term or clear the search.')}</p>` : ''}</div>
       <aside class="solution-route-detail" data-solution-inspector aria-label="${word('路线步骤详情', 'Route step details')}" aria-live="polite">${inspector()}</aside></div>
       <footer class="solution-route-footer">${legend(visible, ids)}${model.partial ? `<span>${word('当前记录尚未全部读取', 'Some records have not been loaded')}</span>` : ''}<div><button type="button" data-solution-step="previous">← ${word('上一步', 'Previous')}</button><button type="button" data-solution-step="next">${word('下一步', 'Next')} →</button></div></footer>`;
@@ -409,7 +417,7 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       if (zoom === 'fit') { state.fitted = true; fit(true); }
       else {
         state.fitted = false;
-        state.zoom = Math.max(.1, Math.min(2, zoom === 'reset' ? 1 : state.zoom + (zoom === 'in' ? .1 : -.1)));
+        state.zoom = Math.max(.2, Math.min(2.5, Math.round((zoom === 'reset' ? 1 : state.zoom + (zoom === 'in' ? .1 : -.1)) * 100) / 100));
         state.left = Math.max(0, center.x * state.zoom - viewport.clientWidth / 2);
         state.top = Math.max(0, center.y * state.zoom - viewport.clientHeight / 2);
         draw();
@@ -465,7 +473,21 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
     const target = (event.target as HTMLElement).closest<HTMLElement>('[data-solution-node]');
-    if (!target || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+    if (!target) {
+      if ((event.target as HTMLElement).classList?.contains('solution-route-viewport') && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        const viewport = event.target as HTMLElement;
+        const center = { x: (viewport.scrollLeft + viewport.clientWidth / 2) / state.zoom, y: (viewport.scrollTop + viewport.clientHeight / 2) / state.zoom };
+        if (event.key === '+' || event.key === '=' || event.key === '-' || event.key === '0') {
+          event.preventDefault(); state.fitted = false;
+          state.zoom = event.key === '0' ? 1 : Math.max(.2, Math.min(2.5, Math.round((state.zoom + (event.key === '-' ? -.1 : .1)) * 100) / 100));
+          state.left = Math.max(0, center.x * state.zoom - viewport.clientWidth / 2);
+          state.top = Math.max(0, center.y * state.zoom - viewport.clientHeight / 2);
+          draw();
+        }
+      }
+      return;
+    }
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault(); const visible = shown(), id = target.dataset.solutionNode!;
     const adjacent = related(id, event.key === 'ArrowLeft' || event.key === 'ArrowUp').map(item => item.node).filter(node => visible.some(item => item.id === node.id));
     const index = visible.findIndex(node => node.id === id);
@@ -473,6 +495,65 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       : adjacent[0] ?? visible[index + (event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1)];
     if (next) select(next.id, true);
   }, { signal: signal.signal });
+  const zoomPointer = (viewport: HTMLElement, nextZoom: number, clientX: number, clientY: number) => {
+    const rect = viewport.getBoundingClientRect();
+    const px = clientX - rect.left, py = clientY - rect.top;
+    const cx = (viewport.scrollLeft + px) / state.zoom, cy = (viewport.scrollTop + py) / state.zoom;
+    state.fitted = false;
+    state.zoom = Math.max(.2, Math.min(2.5, Math.round(nextZoom * 100) / 100));
+    state.left = Math.max(0, cx * state.zoom - px);
+    state.top = Math.max(0, cy * state.zoom - py);
+    draw();
+  };
+  root.addEventListener('wheel', event => {
+    const viewport = (event.target as Element).closest<HTMLElement>('.solution-route-viewport');
+    if (!viewport || state.reading || (!event.ctrlKey && !event.metaKey)) return;
+    event.preventDefault();
+    const factor = Math.exp(-event.deltaY * (event.deltaMode === 1 ? 0.05 : 0.002));
+    zoomPointer(viewport, state.zoom * factor, event.clientX, event.clientY);
+  }, { signal: signal.signal, passive: false });
+  root.addEventListener('dblclick', event => {
+    const viewport = (event.target as Element).closest<HTMLElement>('.solution-route-viewport');
+    if (!viewport || state.reading || (event.target as Element).closest('button')) return;
+    zoomPointer(viewport, state.zoom >= 1.45 ? 1 : state.zoom * 1.35, event.clientX, event.clientY);
+  }, { signal: signal.signal });
+  const clearHover = () => {
+    const canvas = root.querySelector<HTMLElement>('.solution-route-canvas');
+    if (!canvas || !canvas.dataset.hover) return;
+    delete canvas.dataset.hover;
+    for (const el of canvas.querySelectorAll('.is-hover-hit, .is-hover-direct')) el.classList.remove('is-hover-hit', 'is-hover-direct');
+  };
+  root.addEventListener('pointerover', event => {
+    const node = (event.target as Element).closest<HTMLElement>('[data-solution-node]');
+    const canvas = root.querySelector<HTMLElement>('.solution-route-canvas');
+    if (!node?.dataset.solutionNode || !canvas || state.reading) return;
+    const id = node.dataset.solutionNode;
+    const paths = [...canvas.querySelectorAll<SVGPathElement>('path[data-solution-edge]')];
+    const hit = new Set<string>([id]);
+    const direct = new Set<string>([id]);
+    for (const path of paths) {
+      if (path.dataset.from === id && path.dataset.to) direct.add(path.dataset.to);
+      if (path.dataset.to === id && path.dataset.from) direct.add(path.dataset.from);
+    }
+    const walk = (start: string, dir: 'from' | 'to') => {
+      for (const path of paths) if (path.dataset[dir] === start) {
+        const next = path.dataset[dir === 'from' ? 'to' : 'from'] ?? '';
+        if (next && !hit.has(next)) { hit.add(next); walk(next, dir); }
+      }
+    };
+    walk(id, 'to'); walk(id, 'from');
+    canvas.dataset.hover = 'true';
+    for (const el of canvas.querySelectorAll<HTMLElement>('[data-solution-node]')) {
+      const nid = el.dataset.solutionNode ?? '';
+      el.classList.toggle('is-hover-hit', hit.has(nid));
+      el.classList.toggle('is-hover-direct', direct.has(nid));
+    }
+    for (const path of paths) {
+      path.classList.toggle('is-hover-hit', hit.has(path.dataset.from ?? '') && hit.has(path.dataset.to ?? ''));
+      path.classList.toggle('is-hover-direct', path.dataset.from === id || path.dataset.to === id);
+    }
+  }, { signal: signal.signal });
+  root.addEventListener('pointerleave', clearHover, { signal: signal.signal });
   let drag: { x: number; y: number; left: number; top: number; viewport: HTMLElement } | undefined;
   root.addEventListener('pointerdown', event => {
     const viewport = (event.target as Element).closest<HTMLElement>('.solution-route-viewport');
