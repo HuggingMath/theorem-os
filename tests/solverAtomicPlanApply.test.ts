@@ -48,6 +48,20 @@ describe('validation of archived cooperative plans', () => {
     }
   });
 
+  it('identifies an oversized progress review reason in archived plan validation', () => {
+    const { workspace, plan, file } = fixture();
+    const progressReview = { id: 'review', reason: 'x'.repeat(2001), nextChecks: [{
+      action: 'construction-check', targetTaskId: plan.tasks[0].id, objective: 'Perform the base case check.',
+      expectedEvidence: 'A checked base case or the exact failed goal.',
+    }] };
+    const validate = () => validateCooperationPlanFile({ workspace, text: JSON.stringify({ ...plan, progressReview }) });
+    expect(validate()).toEqual({ ok: false, error: 'math_plan_progress_review_invalid',
+      issues: [{ path: 'progressReview.reason', message: 'Shorten the reason to at most 2000 characters (received 2001).' }] });
+    progressReview.reason = 'x'.repeat(2000);
+    expect(validate()).toMatchObject({ ok: true });
+    expect(fs.readFileSync(file, 'utf8')).toBe(notes + '\n' + malformed);
+  });
+
   it('validates a plan from stdin without changing the archived notes', () => {
     const { workspace, plan, file } = fixture();
     const original = fs.readFileSync(file, 'utf8');
