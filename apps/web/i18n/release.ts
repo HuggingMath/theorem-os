@@ -118,7 +118,6 @@ export const release: Record<string, string> = {
   '撤回结果尚未确认，可以稍后再试一次。': 'The withdrawal is not confirmed yet. You can try again shortly.',
   '这条指导或它关联的证明任务不存在。': 'This guidance or its proof task no longer exists.',
   '撤回未能提交。': 'The withdrawal could not be submitted.',
-  '请检查要撤回的指导。': 'Check the guidance to withdraw.',
   '一条尚未送达的数学指导已撤回，Agent 不会收到它。': 'Guidance that had not been delivered was withdrawn; no agent will receive it.',
   '记录满后可在这里清理。有研究使用的题目，需要先删除关联研究。': 'Clear records here when storage is full. Delete a problem’s linked research before deleting the problem.',
   '查看关联研究': 'View linked research',
