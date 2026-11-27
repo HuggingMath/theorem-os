@@ -44,12 +44,9 @@
 
 ### 演示视频（1 分钟 · 1080p）
 
-<div align="center">
-  <a href="https://github.com/HuggingMath/theorem-os/releases/download/v0.1.0/theoremos-promo-1080p.mp4">
-    <img src="./docs/assets/promo-video-cover.jpg" alt="TheoremOS 1 分钟官方演示视频：从提出猜想、引理依赖图与人机协同、终端诊断、S3 内核独立验收，到已解答题目的完整证明轨迹展示" width="100%">
-  </a>
-  <p><sub>点击封面观看或下载 <a href="https://github.com/HuggingMath/theorem-os/releases/download/v0.1.0/theoremos-promo-1080p.mp4"><strong>1080p 高清完整版（1:07 · 英文旁白与字幕）</strong></a> — 完整演示：提出猜想 → 引理图谱与人机点拨 → 终端诊断 → 多学者协作 → M1–M5 开放架构 → S3 独立核验 → 公开档案与成功解答轨迹回溯。</sub></p>
-</div>
+https://github.com/user-attachments/assets/57562769-aa15-474c-87ff-73265f097ec8
+
+<p align="center"><sub><strong>TheoremOS 官方演示视频（1:07 · 英文旁白与字幕）</strong> — 提出猜想 → 引理图谱与人机点拨 → 终端诊断 → 多学者协作 → M1–M5 开放架构 → S3 独立核验 → 公开档案与成功解答轨迹回溯 · <a href="https://github.com/HuggingMath/theorem-os/releases/download/v0.1.0/theoremos-promo-1080p.mp4">下载 1080p 高码率原片 (31 MB)</a></sub></p>
 
 ### 核心亮点
 
