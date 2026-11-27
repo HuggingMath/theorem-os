@@ -14,6 +14,7 @@
   </p>
   <p>
     <a href="https://github.com/HuggingMath/theorem-os"><strong>⭐ Star</strong></a> ·
+    <a href="#overview-film">Overview Film</a> ·
     <a href="https://app.theoremos.top/">Cloud Workbench</a> ·
     <a href="https://theoremos.top/en/">Website</a> ·
     <a href="https://github.com/HuggingMath/TheoremOS">Proof Archive Repo</a> ·
@@ -39,6 +40,17 @@
 
 > [!TIP]
 > **Finding TheoremOS helpful for your work?** Please give [**HuggingMath/theorem-os**](https://github.com/HuggingMath/theorem-os) (alongside our proof archive and product site repository [**HuggingMath/TheoremOS**](https://github.com/HuggingMath/TheoremOS)) a **⭐ Star** to help fellow mathematicians and AI-for-Math researchers discover the project and follow updates from [WestlakeNLP](https://westlakenlp.com/).
+
+<a id="overview-film"></a>
+
+### Overview Film (1 min · 1080p)
+
+<div align="center">
+  <a href="https://github.com/HuggingMath/theorem-os/releases/download/v0.1.0/theoremos-promo-1080p.mp4">
+    <img src="./docs/assets/promo-video-cover.jpg" alt="TheoremOS 1-minute overview film: from conjecture input, Lean-typed lemma graphs, terminal diagnosis, and S3 kernel acceptance to full solved-problem proof trajectories" width="100%">
+  </a>
+  <p><sub>Click the poster to watch or download the <a href="https://github.com/HuggingMath/theorem-os/releases/download/v0.1.0/theoremos-promo-1080p.mp4"><strong>1080p HD overview film (1:07 · EN narration &amp; subtitles)</strong></a> — Conjecture → Lean Lemma Graph &amp; Guidance → CLI Replay → Co-Authorship → M1–M5 Harness → S3 Kernel Acceptance → Public Archives &amp; Solved Proof Trajectory.</sub></p>
+</div>
 
 ### Why TheoremOS?
 

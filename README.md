@@ -13,6 +13,7 @@
   </p>
   <p>
     <a href="https://github.com/HuggingMath/theorem-os"><strong>⭐ 点赞收藏</strong></a> ·
+    <a href="#demo-video">演示视频</a> ·
     <a href="https://app.theoremos.top/">在线工作台</a> ·
     <a href="https://theoremos.top/">产品官网</a> ·
     <a href="https://github.com/HuggingMath/TheoremOS">公开证明档案</a> ·
@@ -38,6 +39,17 @@
 
 > [!TIP]
 > **觉得这个开源研究底座有帮助？** 欢迎点击右上角给 [**HuggingMath/theorem-os**](https://github.com/HuggingMath/theorem-os)（以及我们的公开证明档案与官网仓库 [**HuggingMath/TheoremOS**](https://github.com/HuggingMath/TheoremOS)）点亮 **⭐ Star**！你的支持能帮助更多数学与 AI4Science 研究者发现本项目，并持续追踪 [WestlakeNLP](https://westlakenlp.com/) 的后续研究进展。
+
+<a id="demo-video"></a>
+
+### 演示视频（1 分钟 · 1080p）
+
+<div align="center">
+  <a href="https://github.com/HuggingMath/theorem-os/releases/download/v0.1.0/theoremos-promo-1080p.mp4">
+    <img src="./docs/assets/promo-video-cover.jpg" alt="TheoremOS 1 分钟官方演示视频：从提出猜想、引理依赖图与人机协同、终端诊断、S3 内核独立验收，到已解答题目的完整证明轨迹展示" width="100%">
+  </a>
+  <p><sub>点击封面观看或下载 <a href="https://github.com/HuggingMath/theorem-os/releases/download/v0.1.0/theoremos-promo-1080p.mp4"><strong>1080p 高清完整版（1:07 · 英文旁白与字幕）</strong></a> — 完整演示：提出猜想 → 引理图谱与人机点拨 → 终端诊断 → 多学者协作 → M1–M5 开放架构 → S3 独立核验 → 公开档案与成功解答轨迹回溯。</sub></p>
+</div>
 
 ### 核心亮点
 
