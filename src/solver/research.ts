@@ -150,9 +150,8 @@ export async function runResearchLead(input: {
     : { turnTimeoutMs: Number.isFinite(input.maxTurnMs) ? input.maxTurnMs : undefined };
   const updateUsage = () => {
     const previous = state.tokenBudget!.status;
-    if (team) team.refreshUsage();
-    else state.tokenBudget = buildTokenBudget(input.maxTotalTokens, [research], enforcement);
-    if (state.tokenBudget.status !== previous && !dispatchAllowed()) input.emit('model_budget_stopped', { ...state.tokenBudget });
+    const next = team ? team.refreshUsage() : (state.tokenBudget = buildTokenBudget(input.maxTotalTokens, [research], enforcement));
+    if (next.status !== previous && !modelDispatchAllowed(next)) input.emit('model_budget_stopped', { ...next });
   };
   const errors: unknown[] = [];
   const cleanupErrors: unknown[] = [];

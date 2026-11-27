@@ -199,6 +199,7 @@ export class AgentResearchTeam {
     const records = [state, ...this.archive.workers];
     state.tokenBudget = buildTokenBudget(this.input.maxTotalTokens, records, state.tokenBudget?.enforcement);
     state.teamUsage = aggregateUsage(records);
+    return state.tokenBudget;
   }
 
   private event(from: string | null, to: string, kind: AgentTeamState['events'][number]['kind'], message: string,
