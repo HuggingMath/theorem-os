@@ -15,7 +15,7 @@ export function StartGuide(props: { onTemplate(): void; onLean(): void; onConfig
       <button type="button" aria-pressed={intent === 'statement'} onClick={() => setIntent('statement')}>{tx('我有一个数学命题', 'I have a mathematical claim')}</button>
       <button type="button" aria-pressed={intent === 'lean'} onClick={() => setIntent('lean')}>{tx('我有 Lean 证明草稿', 'I have a Lean proof draft')}</button>
     </div>
-    <p>{intent === 'statement' ? tx('写清对象、假设和结论。先核对 Lean 陈述，再批准证明计划。', 'State the objects, assumptions and claim. Review the Lean statement, then approve the proof plan.')
+    <p>{intent === 'statement' ? tx('写清对象、假设和结论。核对 Lean 陈述后，可选择先审初始路线再开始证明。', 'State the objects, assumptions and claim. After reviewing the Lean statement, you can choose to approve the initial route before proving.')
       : tx('准备完整的 import、定理声明和未完成证明，选择匹配环境后继续。', 'Prepare the imports, theorem statement and unfinished proof, then select the matching environment.')}</p>
     <p class="research-start-delivery">{tx('完成后可阅读证明路线、Lean 源码与独立验收记录。', 'Read the proof route, Lean source and independent acceptance record when the run finishes.')}</p>
     <button type="button" class="button" data-start-prepare onClick={intent === 'statement' ? props.onTemplate : props.onLean}>{intent === 'statement' ? tx('填写命题模板', 'Use a statement template') : tx('打开 Lean 编辑器', 'Open the Lean editor')}<Icon name="arrow-right" /></button>

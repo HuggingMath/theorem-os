@@ -28,8 +28,8 @@ import type { WebKnowledgeService } from './knowledgeService';
 import type { WebRunner } from './runner';
 import type { ResearchCandidateCheckReceipt, ResearchCandidateReview, ResearchFeedback, ResearchQuery } from './researchProjectTypes';
 import type { ResearchAssetRelease, ResearchConfigurationSelection, ResearchLibraryUse } from './researchAssetTypes';
-import type { WebRun } from './shared';
-import { webGuidanceSchema, webPlanApprovalSchema, webPlanProposalSchema } from './collaborationValidation';
+import { retiredResearchCoordinationMessage, type WebRun } from './shared';
+import { webPlanApprovalSchema } from './collaborationValidation';
 import { leanDiagnostics } from './precheck';
 import { shareSnapshot } from './share';
 import type { WebCommandResult, WebObservation } from './collaboration';
@@ -153,22 +153,20 @@ export class WebResearchApi {
     });
   }
   private dispatch(viewer: string, projectId: string, feedback: ResearchFeedback): Promise<ResearchFeedback> | ResearchFeedback {
-    if (feedback.kind === 'discussion') return feedback;
     if (feedback.kind === 'proof-submission') {
       const key = `${projectId}:${feedback.id}`;
       const pending = this.pendingProofs.get(key);
       if (pending) return pending;
       const checked = (feedback.proofCheck ? Promise.resolve(feedback) : this.checkProof(viewer, projectId, feedback))
-        .then(checked => checked.proofCheck?.status === 'checked' ? this.dispatchCommand(viewer, projectId, checked) : checked)
         .finally(() => this.pendingProofs.delete(key));
       this.pendingProofs.set(key, checked);
       return checked;
     }
-    return this.dispatchCommand(viewer, projectId, feedback);
-  }
-  private dispatchCommand(viewer: string, projectId: string, feedback: ResearchFeedback): Promise<ResearchFeedback> | ResearchFeedback {
+    if (feedback.kind !== 'plan-approval') return feedback;
+    if (feedback.target && !this.projects.resolveBinding(viewer, projectId, feedback.target.runId, 'approve').run.nativeTeamCapacity)
+      fail(409, retiredResearchCoordinationMessage);
     const command = this.projects.commandForFeedback(viewer, projectId, feedback.id);
-    if (!command) return feedback;
+    if (command?.command.type !== 'plan-approval') return feedback;
     return this.jobs.command(command.runOwner, command.runId, command.command)
       .then(receipt => this.projects.recordCommand(viewer, projectId, feedback.id, receipt));
   }
@@ -398,9 +396,14 @@ export class WebResearchApi {
         if (method === 'GET') { const project = this.refreshProject(viewer, id);
           return ref ? item(this.projects.feedback(viewer, id, ref)) : { status: 200, body: { items: project.feedback } }; }
         if (ref && subaction === 'decision' && method === 'POST') return item(this.projects.decideFeedback(viewer, id, ref, await body()));
-        if (ref && subaction === 'candidate-delivery' && method === 'POST') return item(await this.dispatch(viewer, id, this.projects.candidateDelivery(viewer, id, ref, await body())));
+        if (ref && subaction === 'candidate-delivery' && method === 'POST') fail(409, retiredResearchCoordinationMessage);
         if (!ref && method === 'POST') {
           const input = await body() as Record<string, unknown>;
+          if (['guidance', 'plan-edit', 'route-control'].includes(String(input.kind))) fail(409, retiredResearchCoordinationMessage);
+          const target = input.target as { runId?: unknown } | undefined;
+          if (input.kind === 'plan-approval' && typeof target?.runId === 'string' &&
+              !this.projects.resolveBinding(viewer, id, target.runId, 'approve').run.nativeTeamCapacity)
+            fail(409, retiredResearchCoordinationMessage);
           if (input.libraryTrialId && input.shareLibraryTrial !== true) fail(403, '请明确确认向项目成员共享这份固定试用证据。');
           const attachment = input.kind === 'proof-submission' && typeof input.libraryTrialId === 'string'
             ? this.libraryTrials.resolveCandidateAttachment(viewer, id, input.libraryTrialId, String(input.libraryTrialDigest ?? ''), true) : undefined;
@@ -417,30 +420,17 @@ export class WebResearchApi {
         if (method === 'POST' && ['guidance', 'edits', 'plan-approval'].includes(subaction)) {
           const permission = subaction === 'guidance' ? 'guidance' : subaction === 'edits' ? 'edit' : 'approve';
           const resolved = this.projects.resolveBinding(viewer, id, ref, permission);
-          const input = await body();
-          const authorized = this.projects.resolveBinding(viewer, id, ref, permission);
-          // A preview has no side effects and no feedback contribution.
-          if (subaction === 'edits' && parts[5] === 'preview') return { status: 200, body: { receipt:
-            await this.jobs.command(authorized.runOwner, ref, { type: 'edit-preview', proposal: parse(webPlanProposalSchema, input) }) } };
-          const requestId = parse(z.object({ id: z.string() }).passthrough(), input).id;
+          if (subaction !== 'plan-approval' || !resolved.run.nativeTeamCapacity)
+            fail(409, retiredResearchCoordinationMessage);
+          const approval = parse(webPlanApprovalSchema, await body());
+          const requestId = approval.id;
           const existing = this.projects.detail(viewer, id).feedback.find(feedback => feedback.requestId === requestId && feedback.author.id === this.projects.identity(viewer));
           if (existing?.target?.runId && existing.target.runId !== ref) fail(409, '同一命令标识不能用于另一运行。');
           const observation = resolved.run.observation;
           const target = existing?.target ?? { runId: ref, statementVersionId: resolved.binding.statementVersionId,
             observationRef: observation ? { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest } : fail(409, '运行尚无可操作观测。') };
-          let submitted: ResearchFeedback;
-          if (subaction === 'guidance') {
-            const guidance = parse(webGuidanceSchema, input);
-            submitted = this.projects.submitFeedback(viewer, id, { requestId: guidance.id, kind: 'guidance', text: guidance.text,
-              recipient: guidance.recipient, target: { ...target, observationRef: guidance.observationRef, ...(guidance.taskRef ? { taskRef: guidance.taskRef } : {}) } });
-          } else if (subaction === 'edits') {
-            const { id: requestId, ...proposal } = parse(webPlanProposalSchema, input);
-            submitted = this.projects.submitFeedback(viewer, id, { requestId, kind: 'plan-edit', text: '提交计划修改', target, proposal });
-          } else {
-            const approval = parse(webPlanApprovalSchema, input);
-            submitted = this.projects.submitFeedback(viewer, id, { requestId: approval.id, kind: 'plan-approval', text: '批准当前研究计划',
-              target, planVersion: approval.planVersion });
-          }
+          const submitted = this.projects.submitFeedback(viewer, id, { requestId, kind: 'plan-approval', text: '批准当前研究计划',
+            target, planVersion: approval.planVersion });
           const feedback = await this.dispatch(viewer, id, submitted);
           const receipt = feedback.delivery.commandId && this.jobs.commandReceipt(resolved.runOwner, ref, feedback.delivery.commandId);
           return { status: 200, body: { receipt: receipt ? this.commandView(viewer, id, receipt) : null, feedback } };

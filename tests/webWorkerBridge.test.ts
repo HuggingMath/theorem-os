@@ -4,17 +4,15 @@ import { Writable } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createWebWorkerBridge, freezeWebKnowledge, handleWebWorkerCommand, writeWebActiveRun } from '../apps/web/workerBridge';
 import { writeSolverRunState } from '../src/solver/archive';
-import { exportRunPlan } from '../src/solver/inspection';
 import { taskVersion } from '../src/solver/tasks';
 import { readKnowledgeCatalog } from '../src/solver/theoremKnowledgeStore';
 import { WebKnowledgeService } from '../apps/web/knowledgeService';
 import { WebStorage } from '../apps/web/storage';
 import { WebTrajectories } from '../apps/web/trajectory';
-import type { WorkerInput, WorkerMessage } from '../apps/web/shared';
+import { retiredResearchCoordinationCode, type WorkerInput, type WorkerMessage } from '../apps/web/shared';
 import { webWorkerFixture } from './helpers/webWorkerBridge';
 import { mathDigest, withMathRuntimeLease } from '../src/math/mathRuntimeIo';
 import { hashMathFormalSourceDeclaration } from '../src/math/leanSource';
-import { webGuidanceSchema } from '../apps/web/collaborationValidation';
 import { parseWorkerMessage } from '../apps/web/runner';
 import type { WebObservation } from '../apps/web/collaboration';
 import { webProofMessageSink } from '../apps/web/proofJournal';
@@ -268,7 +266,7 @@ describe('isolated Web worker bridge', () => {
       .toMatchObject({ taskId: f.goal.id, record: { status: 'kernel_verified', passed: false } });
   });
 
-  it('continues observation sequences across a host-authorized library round and retires old guidance references', async () => {
+  it('continues observation sequences across a host-authorized library round', async () => {
     const f = fixture(), messages: WorkerMessage[] = [];
     const options = { webRunId: 'web-fixture', directory: f.directory, onMessage: (message: WorkerMessage) => messages.push(message) };
     const original = createWebWorkerBridge({ ...options, output: f.output });
@@ -290,21 +288,12 @@ describe('isolated Web worker bridge', () => {
     expect((await next.capture()).observation.sequence).toBe(3);
     expect(messages.filter(message => message.type === 'library_restart')).toHaveLength(1);
     expect(JSON.parse(fs.readFileSync(path.join(f.directory, 'web-bridge.json'), 'utf8'))).toMatchObject({
-      solverRunId: 'solver-next', libraryRound: 1, sequence: 3,
-      observations: [{ sequence: 3, stateDigest: captured.observation.snapshot.stateDigest }] });
+      solverRunId: 'solver-next', libraryRound: 1, sequence: 3 });
 
     writeWebActiveRun({ ...options, output }, f.activeRunFile);
     const commandOptions = { activeRunFile: f.activeRunFile };
     expect((await handleWebWorkerCommand({ type: 'capture' }, commandOptions)).observation)
       .toMatchObject({ solverRunId: 'solver-next', sequence: 3 });
-    const guidance = { id: 'old-round-direction', recipient: { kind: 'task', id: 'goal' },
-      taskRef: { id: 'goal', version: taskVersion(f.goal) }, text: 'Inspect the intermediate implication.',
-      observationRef: { sequence: before.sequence, stateDigest: before.snapshot.stateDigest } };
-    expect(await handleWebWorkerCommand({ type: 'guidance', guidance }, commandOptions)).toMatchObject({
-      status: 'rejected', reason: 'web_guidance_observation_unknown' });
-    expect(await handleWebWorkerCommand({ type: 'guidance', guidance: { ...guidance, id: 'new-round-direction',
-      observationRef: { sequence: captured.observation.sequence, stateDigest: captured.observation.snapshot.stateDigest } } }, commandOptions))
-      .toMatchObject({ status: 'queued' });
     await expect(original.capture({ force: true })).rejects.toThrow('web_bridge_run_identity_changed');
   });
 
@@ -394,57 +383,6 @@ describe('isolated Web worker bridge', () => {
     expect((await createWebWorkerBridge(options).capture()).observation.sequence).toBe(1);
   });
 
-  it('previews control changes without changing state and queues the same full versioned plan once', async () => {
-    const f = fixture(), before = fs.readFileSync(f.stateFile);
-    const proposal = { ...exportRunPlan(f.state), id: 'pause-goal' };
-    proposal.tasks = proposal.tasks.map(task => task.id === 'goal' ? { ...task, status: 'paused' as const } : task);
-    const options = { activeRunFile: f.activeRunFile };
-    const preview = await handleWebWorkerCommand({ type: 'edit-preview', proposal }, options);
-    expect(preview).toMatchObject({ id: 'pause-goal', status: 'validated', affectedTaskIds: ['goal'], changes: [{ taskId: 'goal', fields: ['status'] }] });
-    expect(fs.readFileSync(f.stateFile)).toEqual(before);
-    expect(fs.existsSync(path.join(path.dirname(f.stateFile), 'edits.jsonl'))).toBe(false);
-    expect(await handleWebWorkerCommand({ type: 'edit', proposal }, options)).toMatchObject({ id: 'pause-goal', status: 'queued', commandDigest: preview.commandDigest });
-    expect(await handleWebWorkerCommand({ type: 'edit', proposal }, options)).toMatchObject({ id: 'pause-goal', status: 'already_queued' });
-    expect(fs.readFileSync(path.join(path.dirname(f.stateFile), 'edits.jsonl'), 'utf8').trim().split('\n')).toHaveLength(1);
-    await expect(handleWebWorkerCommand({ type: 'edit', proposal: { ...proposal, id: 'stale', baseVersion: 'stale' } }, options)).rejects.toThrow('version_conflict');
-  });
-
-  it.each(['edit-preview', 'edit'] as const)('rejects an unowned proofPath in %s with its proposal id and repair details without appending', async type => {
-    const f = fixture(), before = fs.readFileSync(f.stateFile);
-    const proposal = { ...exportRunPlan(f.state), id: 'invalid-proof-path' };
-    proposal.tasks = proposal.tasks.map(task => task.id === 'goal' ? { ...task, proofPath: 'generated/problem/Submission.lean' } : task);
-    const result = await handleWebWorkerCommand({ type, proposal }, { activeRunFile: f.activeRunFile });
-    expect(result).toMatchObject({ id: proposal.id, status: 'rejected', baseVersion: 'plan-v1' });
-    expect(result.reason).toMatch(/^math_plan_invalid_proof_target:/u);
-    expect(result.reason).toContain('"taskId":"goal"');
-    expect(result.reason).toContain('"proofPath":"generated/problem/Submission.lean"');
-    expect(result.reason).toContain('Use an owned proofPath');
-    expect(fs.readFileSync(f.stateFile)).toEqual(before);
-    expect(fs.existsSync(path.join(path.dirname(f.stateFile), 'edits.jsonl'))).toBe(false);
-  });
-
-  it('rejects an unavailable preferred owner during both preview and submission', async () => {
-    const f = fixture(), before = fs.readFileSync(f.stateFile), options = { activeRunFile: f.activeRunFile };
-    const proposal = { ...exportRunPlan(f.state), id: 'missing-preferred-owner' };
-    proposal.tasks = proposal.tasks.map(task => task.id === 'goal' ? { ...task, preferredOwnerId: 'missing-worker' } : task);
-    const rejected = { id: proposal.id, status: 'rejected', baseVersion: proposal.baseVersion, reason: 'math_plan_task_owner_unavailable' };
-    expect(await handleWebWorkerCommand({ type: 'edit-preview', proposal }, options)).toEqual(rejected);
-    expect(await handleWebWorkerCommand({ type: 'edit', proposal }, options)).toEqual(rejected);
-    expect(fs.readFileSync(f.stateFile)).toEqual(before);
-    expect(fs.existsSync(path.join(path.dirname(f.stateFile), 'edits.jsonl'))).toBe(false);
-  });
-
-  it('keeps an incomplete edit queue distinct from a rejected proposal', async () => {
-    const f = fixture(), before = fs.readFileSync(f.stateFile);
-    const proposal = { ...exportRunPlan(f.state), id: 'valid-proposal' };
-    const log = path.join(path.dirname(f.stateFile), 'edits.jsonl'), partial = '{"id":';
-    fs.writeFileSync(log, partial);
-    await expect(handleWebWorkerCommand({ type: 'edit', proposal }, { activeRunFile: f.activeRunFile }))
-      .rejects.toThrow('math_edit_incomplete_log');
-    expect(fs.readFileSync(log, 'utf8')).toBe(partial);
-    expect(fs.readFileSync(f.stateFile)).toEqual(before);
-  });
-
   it('allows capture before cancellation and freezes reusable catalog input with its exact digest', async () => {
     const f = fixture();
     const captured = await handleWebWorkerCommand({ type: 'capture' }, { activeRunFile: f.activeRunFile });
@@ -467,83 +405,32 @@ describe('isolated Web worker bridge', () => {
     expect(readKnowledgeCatalog(file).base.sources).toEqual(captured.catalog!.sources);
   });
 
-  it('accepts guidance only for a captured observation and reports its queued receipt', async () => {
+  it('captures historical guidance and rejects retired commands before modifying the run', async () => {
     const f = fixture(), options = { activeRunFile: f.activeRunFile };
-    const captured = await handleWebWorkerCommand({ type: 'capture' }, options), observation = captured.observation!;
-    const guidance = { id: 'direction-one', recipient: { kind: 'task', id: 'goal' },
-      taskRef: { id: 'goal', version: taskVersion(f.goal) }, text: 'Inspect the missing intermediate implication.',
-      observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest } };
-    expect(await handleWebWorkerCommand({ type: 'guidance', guidance }, options)).toMatchObject({ id: guidance.id, status: 'queued',
-      guidance: { text: guidance.text, recipient: guidance.recipient } });
-    expect(await handleWebWorkerCommand({ type: 'guidance', guidance: { ...guidance, id: 'unknown',
-      observationRef: { ...guidance.observationRef, sequence: 999 } } }, options)).toEqual({
-      id: 'unknown', status: 'rejected', reason: 'web_guidance_observation_unknown' });
-    expect((await handleWebWorkerCommand({ type: 'capture' }, options)).observation!.guidance).toHaveLength(1);
+    const observation = (await handleWebWorkerCommand({ type: 'capture' }, options)).observation!;
+    const observationRef = { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest };
+    const guidance = { id: 'historical-direction', recipient: { kind: 'task', id: 'goal' },
+      taskRef: { id: 'goal', version: taskVersion(f.goal) }, text: 'Check the base case first.', observationRef };
+    const at = new Date().toISOString();
+    const record = { ...guidance, status: 'delivered', createdAt: at, updatedAt: at };
+    const guidanceLog = path.join(path.dirname(f.stateFile), 'human-guidance.json');
+    fs.writeFileSync(guidanceLog, JSON.stringify({ schema: 'theorem-os.human-guidance.v1', runId: f.state.runId, records: [record] }));
     const metaFile = path.join(f.directory, 'web-bridge.json'), meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
-    meta.observations = []; fs.writeFileSync(metaFile, JSON.stringify(meta));
-    expect(await handleWebWorkerCommand({ type: 'guidance', guidance }, options)).toMatchObject({
-      id: guidance.id, status: 'queued', guidance: { text: guidance.text } });
-    expect(await handleWebWorkerCommand({ type: 'guidance', guidance: { ...guidance, text: 'A different message under the same ID' } }, options)).toEqual({
-      id: guidance.id, status: 'rejected', reason: 'math_guidance_id_conflict' });
-    expect(await handleWebWorkerCommand({ type: 'guidance', guidance: { ...guidance, id: 'uncaptured-new-guidance' } }, options)).toEqual({
-      id: 'uncaptured-new-guidance', status: 'rejected', reason: 'web_guidance_observation_unknown' });
-    expect((await handleWebWorkerCommand({ type: 'capture' }, options)).observation!.guidance).toHaveLength(1);
-  });
-
-  it('withdraws a queued note with a fresh observation and rejects unknown notes without writing', async () => {
-    const f = fixture(), options = { activeRunFile: f.activeRunFile };
-    const observation = (await handleWebWorkerCommand({ type: 'capture' }, options)).observation!;
-    const guidance = { id: 'queued-direction', recipient: { kind: 'task', id: 'goal' },
-      taskRef: { id: 'goal', version: taskVersion(f.goal) }, text: 'Check the base case first.',
-      observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest } };
-    expect(await handleWebWorkerCommand({ type: 'guidance', guidance }, options)).toMatchObject({ status: 'queued' });
-    const withdrawn = await handleWebWorkerCommand({ type: 'guidance-withdraw', id: 'withdraw-1', guidanceId: guidance.id }, options);
-    expect(withdrawn).toMatchObject({ id: 'withdraw-1', status: 'withdrawn', guidance: { id: guidance.id, status: 'failed', reason: 'math_guidance_withdrawn' } });
-    expect(withdrawn.observation!.guidance).toEqual([expect.objectContaining({ id: guidance.id, status: 'failed', reason: 'math_guidance_withdrawn' })]);
-    const before = fs.readFileSync(path.join(path.dirname(f.stateFile), 'human-guidance.json'));
-    expect(await handleWebWorkerCommand({ type: 'guidance-withdraw', id: 'withdraw-2', guidanceId: 'never-sent' }, options))
-      .toMatchObject({ id: 'withdraw-2', status: 'rejected', reason: 'math_guidance_unknown', observation: { guidance: [expect.objectContaining({ id: guidance.id })] } });
-    expect(fs.readFileSync(path.join(path.dirname(f.stateFile), 'human-guidance.json'))).toEqual(before);
-    await expect(handleWebWorkerCommand({ type: 'guidance-withdraw', id: 'withdraw-3', guidanceId: '../escape' }, options)).rejects.toThrow();
-  });
-
-  it('keeps a known guidance rejection distinct from an uncertain queue write', async () => {
-    const f = fixture(), options = { activeRunFile: f.activeRunFile };
-    const observation = (await handleWebWorkerCommand({ type: 'capture' }, options)).observation!;
-    const guidance = { id: 'superseded-direction', recipient: { kind: 'task', id: 'goal' },
-      taskRef: { id: 'goal', version: taskVersion(f.goal) }, text: 'Inspect this version before changing its dependencies.',
-      observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest } };
-    const before = fs.readFileSync(f.stateFile);
-    expect(await handleWebWorkerCommand({ type: 'guidance', guidance: { ...guidance,
-      taskRef: { ...guidance.taskRef, version: 'old-task-version' } } }, options)).toEqual({
-      id: guidance.id, status: 'rejected', reason: 'math_guidance_task_superseded' });
-    expect(fs.readFileSync(f.stateFile)).toEqual(before);
-    expect((await handleWebWorkerCommand({ type: 'capture' }, options)).observation!.guidance).toEqual([]);
-    fs.writeFileSync(path.join(path.dirname(f.stateFile), 'human-guidance.json'), '{invalid');
-    await expect(handleWebWorkerCommand({ type: 'guidance', guidance }, options)).rejects.toThrow();
-  });
-
-  it('passes a validated candidate attachment through the worker command and captures it without editing source', async () => {
-    const f = fixture(), options = { activeRunFile: f.activeRunFile };
-    const observation = (await handleWebWorkerCommand({ type: 'capture' }, options)).observation!;
-    const baseline = observation.sources.find(item => item.taskId === 'goal')!, source = baseline.source.replace('by sorry', 'by trivial');
-    const taskRef = { id: baseline.taskId, version: baseline.taskVersion };
-    const guidance = webGuidanceSchema.parse({ id: 'candidate-direction', recipient: { kind: 'task', id: taskRef.id }, taskRef,
-      text: 'Please assess this independently checked candidate through the ordinary task protocol.',
-      observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest },
-      candidate: { source, sourceDigest: mathDigest(source), file: baseline.file, baseCommit: baseline.commit,
-        baseSourceDigest: baseline.sourceDigest, environmentDigest: baseline.environmentDigest, taskRef } });
-    const before = fs.readFileSync(path.join(f.project, baseline.file));
-    expect(await handleWebWorkerCommand({ type: 'guidance', guidance }, options)).toMatchObject({
-      id: guidance.id, status: 'queued', guidance: { candidate: guidance.candidate },
-    });
+    fs.writeFileSync(metaFile, JSON.stringify({ ...meta, observations: [observationRef] }));
+    const state = fs.readFileSync(f.stateFile), log = fs.readFileSync(guidanceLog);
+    const proposal = { ...observation.plan, id: 'pause-goal' };
+    for (const command of [{ type: 'edit-preview', proposal }, { type: 'edit', proposal },
+      { type: 'guidance', guidance: { ...guidance, id: 'new-direction' } },
+      { type: 'guidance-withdraw', id: 'withdraw', guidanceId: guidance.id }]) {
+      await expect(handleWebWorkerCommand(command, options)).rejects.toThrow(retiredResearchCoordinationCode);
+    }
+    expect(fs.readFileSync(f.stateFile)).toEqual(state);
+    expect(fs.readFileSync(guidanceLog)).toEqual(log);
+    expect(fs.existsSync(path.join(path.dirname(f.stateFile), 'edits.jsonl'))).toBe(false);
     const captured = (await handleWebWorkerCommand({ type: 'capture' }, options)).observation!;
-    expect(captured.guidance[0].candidate).toEqual(guidance.candidate);
-    expect(await handleWebWorkerCommand({ type: 'guidance', guidance: { ...guidance, id: 'changed-environment',
-      candidate: { ...guidance.candidate, environmentDigest: '0'.repeat(64) } } }, options)).toMatchObject({
-      status: 'rejected', reason: 'math_guidance_candidate_environment_changed',
-    });
-    expect(fs.readFileSync(path.join(f.project, baseline.file))).toEqual(before);
+    expect(captured.sequence).toBe(observation.sequence + 1);
+    expect(captured.guidance).toEqual([record]);
+    expect(captured.plan).toEqual(observation.plan);
   });
 
   it('queues a plan approval only for the exact pending version and reports each saved-checkpoint rejection', async () => {

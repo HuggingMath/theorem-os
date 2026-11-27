@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWebService } from '../apps/web/server';
 import { readWebConfig } from '../apps/web/config';
 import { DockerWebRunner, type WebRunner } from '../apps/web/runner';
-import type { WebCommand, WebCommandResult, WebGuidanceRecord, WebObservation } from '../apps/web/collaboration';
+import type { WebCommand, WebCommandResult, WebObservation } from '../apps/web/collaboration';
+import { webAgentTeamPreset } from '../apps/web/researchMode';
 import type { WebResult, WebRunInput, WorkerInput, WorkerMessage } from '../apps/web/shared';
 import type { WebPrecheckRunner } from '../apps/web/precheck';
 import type { ResearchAsset, ResearchAssetPreview, ResearchAssetRelease, ResearchPublication } from '../apps/web/researchAssetTypes';
@@ -54,10 +55,18 @@ class ResearchFixtureRunner implements WebRunner {
   private observations = new Map<string, WebObservation>();
   private sends = new Map<string, (message: WorkerMessage) => void>();
   private completions = new Map<string, () => void>();
-  async readiness() { return { ready: true, message: 'Disposable fixture' }; }
+  async readiness() { return { ready: true, nativeTeam: false, message: 'Disposable fixture' }; }
   async run(value: WorkerInput, send: (message: WorkerMessage) => void, signal: AbortSignal) {
     this.calls.push(structuredClone(value)); this.sends.set(value.id, send);
-    const observed = observation(value.id); this.observations.set(value.id, observed);
+    const observed = observation(value.id);
+    if (value.input.nativeTeamCapacity) Object.assign(observed.inspection.configuration, {
+      workers: 1, coordination: 'independent', researchMode: 'skill',
+      researchSkill: { name: 'theoremos-research', digest: mathDigest('fixture skill'), loading: 'native' },
+      researchDelegation: { mode: 'team', maxAgents: value.input.nativeTeamCapacity },
+    });
+    if (value.input.planApproval) observed.inspection.planApproval = { required: true, status: 'pending', planVersion: 'plan-v1',
+      rejections: [], leadRevising: false };
+    this.observations.set(value.id, observed);
     send({ type: 'progress', event: 'solve_started', message: 'PRIVATE_WORKER_LOG' });
     send({ type: 'observation', observation: structuredClone(observed) });
     await new Promise<void>(resolve => {
@@ -86,14 +95,7 @@ class ResearchFixtureRunner implements WebRunner {
     this.commands.push({ runId, command: structuredClone(command) });
     const observed = this.observations.get(runId)!;
     let receipt: WebCommandResult;
-    if (command.type === 'guidance') {
-      const guidance: WebGuidanceRecord = { ...command.guidance, status: 'delivered', createdAt: at, updatedAt: at, deliveredTo: ['lead'] };
-      observed.guidance.push(guidance); receipt = { id: guidance.id, status: 'delivered', guidance };
-    } else if (command.type === 'edit') {
-      observed.inspection.planVersion = 'plan-v2';
-      observed.inspection.edits.push({ id: command.proposal.id, status: 'applied', planVersion: 'plan-v2', affectedTasks: ['target'] });
-      receipt = { id: command.proposal.id, status: 'queued' };
-    } else if (command.type === 'plan-approval') {
+    if (command.type === 'plan-approval') {
       observed.inspection.planApproval = { required: true, status: 'approved', planVersion: command.approval.planVersion,
         approvedId: command.approval.id, approvedVersion: command.approval.planVersion, rejections: [], leadRevising: false };
       receipt = { id: command.approval.id, status: 'approved', planVersion: command.approval.planVersion };
@@ -142,14 +144,24 @@ describe('collaborative research through the actual HTTP service', () => {
     const response = await request(client, route, body, method), result = await response.json();
     expect(response.status, `${route}: ${JSON.stringify(result)}`).toBe(status); return result.item;
   }
-  async function newRun(client: Client, changes: object = {}) {
-    const response = await request(client, '/api/runs', { ...input(), ...changes }), result = await response.json();
-    expect(response.status, JSON.stringify(result)).toBe(201);
-    for (let attempt = 0; attempt < 10 && !service.jobs.get(client.owner, result.run.id)?.observation; attempt++)
+  async function newRun(client: Client, changes: Partial<WebRunInput> & { requestId?: string } = {}) {
+    const submitted = { ...input(), ...changes };
+    let run: WebRun;
+    if (submitted.researchSelection || submitted.workers === 1) {
+      const response = await request(client, '/api/runs', { ...submitted, workers: 1, coordination: 'independent' });
+      const result = await response.json();
+      expect(response.status, JSON.stringify(result)).toBe(201);
+      run = result.run;
+    } else {
+      // The project still supports historical cooperative evidence and commands.
+      run = service.jobs.create(client.owner, { ...submitted, source: submitted.source.trim() },
+        { id: 'openai', name: 'Research fixture', baseUrl: 'https://api.openai.com/v1' });
+    }
+    for (let attempt = 0; attempt < 10 && !service.jobs.get(client.owner, run.id)?.observation; attempt++)
       await new Promise<void>(resolve => setImmediate(resolve));
-    expect(service.jobs.get(client.owner, result.run.id)?.observation).toBeDefined(); return result.run;
+    expect(service.jobs.get(client.owner, run.id)?.observation).toBeDefined(); return run;
   }
-  async function projectWithRun(alice: Client, bob: Client, visibility = 'members') {
+  async function projectWithRun(alice: Client, bob: Client, visibility = 'members', changes: Partial<WebRunInput> = {}) {
     const source = `${original}\n`;
     let project = await item<ResearchProjectDetail>(alice, '/api/research/theorems',
       { requestId: 'create-project', title: 'True theorem', visibility }, 'POST', 201);
@@ -158,7 +170,7 @@ describe('collaborative research through the actual HTTP service', () => {
       { requestId: 'member-bob', expectedRevision: project.revision, role: 'collaborator' }, 'PUT');
     project = await item(alice, route + '/versions', { requestId: 'statement-v1', expectedRevision: project.revision,
       statement: 'Prove True', source, environment: 'standard' }, 'POST', 201);
-    const run = await newRun(alice, { source });
+    const run = await newRun(alice, { source, ...changes });
     project = await item(alice, route + '/runs', { requestId: 'bind-run', expectedRevision: project.revision,
       runId: run.id, statementVersionId: project.versions[0].id, exposure: visibility === 'public' ? 'public' : 'members',
       grants: { guidance: true, edit: true, approve: true, proof: true } }, 'POST', 201);
@@ -208,9 +220,9 @@ describe('collaborative research through the actual HTTP service', () => {
     const observed = service.jobs.get(alice.owner, run.id)!.observation!;
     const target = { runId: run.id, statementVersionId: project.versions[0].id, taskRef: { id: 'target', version: 'task-v1' },
       observationRef: { sequence: observed.sequence, stateDigest: observed.snapshot.stateDigest } };
-    const feedback = await item<ResearchFeedback>(bob, route + '/feedback', { requestId: 'private-assignment-feedback',
+    const feedback = service.research.projects.submitFeedback(bob.owner, project.id, { requestId: 'private-assignment-feedback',
       kind: 'guidance', text: 'Private work on this exact task', visibility: 'members', target,
-      recipient: { kind: 'task', id: 'target' } }, 'POST', 201);
+      recipient: { kind: 'task', id: 'target' } });
     let current = await item<ResearchProjectDetail>(alice, route);
     current = await item(bob, route + '/assignments', { requestId: 'submit-assignment', expectedRevision: current.revision,
       target, status: 'submitted', feedbackId: feedback.id });
@@ -260,8 +272,8 @@ describe('collaborative research through the actual HTTP service', () => {
       : kind === 'plan-approval' ? { planVersion: observed.inspection.planVersion }
       : kind === 'proof-submission' ? { source: proof, base: { commit, sourceDigest, environmentDigest, file: 'Main.lean' } }
       : { proposal: { schema: 'deepscientist.math.plan-edit.v1', baseVersion: observed.inspection.planVersion, tasks: observed.plan!.tasks } };
-    const submitted = await item<ResearchFeedback>(bob, route + '/feedback',
-      { requestId: `decision-${kind}`, kind, text: 'A contribution to review', target, ...payload }, 'POST', 201);
+    const submitted = service.research.projects.submitFeedback(bob.owner, project.id,
+      { requestId: `decision-${kind}`, kind, text: 'A contribution to review', target, ...payload });
     expect(submitted.kind).toBe(kind);
     let current = await item<ResearchProjectDetail>(bob, route);
     expect(current.permissions.manage).toBe(false); expect(current.runs[0].permissions.manage).toBe(false);
@@ -306,11 +318,10 @@ describe('collaborative research through the actual HTTP service', () => {
     let current = await item<ResearchProjectDetail>(bob, route + '/runs', { requestId: 'bind-ungranted-run', expectedRevision: project.revision,
       runId: run.id, statementVersionId: project.versions[0].id }, 'POST', 201);
     const observed = service.jobs.get(bob.owner, run.id)!.observation!;
-    const feedback = await item<ResearchFeedback>(bob, route + '/feedback', { requestId: 'owner-guidance', kind: 'guidance',
+    const feedback = service.research.projects.submitFeedback(bob.owner, project.id, { requestId: 'owner-guidance', kind: 'guidance',
       text: 'A run owner contribution', recipient: { kind: 'task', id: 'target' },
       target: { runId: run.id, statementVersionId: project.versions[0].id, taskRef: { id: 'target', version: 'task-v1' },
-        observationRef: { sequence: observed.sequence, stateDigest: observed.snapshot.stateDigest } } }, 'POST', 201);
-    expect(feedback.delivery.status).toBe('delivered');
+        observationRef: { sequence: observed.sequence, stateDigest: observed.snapshot.stateDigest } } });
     current = await item(alice, route);
     expect(current.permissions.manage).toBe(true);
     expect(current.runs.find(binding => binding.runId === run.id)?.permissions.guidance).toBe(false);
@@ -343,133 +354,51 @@ describe('collaborative research through the actual HTTP service', () => {
       requestId: 'outsider-discussion-decision', expectedRevision: accepted.revision })).status).toBe(403);
   });
 
-  it('authorizes a collaborator guidance proxy, persists feedback, deduplicates retries and revokes access', async () => {
+  it('keeps historical guidance visible through the project while rejecting new guidance', async () => {
     const alice = await client('Alice'), bob = await client('Bob'), carol = await client('Carol');
     const { project, run, route } = await projectWithRun(alice, bob);
-    expect((await request(carol, route)).status).toBe(404);
-    expect((await request(bob, `/api/runs/${run.id}`)).status).toBe(404);
-    const observed = (await request(bob, route + `/runs/${run.id}/observation`));
-    expect(observed.status).toBe(200); const observation: WebObservation = (await observed.json()).observation;
-    const guidance = { id: 'guide-once', recipient: { kind: 'task', id: 'target' }, text: 'Try using helper',
-      taskRef: { id: 'target', version: 'task-v1' }, observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest } };
-    const response = await request(bob, route + `/runs/${run.id}/guidance`, guidance);
-    expect(response.status).toBe(200); const body = await response.json();
-    expect(body.receipt.id).toBe(guidance.id); expect(body.receipt.guidance.id).toBe(guidance.id);
-    expect(body.receipt.observation.guidance[0].id).toBe(guidance.id);
-    expect(body.feedback.delivery.status).toBe('delivered'); expect(body.feedback.decision.status).toBe('pending');
-    expect(body.feedback.author.id).toBe(bob.researcherId); expect(runner.commands).toHaveLength(1);
-    expect(runner.commands[0]!.command).toMatchObject({ type: 'guidance', guidance: { id: body.feedback.id } });
-    const commandRead = await request(bob, route + `/runs/${run.id}/commands/${guidance.id}`);
-    expect(commandRead.status).toBe(200); expect((await commandRead.json()).receipt.id).toBe(guidance.id);
-    const guidanceRead = await request(bob, route + `/runs/${run.id}/guidance/${guidance.id}`);
-    expect(guidanceRead.status).toBe(200); expect((await guidanceRead.json()).guidance.id).toBe(guidance.id);
-    const observationRead = await request(bob, route + `/runs/${run.id}/observation`);
-    expect(observationRead.status).toBe(200); const observationBody = await observationRead.json();
-    expect(observationBody.observation.guidance[0].id).toBe(guidance.id);
-    expect(observationBody.run.observation.guidance[0].id).toBe(guidance.id);
-    expect((await request(bob, route + `/runs/${run.id}/guidance`, guidance)).status).toBe(200);
-    expect(runner.commands).toHaveLength(1);
-    expect((await request(bob, route + `/runs/${run.id}/guidance`, { ...guidance, text: 'Changed content' })).status).toBe(409);
-    const feedback = await item<ResearchFeedback>(bob, route + `/feedback/${body.feedback.id}`);
-    const accepted = await item<ResearchFeedback>(alice, route + `/feedback/${feedback.id}/decision`,
-      { requestId: 'decision', expectedRevision: feedback.revision, status: 'accepted', reason: 'A useful suggestion' });
-    expect(accepted.execution.status).toBe('not-started');
-    const currentObservation = service.jobs.get(alice.owner, run.id)!.observation!;
-    const planFeedback = await item<ResearchFeedback>(bob, route + '/feedback', { requestId: 'apply-guided-plan', kind: 'plan-edit', text: 'Apply the suggested route',
-      target: { runId: run.id, statementVersionId: project.versions[0].id,
-        observationRef: { sequence: currentObservation.sequence, stateDigest: currentObservation.snapshot.stateDigest } },
-      proposal: { schema: 'deepscientist.math.plan-edit.v1', baseVersion: 'plan-v1', tasks: currentObservation.plan!.tasks } }, 'POST', 201);
-    expect(planFeedback.execution.status).toBe('completed');
-    const latestGuidance = await item<ResearchFeedback>(alice, route + `/feedback/${feedback.id}`);
-    const linked = await item<ResearchFeedback>(alice, route + `/feedback/${feedback.id}/decision`,
-      { requestId: 'link-applied-plan', expectedRevision: latestGuidance.revision, status: 'accepted', reason: 'Applied to the plan', evidenceRefs: [`edit:${planFeedback.id}`] });
-    expect(linked.execution).toMatchObject({ status: 'completed', planVersion: 'plan-v2', resultRefs: [`edit:${planFeedback.id}`] });
-    let current = await item<ResearchProjectDetail>(alice, route);
-    current = await item(alice, route + `/members/${bob.researcherId}`, { requestId: 'remove-bob', expectedRevision: current.revision, role: null }, 'PUT');
-    expect((await request(bob, route + `/runs/${run.id}/observation`)).status).toBe(404);
-    expect((await request(bob, route + `/runs/${run.id}/guidance`, { ...guidance, id: 'after-revocation' })).status).toBe(404);
-    expect(current.id).toBe(project.id); expect(runner.commands).toHaveLength(2);
-  });
-
-  it('recovers a forwarded discussion after an unknown command outcome without sending another command', async () => {
-    const alice = await client('Alice'), bob = await client('Bob');
-    const { project, run, route } = await projectWithRun(alice, bob);
-    const source = await item<ResearchFeedback>(bob, route + '/feedback', { requestId: 'recovery-discussion',
-      kind: 'discussion', text: 'Try the supporting lemma.', visibility: 'members' }, 'POST', 201);
-    const observed = service.jobs.get(alice.owner, run.id)!.observation!;
-    const input = { requestId: 'recovery-forward', sourceFeedbackId: source.id, kind: 'guidance', text: source.text,
-      target: { runId: run.id, statementVersionId: project.versions[0].id, taskRef: { id: 'target', version: 'task-v1' },
-        observationRef: { sequence: observed.sequence, stateDigest: observed.snapshot.stateDigest } },
-      recipient: { kind: 'task', id: 'target' } };
-    vi.spyOn(runner, 'command').mockImplementationOnce(async (runId, command) => {
-      runner.commands.push({ runId, command: structuredClone(command) });
-      throw new Error('Fixture transport closed after submitting the command; outcome is unknown.');
-    });
-    const lostResponse = await request(alice, route + '/feedback', input);
-    expect(lostResponse.status).toBe(201); await lostResponse.body?.cancel();
-
-    const listResponse = await request(alice, route + '/feedback');
-    expect(listResponse.status).toBe(200);
-    const feedback = ((await listResponse.json()).items as ResearchFeedback[]).find(item => item.requestId === input.requestId)!;
-    expect(feedback).toMatchObject({ sourceFeedbackId: source.id, author: { id: alice.researcherId },
-      visibility: 'members', delivery: { status: 'unknown', commandId: feedback.id }, decision: { status: 'pending' } });
-    const saved = await request(alice, route + `/runs/${run.id}/commands/${input.requestId}`);
-    expect(saved.status).toBe(200); expect((await saved.json()).receipt).toMatchObject({ id: input.requestId, status: 'unknown' });
-    const replay = await item<ResearchFeedback>(alice, route + '/feedback', input, 'POST', 201);
-    expect(replay.id).toBe(feedback.id); expect(replay.delivery.status).toBe('unknown'); expect(runner.commands).toHaveLength(1);
-    expect((await request(alice, route + '/feedback', { ...input, text: 'Changed retry content.' })).status).toBe(409);
-    expect(runner.commands).toHaveLength(1);
-
-    runner.update(run.id, next => {
-      next.guidance.push({ id: feedback.id, text: input.text, recipient: { kind: 'task', id: 'target' },
-        taskRef: input.target.taskRef, observationRef: input.target.observationRef, status: 'delivered', createdAt: at, updatedAt: at, deliveredTo: ['lead'] });
-      next.inspection.tasks[0]!.version = 'task-v2';
-    });
-    const recovered = await item<ResearchFeedback>(alice, route + `/feedback/${feedback.id}`);
-    expect(recovered.delivery.status).toBe('delivered'); expect(recovered.decision.status).toBe('pending');
-    const receipt = await request(alice, route + `/runs/${run.id}/commands/${feedback.id}`);
-    expect(receipt.status).toBe(200); expect((await receipt.json()).receipt.status).toBe('delivered');
-    expect((await item<ResearchFeedback>(alice, route + '/feedback', input, 'POST', 201)).id).toBe(feedback.id);
-    expect(runner.commands).toHaveLength(1);
-    expect(await item<ResearchFeedback>(bob, route + `/feedback/${source.id}`)).toEqual(source);
-    const final = await item<ResearchProjectDetail>(alice, route);
-    expect(final.feedback.filter(item => item.sourceFeedbackId === source.id).map(item => item.id)).toEqual([feedback.id]);
-  });
-
-  it('replays edit and approval proxy requests after observations advance and rejects changed payloads', async () => {
-    const alice = await client('Alice'), bob = await client('Bob');
-    const { run, route } = await projectWithRun(alice, bob);
     const runRoute = route + `/runs/${run.id}`;
-    const proposal = { schema: 'deepscientist.math.plan-edit.v1', id: 'raw-plan-edit', baseVersion: 'plan-v1',
-      tasks: service.jobs.get(alice.owner, run.id)!.observation!.plan!.tasks };
-    const applied = await request(bob, runRoute + '/edits', proposal);
-    expect(applied.status).toBe(200); const first = await applied.json();
-    expect(first.receipt.id).toBe(proposal.id); expect(first.receipt.edit.id).toBe(proposal.id);
-    expect(first.receipt.observation.inspection.edits[0].id).toBe(proposal.id);
-    expect(first.feedback.execution.status).toBe('completed');
-    const repeated = await request(bob, runRoute + '/edits', proposal);
-    expect(repeated.status).toBe(200); expect((await repeated.json()).feedback.id).toBe(first.feedback.id);
-    expect(runner.commands).toHaveLength(1);
-    expect((await request(bob, runRoute + '/edits', { ...proposal,
-      tasks: proposal.tasks.map(task => ({ ...task, objective: 'Changed objective' })) })).status).toBe(409);
+    const observed = service.jobs.get(alice.owner, run.id)!.observation!;
+    const observationRef = { sequence: observed.sequence, stateDigest: observed.snapshot.stateDigest };
+    const taskRef = { id: 'target', version: 'task-v1' };
+    const target = { runId: run.id, statementVersionId: project.versions[0].id, observationRef, taskRef };
+    const recipient = { kind: 'task' as const, id: 'target' };
+    const feedback = service.research.projects.submitFeedback(bob.owner, project.id, { requestId: 'old-guidance',
+      kind: 'guidance', text: 'Try using the helper', recipient, target });
+    const guidance = { id: feedback.id, text: feedback.text, recipient, taskRef, observationRef };
+    service.storage.saveCommand(alice.owner, run.id, guidance.id, { id: guidance.id, status: 'delivered',
+      guidance: { ...guidance, status: 'delivered', createdAt: at, updatedAt: at, deliveredTo: ['lead'] } });
+    const read = await request(bob, runRoute + '/guidance/' + feedback.requestId);
+    expect(read.status).toBe(200);
+    expect((await read.json()).guidance).toMatchObject({ id: feedback.requestId, status: 'delivered' });
+    const receipt = await request(bob, runRoute + '/commands/' + feedback.requestId);
+    expect(receipt.status).toBe(200);
+    expect((await receipt.json()).receipt).toMatchObject({ id: feedback.requestId, status: 'delivered' });
+    expect((await request(carol, runRoute + '/guidance/' + feedback.requestId)).status).toBe(404);
+    expect((await request(bob, runRoute + '/guidance', { ...guidance, id: 'fresh-guidance' })).status).toBe(409);
+    expect((await request(bob, route + '/feedback', { requestId: 'fresh-feedback', kind: 'guidance', text: guidance.text, recipient, target })).status).toBe(409);
+    expect(runner.commands).toHaveLength(0);
+  });
 
-    const approval = { id: 'raw-plan-approval', planVersion: 'plan-v2' };
+  it('replays native plan approval after observations advance and rejects changed payloads', async () => {
+    const alice = await client('Alice'), bob = await client('Bob');
+    vi.spyOn(runner, 'readiness').mockResolvedValue({ ready: true, nativeTeam: true, message: 'Disposable fixture' });
+    const { run, route } = await projectWithRun(alice, bob, 'members', { ...webAgentTeamPreset(), planApproval: true });
+    const runRoute = route + `/runs/${run.id}`;
+    const approval = { id: 'raw-plan-approval', planVersion: 'plan-v1' };
     const approved = await request(bob, runRoute + '/plan-approval', approval);
     expect(approved.status).toBe(200); const approvedBody = await approved.json();
     expect(approvedBody.receipt.id).toBe(approval.id);
     expect(approvedBody.receipt.observation.inspection.planApproval.approvedId).toBe(approval.id);
     const approvedAgain = await request(bob, runRoute + '/plan-approval', approval);
     expect(approvedAgain.status).toBe(200); expect((await approvedAgain.json()).feedback.id).toBe(approvedBody.feedback.id);
-    expect(runner.commands).toHaveLength(2);
-    expect((await request(bob, runRoute + '/plan-approval', { ...approval, planVersion: 'plan-v3' })).status).toBe(409);
-    const savedEdit = await request(bob, runRoute + `/commands/${proposal.id}`);
-    expect(savedEdit.status).toBe(200); expect((await savedEdit.json()).receipt.edit.id).toBe(proposal.id);
+    expect(runner.commands).toHaveLength(1);
+    expect((await request(bob, runRoute + '/plan-approval', { ...approval, planVersion: 'plan-v2' })).status).toBe(409);
     const savedApproval = await request(bob, runRoute + `/commands/${approval.id}`);
     expect(savedApproval.status).toBe(200); expect((await savedApproval.json()).receipt.id).toBe(approval.id);
     const updated = await request(bob, runRoute + '/observation');
-    expect(updated.status).toBe(200); const updatedBody = await updated.json();
-    expect(updatedBody.observation.inspection.edits[0].id).toBe(proposal.id);
-    expect(updatedBody.observation.inspection.planApproval.approvedId).toBe(approval.id);
+    expect(updated.status).toBe(200);
+    expect((await updated.json()).observation.inspection.planApproval.approvedId).toBe(approval.id);
   });
 
   it('preserves old statement versions and handles stale revisions and private ownership fields through HTTP', async () => {
@@ -570,14 +499,11 @@ describe('collaborative research through the actual HTTP service', () => {
     expect(feedback.proofCheck?.status).toBe('checked'); expect(runner.checks.at(-1)?.source).toBe(candidate);
     expect(runner.checks.at(-1)).toMatchObject({ sourceFile: 'Main.lean', dependencySources: observed.sources[0].dependencySources });
     expect(runner.checks.at(-1)?.candidateTarget).toEqual({ name: 'target' });
-    expect(runner.commands).toHaveLength(1);
-    expect(runner.commands[0].command).toMatchObject({ type: 'guidance', guidance: { id: feedback.id,
-      recipient: { kind: 'task', id: 'target' }, candidate: { source: candidate, sourceDigest: mathDigest(candidate), file: 'Main.lean',
-        baseCommit: commit, baseSourceDigest: sourceDigest, environmentDigest, taskRef: { id: 'target', version: 'task-v1' } } } });
-    expect(feedback.delivery.status).toBe('delivered'); expect(feedback.decision.status).toBe('pending');
+    expect(runner.commands).toHaveLength(0);
+    expect(feedback.decision.status).toBe('pending');
     expect(feedback.execution.status).toBe('not-started');
     const replay = await item<ResearchFeedback>(bob, route + '/feedback', submitted, 'POST', 201);
-    expect(replay.proofCheck).toEqual(feedback.proofCheck); expect(runner.checks).toHaveLength(1); expect(runner.commands).toHaveLength(1);
+    expect(replay.proofCheck).toEqual(feedback.proofCheck); expect(runner.checks).toHaveLength(1); expect(runner.commands).toHaveLength(0);
     expect(service.jobs.get(alice.owner, run.id)?.result).toBeUndefined();
     expect(service.jobs.get(alice.owner, run.id)?.source).toBe(original);
     const asset = await createAsset(alice, 'mathematics', 'SharedMath', { source: { kind: 'run', runId: run.id, taskId: 'target', commit } });
@@ -619,7 +545,7 @@ describe('collaborative research through the actual HTTP service', () => {
         source: 'theorem target : True ∧ True := by exact ⟨True.intro, True.intro⟩\n' };
     });
     const historical = await item<ResearchCandidateReview>(bob, reviewRoute);
-    expect(historical).toEqual(initial); expect(runner.checks).toHaveLength(1); expect(runner.commands).toHaveLength(1);
+    expect(historical).toEqual(initial); expect(runner.checks).toHaveLength(1); expect(runner.commands).toHaveLength(0);
     expect((await request(carol, reviewRoute)).status).toBe(403);
     expect((await request(undefined, reviewRoute)).status).toBe(403);
     expect((await item<ResearchFeedback>(carol, route + '/feedback/' + feedback.id)).payload).toEqual(feedback.payload);
@@ -683,7 +609,7 @@ describe('collaborative research through the actual HTTP service', () => {
     }
     expect(feedback.execution.status).toBe('not-started');
     expect(runner.checks.at(-1)).toMatchObject({ source, candidateTarget: { name: 'helper', expectedType: helper.type } });
-    expect(runner.commands).toHaveLength(1); expect(runner.commands[0]!.command.type).toBe('guidance');
+    expect(runner.commands).toHaveLength(0);
     expect(service.jobs.get(alice.owner, run.id)?.result).toBeUndefined();
   });
 
@@ -737,8 +663,8 @@ describe('collaborative research through the actual HTTP service', () => {
         observationRef: { sequence: observed.sequence, stateDigest: observed.snapshot.stateDigest } },
       base: { commit, sourceDigest: baselineDigest, environmentDigest, file: 'Main.lean' } }, 'POST', 201);
     expect(feedback.proofCheck?.status, feedback.proofCheck?.reason).toBe('checked');
-    expect(feedback.delivery.status).toBe('delivered'); expect(feedback.decision.status).toBe('pending');
-    expect(feedback.execution.status).toBe('not-started'); expect(runner.commands).toHaveLength(1);
+    expect(feedback.decision.status).toBe('pending');
+    expect(feedback.execution.status).toBe('not-started'); expect(runner.commands).toHaveLength(0);
     expect(service.jobs.get(alice.owner, run.id)?.source).toBe(original);
     expect(service.jobs.get(alice.owner, run.id)?.result).toBeUndefined();
   }, 120_000);
@@ -869,7 +795,8 @@ describe('collaborative research through the actual HTTP service', () => {
     const savedResponse = await request(carol, `/api/runs/${created.id}`);
     expect(savedResponse.status).toBe(200); const saved = (await savedResponse.json()).run;
     expect(saved.researchConfiguration).toEqual(frozen); expect(JSON.stringify(saved.researchConfiguration)).not.toContain('SECOND_SKILL_INSTRUCTION');
-    const repeated = await request(carol, '/api/runs', { ...input(), requestId: 'third-person-run', researchSelection: selection });
+    const repeated = await request(carol, '/api/runs', { ...input(), workers: 1, coordination: 'independent',
+      requestId: 'third-person-run', researchSelection: selection });
     expect(repeated.status).toBe(200); expect((await repeated.json()).run.id).toBe(created.id);
     expect(runner.calls.filter(call => call.id === created.id)).toHaveLength(1);
   });

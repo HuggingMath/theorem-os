@@ -15,9 +15,8 @@ const agentToolCommands = {
   'check-lean': 'checkLean.ts', 'search-lean': 'searchLean.ts', knowledge: 'theoremKnowledge.ts', library: 'library.ts',
   declarations: 'readDeclarations.ts',
   hub: 'huggingMath.ts',
-  'research-observe': 'researchObserve.ts', 'proof-search': 'proofSearch.ts',
   checkpoint: 'checkpoint.ts',
-  'plan-validate': 'planValidate.ts', 'plan-apply': 'planApply.ts',
+  'plan-validate': 'planValidate.ts',
   'check-finite': 'checkFinite.ts', 'kernel-certificate': 'kernelCertificate.ts', continuation: 'readContinuation.ts',
 } as const;
 fs.rmSync(output, { recursive: true, force: true });

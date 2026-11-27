@@ -2,11 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { expect, it, vi } from 'vitest';
 import type { SolverRunState } from '../src/solver/archive';
-import type { CooperationState } from '../src/solver/cooperation';
+import type { CooperationState } from '../src/solver/cooperationShared';
 import { buildResearchContext, finalizeResearchDispatch } from '../src/solver/modules/context';
 import { commitSolverSources, type SolverProblem } from '../src/solver/problem';
 import { parseCooperationPlan, taskVersion, type CooperativeAction, type CooperativeTask } from '../src/solver/tasks';
-import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 
 const formal = 'theorem target : True := by sorry';
@@ -92,50 +91,5 @@ it.each(['task', 'review'] as const)('keeps Lead plan errors out of %s dispatche
     const dispatch = finalizeResearchDispatch(context, { continuation });
     expect(dispatch.message).not.toContain(error);
     expect(dispatch.manifest.included.some(section => section.id === 'plan-rejection')).toBe(false);
-  }
-});
-
-it('updates only the Lead inbox on plan rejection and clears it when a repaired plan is accepted', async () => {
-  const example = localExample('solver-plan-rejection-feedback-', 'lead');
-  const lead = leadWorker(example.problem, example.workspace);
-  const peer = peerWorker(example, 'engineer', { role: 'engineer' });
-  const plan = parseCooperationPlan(example.problem, { tasks: example.problem.targets.map((target, index) => ({
-    id: `goal_${index}`, kind: 'goal', objective: `Prove ${target.theoremName}.`, ...target,
-  })) });
-  const state = solverState(example.problem, example.workspace, { runId: 'rejection-feedback', phase: 'running',
-    cooperation: { tasks: plan.tasks.map(task => ({ task, status: 'pending', attempts: 0 })),
-      groups: plan.groups.map(group => ({ group, turns: 0 })), error: 'fixture_request_new_plan' } });
-  const controller = new AbortController();
-  const cooperative = cooperativeResearch({ state, workers: [lead, peer], retrievalRoot: example.directory,
-    signal: controller.signal });
-  const inbox = (worktree: string) => JSON.parse(fs.readFileSync(path.join(worktree, 'COOPERATION.json'), 'utf8'));
-  const deliver = async (value: unknown) => {
-    const action = await cooperative.next(lead, { maxTurns: Infinity, remainingMs: Infinity });
-    if (action?.kind !== 'lead') throw new Error('fixture_expected_lead');
-    expect(cooperative.started(lead, action)).toBe(true);
-    cooperative.activate(lead, action, vi.fn(async () => {}), async () => {});
-    fs.writeFileSync(path.join(lead.worktree, 'RESEARCH.md'), '```math-plan\n' + JSON.stringify(value) + '\n```');
-    cooperative.deactivate(lead);
-    await cooperative.deliver(lead, action, commitSolverSources(example.problem, lead.worktree));
-  };
-  try {
-    await deliver({ tasks: [] });
-    expect(state.cooperation!.error).toBe('math_plan_invalid');
-    expect(state.cooperation!.planRejection).toMatchObject({ issues: [{ path: 'tasks',
-      message: 'Supply a nonempty array of task objects.' }] });
-    expect(inbox(lead.worktree)).toMatchObject({ error: state.cooperation!.error, planRejection: state.cooperation!.planRejection });
-    expect(inbox(peer.worktree)).not.toHaveProperty('error');
-    expect(inbox(peer.worktree)).not.toHaveProperty('planRejection');
-    await deliver({ tasks: plan.tasks, groups: plan.groups });
-    expect(state.cooperation!.error).toBeUndefined();
-    expect(state.cooperation!.planRejection).toBeUndefined();
-    expect(inbox(lead.worktree)).not.toHaveProperty('error');
-    expect(inbox(lead.worktree)).not.toHaveProperty('planRejection');
-    expect(inbox(peer.worktree)).not.toHaveProperty('error');
-    expect(inbox(peer.worktree)).not.toHaveProperty('planRejection');
-  } finally {
-    controller.abort();
-    await cooperative.stop();
-    fs.rmSync(example.directory, { recursive: true, force: true });
   }
 });

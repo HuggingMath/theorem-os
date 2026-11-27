@@ -345,26 +345,31 @@ describe('native AgentControl mathematical-team host routing', () => {
     const accepted = await f.call('spawn', payload, 'lead', f.root, 'spawn-accepted');
     expect(await f.call('spawn', payload, 'lead', f.root, 'spawn-accepted')).toEqual(accepted);
     // Recover the acceptance-before-parent-receipt save window from the fixed child binding.
-    f.archive.operations = f.archive.operations.filter(item => item.key !== 'native:spawn-accepted');
-    await expect(f.call('spawn', { ...payload, startOptions: { parentTurnId: 'different-task-lineage' } }, 'lead', f.root, 'spawn-accepted'))
+    const archive = structuredClone(f.archive);
+    archive.operations = [];
+    const recovered = new AgentTeamNativeControl(archive, f.lifecycle, f.save), root = connection();
+    const call = (operation: string, operationId: string, payload: Json) => recovered.options('lead').request({
+      version: 1, sessionId: ROOT, threadId: ROOT, operation, operationId, payload,
+    }, root, { signal: new AbortController().signal });
+    await call('attach', 'recovered-attach', { threadId: ROOT, sessionId: ROOT });
+    await expect(call('spawn', 'spawn-accepted', { ...payload, startOptions: { parentTurnId: 'different-task-lineage' } }))
       .rejects.toThrow('call_changed');
-    expect(await f.call('spawn', payload, 'lead', f.root, 'spawn-accepted')).toEqual(accepted);
-    await expect(f.call('spawn', payload)).rejects.toThrow('agent_exists');
+    expect(await call('spawn', 'spawn-accepted', payload)).toEqual(accepted);
+    await expect(call('spawn', 'another-spawn', payload)).rejects.toThrow('agent_exists');
     expect(f.lifecycle.spawn).toHaveBeenCalledTimes(1);
   });
 
   it('makes native transport operations unavailable through the mathematical dynamic tool', () => {
-    const tool = agentTeamToolDefinition('lead', false, 'native-agent-control');
+    const tool = agentTeamToolDefinition('lead');
     const operations = (tool.inputSchema.properties as Json).operation.enum;
     for (const operation of ['spawn', 'assign', 'message', 'poll', 'wait', 'stop', 'resume', 'amend', 'cancel', 'coordinate', 'publish', 'budget', 'progress']) {
       expect(operations).not.toContain(operation);
-      expect(agentTeamOperationAllowed('lead', false, 'native-agent-control', operation)).toBe(false);
+      expect(agentTeamOperationAllowed('lead', operation)).toBe(false);
     }
     expect(operations).toEqual(['finish', 'history', 'inspect', 'inspect-research', 'adopt', 'retire_route', 'route_summary']);
-    const memberTool = agentTeamToolDefinition('analyst', false, 'native-agent-control');
+    const memberTool = agentTeamToolDefinition('analyst');
     expect((memberTool.inputSchema.properties as Json).operation.enum).toEqual(['yield', 'history', 'inspect', 'inspect-research', 'submit', 'route_summary']);
-    expect(agentTeamInstructions({ id: 'lead', role: 'lead' }, 4, 'native-agent-control')).toContain('native collaboration tools');
-    expect(agentTeamInstructions({ id: 'lead', role: 'lead' }, 4, 'native-agent-control')).not.toContain('Built-in spawn/fork is disabled');
-    expect(agentTeamInstructions({ id: 'lead', role: 'lead' }, 4)).toContain('Built-in spawn/fork is disabled');
+    expect(agentTeamInstructions({ id: 'lead', role: 'lead' }, 4)).toContain('native collaboration tools');
+    expect(agentTeamInstructions({ id: 'lead', role: 'lead' }, 4)).not.toContain('Built-in spawn/fork is disabled');
   });
 });

@@ -44,6 +44,9 @@ const readFile = (value: string, limit: number) => {
 };
 
 function prepare(flags: ReadonlyMap<string, string>, directory: string) {
+  const workers = integerFlag(flags, 'workers', 1);
+  if (workers !== 1 || flags.get('coordination') === 'cooperative')
+    throw new Error('New automatic library builds use one prover. Prepare legacy multi-worker builds from their pinned historical revision.');
   const buildManifestRef = path.resolve(required(flags, 'build-manifest'));
   readMathBuildManifest(buildManifestRef, root, path.join(root, 'out/main'));
   const codex = flags.get('codex') ?? process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE ?? 'codex';
@@ -60,7 +63,7 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
     environment: flags.get('environment') ?? 'mathlib', pool: externalPath(required(flags, 'pool')), buildManifestRef,
     planner,
     prover: { model: prover.model, effort: prover.effort, executable: prover.executable,
-      ...(prover.agentHarness ? { agentHarness: prover.agentHarness } : {}), workers: integerFlag(flags, 'workers', 1), coordination,
+      ...(prover.agentHarness ? { agentHarness: prover.agentHarness } : {}), workers, coordination,
       maxRunSeconds: integerFlag(flags, 'prover-max-run-seconds', 3600), maxTurns: integerFlag(flags, 'prover-max-turns', 200),
       maxTurnSeconds: integerFlag(flags, 'prover-max-turn-seconds', 180), maxTotalTokens: integerFlag(flags, 'prover-max-total-tokens', 0),
       prepareTimeoutSeconds: integerFlag(flags, 'prepare-timeout-seconds', 1800) },
@@ -115,7 +118,7 @@ export async function autoLibrary(argv: string[]): Promise<number> {
       + '  [--definition-targets Qualified.name,Other.name] (original definitions to solve)\n'
       + '  [--prover-harness ID --prover-harness-profile DIR --prover-harness-executable FILE] selects a separate proof backend. Sealed planner roles currently require Codex.\n'
       + '  [--model deepseek-flash --effort high] (planner) [--prover-model M --prover-effort E] [--profile DIR] [--codex FILE] [--harness ID --harness-profile DIR --harness-executable FILE]\n'
-      + '  [--workers 1] [--coordination independent|cooperative] [--max-modules 1] [--max-rounds 3]\n'
+      + '  [--max-modules 1] [--max-rounds 3]\n'
       + '  [--max-run-seconds 7200] [--max-total-tokens 0] [--planner-turn-seconds 1800]\n'
       + '  [--prover-max-run-seconds 3600] [--prover-max-turns 200] [--prover-max-turn-seconds 180] [--prover-max-total-tokens 0]\n'
       + '  [--prepare-timeout-seconds 1800] (0 = unlimited for run, token and turn limits)\n'

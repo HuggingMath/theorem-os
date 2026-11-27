@@ -266,7 +266,6 @@ export const pages: Record<string, string> = {
   "清除已记住的 Key": "Forget the remembered key",
   "新运行会把这一版的代码交给每个 Agent 参考；它不是证据，仍要重新通过 Lean 检查。": "The new run gives this version's code to every Agent as a reference; it is not evidence and must pass the Lean check again.",
   "不从这一版继续": "Don't continue from this version",
-  "先审计划再开始": "Review the plan before starting",
   "我已阅读并同意": "I have read and agree to ",
   "与": " and ",
   "使用条款": "Terms of Use",

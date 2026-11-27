@@ -70,6 +70,32 @@ function fixture(disk = false) {
 }
 
 describe('research projects and collaboration permissions', () => {
+  it.each(['restart', 'next observation', 'command retry'])('recovers a native approval for the project after %s', mode => {
+    const { projects, storage, project, target } = fixture();
+    const feedback = projects.submitFeedback(bob, project.id, { requestId: 'initial-route-approval', kind: 'plan-approval',
+      text: 'Approve the first route', target, planVersion: 'plan-v1' });
+    const queued = projects.recordCommand(bob, project.id, feedback.id, { id: feedback.id, status: 'queued', planVersion: 'plan-v1' });
+    expect(queued).toMatchObject({ delivery: { status: 'queued' }, execution: { status: 'not-started' } });
+    const next = observation('run-a', { planVersion: undefined });
+    next.sequence = 2;
+    next.solverRunId = 'solver-next';
+    next.snapshot.runId = next.solverRunId;
+    const initialPlanApproval = { solverRunId: 'solver-fixture', receipt: { required: true, status: 'approved' as const,
+      planVersion: 'plan-v1', approvedId: feedback.id, approvedVersion: 'plan-v1', approvedAt: Date.parse(at),
+      rejections: [], leadRevising: false } };
+    storage.saveRun(alice, { ...run('run-a', next), observation: mode === 'restart' ? undefined : next,
+      nativeTeamCapacity: 3, planApproval: true, workers: 1, coordination: 'independent', researchMode: 'skill', initialPlanApproval });
+    if (mode === 'command retry') projects.recordCommand(bob, project.id, feedback.id, { id: feedback.id, status: 'approved',
+      planVersion: 'plan-v1', observation: next });
+    else projects.syncRunObservation(bob, project.id, 'run-a');
+    const updated = projects.feedback(bob, project.id, feedback.id);
+    expect(updated).toMatchObject({ delivery: { status: 'delivered', commandId: feedback.id }, execution: { status: 'completed',
+      planVersion: 'plan-v1', resultRefs: [`plan-approval:${feedback.id}`] } });
+    projects.syncRunObservation(bob, project.id, 'run-a');
+    expect(projects.feedback(bob, project.id, feedback.id)).toEqual(updated);
+    expect(storage.getRun(alice, 'run-a')?.observation?.inspection.planApproval).toBeUndefined();
+  });
+
   it('retains exact historical step discussions after the task changes and the run ends', () => {
     const { projects, storage, project, target } = fixture(true);
     const originalObservation = observation(); originalObservation.sequence = 2; originalObservation.inspection.tasks[0].proof.commit = commit;

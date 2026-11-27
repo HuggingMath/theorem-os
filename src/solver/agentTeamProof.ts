@@ -8,7 +8,7 @@ import { bindLeanPackages } from '../math/leanDiagnostics';
 import { formalVerificationToolIdentity } from '../math/verifier';
 import { hasDeterministicLeanFailure, proofReuseEnvironment } from './proofReuse';
 import { applyTaskChanges, ownedSourceDigest, taskChanges, type DeclarationChange } from './cooperativeProof';
-import { checkDeclarationArtifacts, DeclarationArtifactCheckError, DeclarationSubmissionError, declarationSubmissionSchema, validateDeclarationArtifact,
+import { checkTeamDeclarationArtifacts, DeclarationArtifactCheckError, DeclarationSubmissionError, teamDeclarationListSchema, validateDeclarationArtifact,
   type DeclarationArtifact, type DeclarationArtifactIdentity, type DeclarationSubmission } from './declarationArtifacts';
 import { assertSolverSources, committedSource, commitSolverSources, git, solverProofImports, withSolverWorktree } from './problem';
 import { locateKnowledgeDeclaration } from './theoremKnowledge';
@@ -51,13 +51,10 @@ const provenanceSchema = z.object({ objectiveRevision: z.number().int().positive
   spawnHistory: teamSpawnHistory.optional(),
   exposures: z.array(z.object({ deliveryId: hash, agentId: z.string().min(1), taskId: z.string().min(1),
     commit: commitHash, kind: teamExposureKind, at: z.string().min(1) }).strict()).optional() }).strict();
-// The host can combine prior checked peer inputs with a member's <=32-declaration submission.
-// Individual declarations keep the public validation; only the internal collection is larger.
-const teamDeclarations = z.array(declarationSubmissionSchema.shape.declarations.element).min(1);
 const deliverySchema = z.object({ schema: z.literal('theorem-os.agent-team-proof-delivery.v1'), id: hash,
   ...identitySchema, agentId: z.string().trim().min(1).max(1000), sourceWorktree: z.string().min(1),
   seedCommit: commitHash, commit: commitHash, sourceDigest: hash,
-  declarations: teamDeclarations, artifacts: z.array(z.unknown()).min(1),
+  declarations: teamDeclarationListSchema, artifacts: z.array(z.unknown()).min(1),
   changes: z.array(z.object({ file: z.string(), name: z.string(), before: z.string().optional(), after: z.string(),
     beforeName: z.string().optional(), afterName: z.string().optional(), tail: z.string().optional() }).strict()),
   imports: z.array(z.object({ file: z.string(), module: z.string() }).strict()),
@@ -188,19 +185,39 @@ function importEvidenceCommit(input: IntegrationInput, commit: string): void {
   importAgentTeamCommit(archive, input.worktree, commit);
 }
 
+/** Reuse committed bytes only within one delivery inspection. */
+function readDeliverySources(worktree: string, projectRelative: string) {
+  const sources = new Map<string, string>();
+  return (revision: string, file: string) => {
+    const key = revision + '\0' + file;
+    let source = sources.get(key);
+    if (source === undefined) {
+      source = committedSource(worktree, revision, `${projectRelative}/${file}`);
+      sources.set(key, source);
+    }
+    return source;
+  };
+}
+
 /** Every changed declaration must be named and independently checked; metadata never widens source ownership. */
-function deliveryPatch(state: DeclarationArtifactIdentity, worktree: string, seedCommit: string, commit: string,
-  declarations: DeclarationSubmission['declarations']) {
-  const { problem } = state;
+function deliveryPatch(problem: DeclarationArtifactIdentity['problem'], worktree: string, seedCommit: string, commit: string,
+  declarations: DeclarationSubmission['declarations'], readSource = readDeliverySources(worktree, problem.projectRelative)) {
   if (declarations.some(declaration => !problem.ownedFiles.includes(declaration.file)))
     return fail('declaration_outside_ownership');
   git(worktree, ['merge-base', '--is-ancestor', seedCommit, commit]);
   if (problem.ownedFiles.some(file => !file.endsWith('.lean') &&
-      committedSource(worktree, seedCommit, `${problem.projectRelative}/${file}`) !==
-      committedSource(worktree, commit, `${problem.projectRelative}/${file}`))) return fail('undeclared_source_change');
-  const changes = taskChanges(problem, worktree, commit, undefined, { seedCommit });
+      readSource(seedCommit, file) !== readSource(commit, file))) return fail('undeclared_source_change');
+  const changes = taskChanges(problem, worktree, commit, undefined, { seedCommit }, readSource);
+  const changeKey = (file: string, name: string) => `${file}\0${name}`;
+  const firstChanges = new Map<string, DeclarationChange>();
+  // A declaration can have both a body change and a later reorder entry.
+  for (const change of changes) {
+    const key = changeKey(change.file, change.name);
+    if (!firstChanges.has(key)) firstChanges.set(key, change);
+  }
+  const keysByFile = new Map<string, ReturnType<typeof leanDeclarationKeys>>();
   const declared = new Set(declarations.map(declaration => {
-    const source = committedSource(worktree, commit, `${problem.projectRelative}/${declaration.file}`);
+    const source = readSource(commit, declaration.file);
     let location: ReturnType<typeof locateKnowledgeDeclaration>;
     try { location = locateKnowledgeDeclaration(source, declaration.name); }
     catch (error) {
@@ -208,23 +225,28 @@ function deliveryPatch(state: DeclarationArtifactIdentity, worktree: string, see
         return fail('declaration_missing');
       throw error;
     }
-    const name = leanDeclarationKeys(source).get(location.startOffset);
+    let keys = keysByFile.get(declaration.file);
+    if (!keys) {
+      keys = leanDeclarationKeys(source);
+      keysByFile.set(declaration.file, keys);
+    }
+    const name = keys.get(location.startOffset);
     if (!name) return fail('declaration_missing');
-    const change = changes.find(item => item.file === declaration.file && item.name === name);
+    const key = changeKey(declaration.file, name), change = firstChanges.get(key);
     if (declaration.kind === 'definition' && (!change || change.before !== undefined))
       throw new DeclarationSubmissionError('math_agent_team_definition_must_be_new:' + declaration.name);
     if (change?.before && change.before !== change.after) {
-      const prior = committedSource(worktree, seedCommit, `${problem.projectRelative}/${declaration.file}`);
+      const prior = readSource(seedCommit, declaration.file);
       if (locateKnowledgeDeclaration(prior, declaration.name).kind === 'definition')
         throw new DeclarationSubmissionError('math_agent_team_cannot_replace_definition:' + declaration.name);
     }
-    return `${declaration.file}\0${name}`;
+    return key;
   }));
-  if (declared.size !== declarations.length || changes.some(change => !declared.has(`${change.file}\0${change.name}`)))
+  if (declared.size !== declarations.length || changes.some(change => !declared.has(changeKey(change.file, change.name))))
     return fail('undeclared_source_change');
   const imports = problem.ownedFiles.filter(file => file.endsWith('.lean')).flatMap(file => {
-    const before = solverProofImports(problem, committedSource(worktree, seedCommit, `${problem.projectRelative}/${file}`));
-    const after = solverProofImports(problem, committedSource(worktree, commit, `${problem.projectRelative}/${file}`));
+    const before = solverProofImports(problem, readSource(seedCommit, file));
+    const after = solverProofImports(problem, readSource(commit, file));
     if (before.some(module => !after.includes(module))) return fail('import_removed');
     return after.filter(module => !before.includes(module)).map(module => ({ file, module }));
   });
@@ -232,24 +254,15 @@ function deliveryPatch(state: DeclarationArtifactIdentity, worktree: string, see
 }
 
 function frozenSource(input: CheckInput, worktree: string, commit: string): () => void {
-  const identity = canonicalMathJson(identityOf(input.state));
+  const { state } = input, { problem } = state;
+  const identity = canonicalMathJson(identityOf(state));
   return () => {
-    input.signal.throwIfAborted(); input.assertWriterStopped(); assertSolverSources(input.state.problem, worktree);
-    if (canonicalMathJson(identityOf(input.state)) !== identity) return fail('run_identity_changed');
+    input.signal.throwIfAborted(); input.assertWriterStopped(); assertSolverSources(problem, worktree);
+    if (canonicalMathJson(identityOf(state)) !== identity) return fail('run_identity_changed');
     if (git(worktree, ['rev-parse', 'HEAD']) !== commit || git(worktree, ['status', '--porcelain', '--',
-      ...input.state.problem.ownedFiles.map(file => path.join(input.state.problem.projectRelative, file))]))
+      ...problem.ownedFiles.map(file => path.join(problem.projectRelative, file))]))
       return fail('source_changed');
   };
-}
-
-/** Delta/duplicate checks cover the whole delivery; each batch still receives fresh ordinary declaration checks. */
-async function checkTeamDeclarationArtifacts(input: Parameters<typeof checkDeclarationArtifacts>[0]) {
-  const artifacts: DeclarationArtifact[] = [];
-  for (let offset = 0; offset < input.declarations.length; offset += 32) {
-    artifacts.push(...await checkDeclarationArtifacts({ ...input, allowAuxiliaryDefinitions: true,
-      declarations: input.declarations.slice(offset, offset + 32) }));
-  }
-  return artifacts;
 }
 
 /** Called only after the child writer has stopped. No mutable child files become proof evidence. */
@@ -257,7 +270,7 @@ export async function checkAgentTeamProofDelivery(input: CheckInput & {
   agentId: string; worktree: string; seedCommit: string; declarations: DeclarationSubmission['declarations'];
   provenance?: AgentTeamProofProvenance; failureCache?: TeamFailureCache; inferredHelperTypes?: string[];
 }): Promise<AgentTeamProofDelivery> {
-  const declarations = teamDeclarations.parse(input.declarations);
+  const declarations = teamDeclarationListSchema.parse(input.declarations);
   const agentId = deliverySchema.shape.agentId.parse(input.agentId);
   commitHash.parse(input.seedCommit); assertMathCanonicalPath(input.worktree);
   input.signal.throwIfAborted(); input.assertWriterStopped();
@@ -265,7 +278,7 @@ export async function checkAgentTeamProofDelivery(input: CheckInput & {
   if (input.worktree === problem.workspace) return fail('worktree_not_isolated');
   const commit = commitSolverSources(problem, input.worktree), stable = frozenSource(input, input.worktree, commit);
   stable();
-  const patch = deliveryPatch(input.state, input.worktree, input.seedCommit, commit, declarations);
+  const patch = deliveryPatch(problem, input.worktree, input.seedCommit, commit, declarations);
   const project = path.join(input.worktree, problem.projectRelative);
   const environmentKey = () => {
     const env = proofReuseEnvironment(project, input.env);
@@ -282,7 +295,7 @@ export async function checkAgentTeamProofDelivery(input: CheckInput & {
   const previous = key && input.failureCache?.get(key);
   if (previous) throw new ReusedTeamCheckFailure({ commit: previous.commit, agentId: previous.agentId }, previous.error);
   const artifacts = await checkTeamDeclarationArtifacts({ ...input, commit, declarations,
-    inferredExpectedTypes: new Set(input.inferredHelperTypes), assertWriterStopped: stable }).catch(error => {
+    inferredExpectedTypes: new Set(input.inferredHelperTypes), assertFrozenSource: stable }).catch(error => {
     if (key && input.failureCache && error instanceof DeclarationArtifactCheckError && hasDeterministicLeanFailure(error.verification)) {
       stable();
       if (canonicalMathJson(environmentKey() ?? null) === canonicalMathJson(environment)) {
@@ -343,7 +356,7 @@ async function resumeAdoption(input: IntegrationInput, delivery: AgentTeamProofD
       const checkoutStable = frozenSource(input, checkout, adoption.commit);
       await checkTeamDeclarationArtifacts({ ...input, worktree: checkout, commit: adoption.commit,
         declarations: delivery.declarations, inferredExpectedTypes: new Set(delivery.inferredHelperTypes),
-        assertWriterStopped: () => { stable(); checkoutStable(); } });
+        assertFrozenSource: () => { stable(); checkoutStable(); } });
       stable(); checkoutStable();
     }
   });
@@ -366,8 +379,9 @@ export async function integrateAgentTeamProofDelivery(input: IntegrationInput): 
   if (pending) importEvidenceCommit(input, pending.commit);
   return withSolverWorktree(input.worktree, delivery.commit, async frozen => {
     assertSolverSources(problem, frozen);
-    if (ownedSourceDigest(problem, frozen, delivery.commit) !== delivery.sourceDigest) return fail('delivery_source_changed');
-    const patch = deliveryPatch(input.state, frozen, delivery.seedCommit, delivery.commit, delivery.declarations);
+    const readSource = readDeliverySources(frozen, problem.projectRelative);
+    if (ownedSourceDigest(problem, frozen, delivery.commit, readSource) !== delivery.sourceDigest) return fail('delivery_source_changed');
+    const patch = deliveryPatch(problem, frozen, delivery.seedCommit, delivery.commit, delivery.declarations, readSource);
     if (canonicalMathJson(patch) !== canonicalMathJson({ changes: delivery.changes, imports: delivery.imports }))
       return fail('delivery_patch_changed');
     if (pending) return resumeAdoption(input, delivery, pending);
@@ -376,10 +390,10 @@ export async function integrateAgentTeamProofDelivery(input: IntegrationInput): 
       if (fs.existsSync(packages)) bindLeanPackages(path.join(checkout, problem.projectRelative), packages);
       applyTaskChanges(problem, checkout, patch.changes, patch.imports);
       const commit = commitSolverSources(problem, checkout), checkoutStable = frozenSource(input, checkout, commit);
-      const assertStopped = () => { stable(); checkoutStable(); };
+      const assertAdoptionSources = () => { stable(); checkoutStable(); };
       const artifacts = await checkTeamDeclarationArtifacts({ ...input, worktree: checkout, commit,
-        declarations: delivery.declarations, inferredExpectedTypes: new Set(delivery.inferredHelperTypes), assertWriterStopped: assertStopped });
-      assertStopped();
+        declarations: delivery.declarations, inferredExpectedTypes: new Set(delivery.inferredHelperTypes), assertFrozenSource: assertAdoptionSources });
+      assertAdoptionSources();
       const record: AgentTeamProofAdoption = { schema: 'theorem-os.agent-team-proof-adoption.v1', id: '',
         ...identityOf(input.state), deliveryId: delivery.id, beforeCommit: input.expectedCommit, commit,
         sourceDigest: ownedSourceDigest(problem, checkout, commit), artifacts };
@@ -388,7 +402,7 @@ export async function integrateAgentTeamProofDelivery(input: IntegrationInput): 
       persist(input, 'adoption-intents', { schema: 'theorem-os.agent-team-proof-adoption-intent.v1',
         id: intentId(input, delivery), ...identityOf(input.state), worktree: input.worktree, adoption }, input.worktree);
       // This is checked adoption evidence, not whole-problem acceptance. Journals stay with the primary.
-      assertStopped();
+      assertAdoptionSources();
       git(input.worktree, ['merge', '--ff-only', '--no-edit', commit]);
       return finishAdoption(input, adoption);
     });

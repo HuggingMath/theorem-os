@@ -961,8 +961,21 @@ try {
     await composer.fill(''); await settled(page);
     await openWithoutComposerFocus(conversation.id); await thinking.waitFor();
     await expectDraftPosition(quotedDraftPosition, 'independent positions after cleaning the other draft', false);
-    await page.reload({ timeout: 0 });
-    await contains(copy.expanded.split('\n')[1]!); await goalPlan.waitFor(); await settled(page);
+    const composerFont = '**/assets/fonts/Geist-latin.woff2';
+    let releaseFont: (() => void) | undefined;
+    if (scenario === 'zh-390') {
+      // Force the layout change that can occur when a long draft is restored before its font loads.
+      const fontHeld = new Promise<void>(resolve => { releaseFont = resolve; });
+      await page.route(composerFont, async route => { await fontHeld; await route.fallback(); });
+    }
+    try {
+      await page.reload({ timeout: 0, waitUntil: 'domcontentloaded' });
+      await contains(copy.expanded.split('\n')[1]!); await goalPlan.waitFor(); await settled(page);
+    } finally {
+      releaseFont?.();
+    }
+    await page.evaluate(() => document.fonts.ready.then(() => undefined));
+    if (releaseFont) await page.unroute(composerFont);
     assert.equal(await composer.inputValue(), workDraft, 'Refreshing restores the editable quoted draft');
     await expectQuoteCount(2);
     await expectDraftPosition(quotedDraftPosition, 'refresh restores the quoted draft editing position', false);

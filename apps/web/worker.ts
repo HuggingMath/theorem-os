@@ -20,13 +20,14 @@ import { runSolver } from '../../src/solver/run';
 import { readKnowledgeCatalog } from '../../src/solver/theoremKnowledgeStore';
 import { createWebProgressForwarder } from './progress';
 import { withoutCheckMarkers } from './report';
-import { webArtifactMaxBytes, webPreparationSeconds, type WebAgentActionBody, type WebArtifact, type WorkerInput } from './shared';
+import { retiredResearchCoordinationCode,
+  webArtifactMaxBytes, webPreparationSeconds, type WebAgentActionBody, type WebArtifact, type WorkerInput } from './shared';
 import { createAgentActionStream, sanitizeAgentItem } from './agentActions';
 import { createWebWorkerBridge, freezeWebKnowledge, writeWebActiveRun } from './workerBridge';
 import { webByokModuleIdentity } from './webModuleIdentity';
 import { webAgentLibraryAccess } from './frozenLibrary';
 import { runWebLibraryResearch } from './libraryResearch';
-import { webResearchArguments } from './researchMode';
+import { retiredWebRunInputError, webResearchArguments } from './researchMode';
 import { webProofMessageSink } from './proofJournal';
 import { createWebHostDisconnectWatchdog, webWorkerShutdownMs } from './workerDisconnect';
 import { bindWebWorkerProfile, pinWebWorkerSession, prepareWebNativeProfile, webHarnessEnvironment,
@@ -203,7 +204,6 @@ Continue the assigned work in this same turn after each update. Updates need no 
 export function webSolverModules(request: WorkerInput,
   actions?: { sink: (action: WebAgentActionBody) => void; hidden: readonly string[]; solverRunId?: () => string | undefined },
   isolation?: WebAgentIsolation): SolverModules {
-  webResearchArguments(request.input, request.provider);
   const base = configurableSolverModules(request.input.modulePlan, request.input.coordination, request.input.workers);
   const identity = webByokModuleIdentity(solverModuleConfiguration(base));
   let sessions = 0;
@@ -286,6 +286,13 @@ async function main(watchdog: ReturnType<typeof createWebHostDisconnectWatchdog>
   const write = webProofMessageSink(process.stdout, key, journalDirectory
     ? { directory: journalDirectory, webRunId: request.id } : undefined);
   const send: typeof write = (message, frame) => write(message, request.observationSourceRefs === true ? frame : undefined);
+  const retiredInput = retiredWebRunInputError(request.input);
+  if (retiredInput) {
+    send({ type: 'error', message: retiredInput,
+      failure: { kind: 'protocol', reason: retiredResearchCoordinationCode } });
+    process.exitCode = 1;
+    return;
+  }
   const workspaceRoot = process.env.THEOREMOS_WORKER_ROOT || '/work';
   const directory = fs.mkdtempSync(path.join(workspaceRoot, 'run-'));
   let output = path.join(directory, 'result.json');
@@ -326,6 +333,7 @@ async function main(watchdog: ReturnType<typeof createWebHostDisconnectWatchdog>
   };
   console.error = () => {};
   try {
+    const researchArguments = webResearchArguments(request.input, request.provider);
     const environment = getLeanTaskEnvironment(request.input.environment ?? 'standard');
     configureWebProofSearchEnvironment(environment.id);
     const receipt = prepareWebProblem(directory, request);
@@ -372,17 +380,17 @@ async function main(watchdog: ReturnType<typeof createWebHostDisconnectWatchdog>
       '--receipt-file', round.seed.activeProblemPath, '--build-manifest', buildIndex.buildManifestRef,
       '--model', webHarnessModel(request.provider, request.input.model), '--effort', request.input.effort, '--workers', String(request.input.workers), '--no-explanations',
       '--coordination', request.input.coordination, '--max-turns', String(round.limits.maxTurns),
-      ...webResearchArguments(request.input, request.provider),
+      ...researchArguments,
       ...expertCardArguments,
       ...(request.input.nativeTeamCapacity ? ['--harness-profile', profile] :
         harness !== 'codex' || request.provider.execution?.executable ? ['--harness', harness, '--harness-profile', profile, '--harness-executable', webHarnessExecutable(request.provider)] : []),
-      ...(request.input.planApproval ? ['--plan-approval'] : []),
+      ...(round.planApproval ? ['--plan-approval'] : []),
       ...(knowledgeFile ? ['--knowledge-base', knowledgeFile] : []),
       ...(round.continuationFile ? ['--continuation-manifest', round.continuationFile] : []),
       ...(round.libraryCatalog ? ['--library-catalog', round.libraryCatalog.file, '--library-catalog-sha256', round.libraryCatalog.digest] : []),
-      // Cooperative role checkpoints preserve streaming requests and saved decisions; the shared run budget still applies.
+      // The remaining shared budget follows the run into the new library environment.
       '--max-run-seconds', String(round.limits.maxRunSeconds),
-      '--max-turn-seconds', request.input.coordination === 'cooperative' ? '0' : String(round.limits.maxRunSeconds),
+      '--max-turn-seconds', String(round.limits.maxRunSeconds),
       ...(round.limits.maxTotalTokens ? ['--max-total-tokens', String(round.limits.maxTotalTokens)] : []),
       '--prepare-timeout-seconds', String(round.limits.maxRunSeconds === 0 ? 0 : webPreparationSeconds[environment.id === 'mathlib' ? 'mathlib' : 'standard']),
       ...(round.limits.maxRunSeconds === 0 ? ['--proof-timeout-seconds', '0'] : []),

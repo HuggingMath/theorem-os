@@ -18,7 +18,7 @@ vi.mock('../src/math/leanToolchainReadiness', () => ({ checkResolvedLeanToolchai
 vi.mock('../src/math/verifier', async original => ({
   ...await original<typeof import('../src/math/verifier')>(), resolveMathematicsLakePackagesCache: () => undefined,
 }));
-vi.mock('../src/solver/research', () => ({ runResearchWorkers: host.run }));
+vi.mock('../src/solver/research', () => ({ runResearchLead: host.run }));
 
 const directories: string[] = [];
 const open = vi.fn(() => { throw new Error('fixture_model_call_forbidden'); });

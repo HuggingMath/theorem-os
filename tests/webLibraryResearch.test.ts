@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runWebLibraryResearch, type WebLibraryRound } from '../apps/web/libraryResearch';
 import { prepareWebProblem } from '../apps/web/formalizationSeed';
 import { webDefaults } from '../apps/web/config';
+import { webAgentTeamPreset } from '../apps/web/researchMode';
 import type { WebRunInput, WorkerInput } from '../apps/web/shared';
 import { formalizationDigest, readFormalizationArtifact } from '../src/math/formalization';
 import { LIBRARY_PACK_SCHEMA, type LibraryPack } from '../src/math/libraryPacks';
@@ -12,6 +13,7 @@ import { mathDigest, readMathJson, readMathText, writeMathJsonDurable } from '..
 import { writeSolverRunState } from '../src/solver/archive';
 import { readContinuationInput } from '../src/solver/continuationInput';
 import { writeLibraryCatalog } from '../src/solver/libraryCatalog';
+import { publishNativeApprovalPlan } from '../src/solver/planApproval';
 import { git, readSolverProblem } from '../src/solver/problem';
 import { approvedFormalization } from './helpers/approvedFormalizationFixture';
 import { solverState } from './helpers/solver';
@@ -77,6 +79,41 @@ function finishRound(f: Fixture, round: WebLibraryRound, names?: string[], used:
 }
 
 describe('Web library research supervision without provider calls', () => {
+  it('keeps the approved route with the next two library rounds without requesting approval again', async () => {
+    const f = fixture({ ...webAgentTeamPreset(), planApproval: true });
+    let originalVersion: string | undefined;
+    const gates: (boolean | undefined)[] = [];
+    const result = await runWebLibraryResearch({ ...f, run: async round => {
+      gates.push(round.planApproval);
+      const completed = finishRound(f, round,
+        round.round === 0 ? ['Research.desired'] : round.round === 1 ? ['Research.final_hint'] : undefined);
+      if (round.round === 0) {
+        const { state, stateFile } = completed;
+        state.planApproval = true;
+        originalVersion = publishNativeApprovalPlan(state, { operation: 'publish_plan', goals: [
+          { theoremName: 'Original.goal', objective: 'Find the relevant library lemma, then prove the original goal.' },
+        ] }, () => {}, () => {}).planVersion;
+        Object.assign(state.cooperation!.planApproval!, { approvedAt: 1001, approvedId: 'owner-approval', approvedVersion: originalVersion });
+        writeSolverRunState(stateFile, state);
+      } else {
+        const continuation = readContinuationInput(round.continuationFile!, { taskDigest: mathDigest(readMathText(round.seed.taskFile)),
+          problemReceiptDigest: completed.problem.receiptDigest });
+        const route = continuation.manifest.attachments.find(item => item.provenance.source === `Approved initial route, version ${originalVersion}`);
+        expect(route?.provenance).toMatchObject({ evidence: 'recorded-not-replayed', runId: 'solver-round-0' });
+        expect(continuation.contents.get(route!.sha256)).toContain('Find the relevant library lemma, then prove the original goal.');
+      }
+    } });
+    expect(gates).toEqual([true, false, false]);
+    expect(result.raw.status).toBe('incomplete');
+  });
+
+  it('refuses a native library continuation when the initial route lacks approval', async () => {
+    const f = fixture({ ...webAgentTeamPreset(), planApproval: true });
+    const run = vi.fn(async (round: WebLibraryRound) => { finishRound(f, round, ['Research.desired']); });
+    await expect(runWebLibraryResearch({ ...f, run })).rejects.toThrow('math_library_request_plan_not_approved');
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the exact shared pack and original imports through repeated built-in library installations', async () => {
     const shared = 'Submission/Library/Shared/Result.lean', sharedSource = 'namespace Shared\nlemma result : True := by trivial\nend Shared\n';
     const frozenPack: LibraryPack = { ...pack, modules: [pack.modules[0]!, { file: shared, source: sharedSource,

@@ -160,7 +160,7 @@ The first complete schema-valid OUTPUT.json is an explicit role submission. The 
 bun run math formalize --phase inspect --directory /tmp/theorem-os-formalization-bounded
 ```
 
-An approved run returns the artifact directory, `workspaceRoot`, `receiptFile`, `taskFile`, and `runArguments` for the existing proof solver. The artifact preserves `original.txt`, `Statement.lean` and `evidence.json`; changing the original, source, targets, environment or review breaks its identity checks. Pass the returned `runArguments` to `bun run math run`, adding the desired native proof-search configuration and budget. Formalization approval alone never counts as solving the problem.
+An approved run returns the artifact directory, `workspaceRoot`, `receiptFile`, `taskFile`, and `runArguments` for the proof solver. The artifact preserves `original.txt`, `Statement.lean` and `evidence.json`. Identity checks cover the original, source, targets, environment and review. Pass the returned `runArguments` to `bun run math run`, adding team capacity, initial route approval or budget options as needed. Solving still requires independent Lean acceptance.
 
 `report` writes a compiled direct run or an independently reviewed run as one offline comparison page. Direct reports show the original, Lean statement and compiler status, mark semantic review as not performed, and omit absent backtranslation and review sections. It calls no model and needs `bun run build:web` first:
 

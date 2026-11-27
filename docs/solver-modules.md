@@ -1,5 +1,7 @@
 # 解题模块与交接协议
 
+固定任务图、M3 任务排序和 M5 角色派发说明用于解读旧档案与实验。执行旧协作时使用对应历史版本。新版由 Codex Lead 派工，宿主负责上下文、隔离、交付检查和独立验收。[原生团队交付协议](codex-skill-runtime.md#agent-organized-proof-writing-team)
+
 M1–M5 表示运行时的决策边界，不是五个依次执行的解题步骤，也不等于五个 agent。研究检索、路线规划、引理证明、原题集成和独立验收都会使用其中多个模块。增加角色数量不能替代明确的数学产物和消费关系。
 
 ## 模块边界
@@ -19,10 +21,10 @@ M1–M5 表示运行时的决策边界，不是五个依次执行的解题步骤
 | 实现入口 | 职责 |
 | --- | --- |
 | `src/solver/research.ts` | 编排会话启动、执行、恢复和交付；串行化整题检查入口 |
-| `src/solver/workerProofLifecycle.ts` | 统一证明就绪后的 writer 停止确认、源码冻结与固定快照检查 |
+| `src/solver/skillProofLifecycle.ts` | 管理单人 Skill 工作区的停写、源码冻结与待检查证明恢复 |
 | `src/solver/researchUsage.ts` | 管理当前模型轮次和会话的用量事件、请求准入与收据结算 |
 | `src/solver/usageBudget.ts` | 计算累计用量与共享预算状态，不执行模型或证明检查 |
-| `src/solver/cooperation.ts` | 管理任务、交付、集成与通知；分别处理 Lead、peer 派发，共用等待和前沿恢复逻辑 |
+| `src/solver/agentTeam.ts` | 把 Codex 原生团队连接到各自的隔离工作树和证明交付，保存任务与成果来源 |
 | `src/math/verifier.ts` | 核对固定源码与目标身份，执行 Lean 检查和官方验收，生成回执 |
 | `src/math/verifierCheckout.ts` | 负责验证工作树的创建与回收；失败、异常和取消均进入同一清理路径 |
 

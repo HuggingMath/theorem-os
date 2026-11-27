@@ -16,12 +16,12 @@ import { newestLeanBinary } from './helpers/lean';
 import { solverState } from './helpers/solver';
 
 // The release build independently verifies the build manifest; this test keeps real preparation, library checks and continuation revalidation.
-vi.mock('../src/math/mathBuildManifest', () => ({ readMathBuildManifest: vi.fn() }));
+vi.mock(import('../src/math/mathBuildManifest'), async original => ({ ...await original(), readMathBuildManifest: vi.fn() }));
 const lean = newestLeanBinary(), roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); roots.splice(0).forEach(root => fs.rmSync(root, { recursive: true, force: true })); });
 
 describe('campaign library native continuation', () => {
-  it.skipIf(!lean)('prepares the requested closure and replays the old graph through the real frozen solver initialization', async () => {
+  it.skipIf(!lean)('prepares the requested closure and continues from an archived graph without restoring the old scheduler', async () => {
     // An explicit output directory retains this disposable fixture for cross-language controller checks.
     const artifacts = process.env.THEOREMOS_CAMPAIGN_LIBRARY_NATIVE_ARTIFACTS;
     if (artifacts) fs.mkdirSync(artifacts, { recursive: true, mode: 0o700 });
@@ -31,7 +31,7 @@ describe('campaign library native continuation', () => {
     fs.writeFileSync(envFile, `ELAN_HOME=${path.join(os.homedir(), '.elan')}\nPATH=${path.dirname(lean!)}:/usr/bin:/bin:/usr/sbin\n`);
     vi.stubEnv('DEEPSCIENTIST_MATH_ENV_FILE', envFile); vi.stubEnv('ELAN_HOME', path.join(os.homedir(), '.elan'));
     vi.stubEnv('DEEPSCIENTIST_MATH_SANDBOX_BACKEND', 'bwrap'); vi.stubEnv('DEEPSCIENTIST_MATH_TRUSTED_CACHE_ROOTS', '');
-    vi.stubEnv('CODEX_HOME', path.join(root, 'unused-profile')); vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.stubEnv('CODEX_HOME', path.join(root, 'unused-profile')); const logs = vi.spyOn(console, 'log').mockImplementation(() => {});
     const taskDirectory = path.join(root, 'tasks/Native'); fs.mkdirSync(taskDirectory, { recursive: true, mode: 0o700 });
     const source = 'namespace Original\ntheorem goal (n : Nat) : n + 0 = n := by sorry\nend Original\n';
     const receipt = bootstrapLeanTask(path.join(taskDirectory, 'workspace'), { source, task: 'Prove the unchanged target.' });
@@ -66,15 +66,15 @@ describe('campaign library native continuation', () => {
       sourceTaskFile: taskFile, catalog: access, prepared: next });
     const open = vi.fn(async () => { throw new Error('A startup-only library transition must not contact a model'); });
     const exit = await runSolver(['--workspace', next.workspace, '--receipt-file', next.activeProblemPath, '--task-file', next.taskFile,
-      '--output', next.output, '--build-manifest', build, '--workers', '2', '--coordination', 'cooperative',
+      '--output', next.output, '--build-manifest', build, '--workers', '1', '--research-mode', 'skill',
       '--library-catalog', access.file, '--library-catalog-sha256', access.digest,
       '--continuation-source-run', oldOutput, '--startup-only', '--no-explanations', '--prepare-timeout-seconds', '60',
-      '--evaluator-timeout-seconds', '30', '--proof-timeout-seconds', '30'], root,
+      '--evaluator-timeout-seconds', '30', '--proof-timeout-seconds', '30'], path.resolve('.'),
       { ...directSolverModules, M1: { ...directSolverModules.M1, open } });
-    expect(exit, JSON.stringify(readMathJson(next.output), null, 2)).toBe(0); expect(open).not.toHaveBeenCalled();
+    expect(exit, logs.mock.calls.flat().join("\n")).toBe(0); expect(open).not.toHaveBeenCalled();
     const newState = readSolverRunState(next.output + '.runtime/state.json');
     expect(newState.phase).toBe('prepared'); expect(newState.turns).toBe(0);
-    expect(newState.cooperation?.tasks.find(node => node.task.id === 'goal')?.task).toMatchObject(task);
+    expect(newState.cooperation).toBeUndefined();
     expect(newState.problem.targets).toEqual(problem.targets);
     expect(newState.problem.frozenFiles?.[file]).toBe(mathDigest(moduleSource));
     const seedReport = readMathJson(next.output + '.runtime/continuation-seed.json') as { stage: string };

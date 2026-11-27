@@ -12,7 +12,7 @@ afterEach(async () => { await Promise.all(closing.splice(0).map(close => close()
 describe('web continuation frozen source identity', () => {
   it('freezes the actually selected saved source without changing request replay or the worker input', async () => {
     const calls: WorkerInput[] = [], port = await freePort(), origin = `http://127.0.0.1:${port}`;
-    const runner: WebRunner = { async readiness() { return { ready: true, message: 'Offline fixture' }; },
+    const runner: WebRunner = { async readiness() { return { ready: true, nativeTeam: true, message: 'Offline fixture' }; },
       async run(input, send) { calls.push(structuredClone(input)); send({ type: 'result', result: { status: 'limit_reached', proof: '', report: {} } }); } };
     const config = readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin });
     const service = createWebService(config, runner, { sample: null }); closing.push(() => service.close());
@@ -57,7 +57,8 @@ describe('web continuation frozen source identity', () => {
     const from: WebContinuation = { runId: parent.id, taskId: target.taskId, commit: target.commit, label: 'Saved version',
       taskVersion: matching.checks.find((check: { passed: boolean }) => check.passed).taskVersion };
     const expected = { ...from, sourceDigest: target.sourceDigest, environmentDigest: target.environmentDigest, file: target.file };
-    const body = { ...input, task: 'Continued offline', continueFrom: from, requestId: 'freeze-source-once' };
+    const continuedInput = { ...input, workers: 1, coordination: 'independent' as const, task: 'Continued offline', continueFrom: from };
+    const body = { ...continuedInput, requestId: 'freeze-source-once' };
     const response = await post(body); expect(response.status).toBe(201);
     const continued = (await response.json()).run as WebRun;
     expect(continued.continueFrom).toEqual(expected); expect(continued.continueFrom).not.toHaveProperty('source');
@@ -65,6 +66,7 @@ describe('web continuation frozen source identity', () => {
     expect(body.continueFrom).toEqual(from);
     await new Promise<void>(resolve => setImmediate(resolve));
     const worker = calls.find(call => call.id === continued.id)!;
+    expect(worker.input.nativeTeamCapacity).toBe(3);
     expect(worker.input.continueFrom).toEqual(from);
     expect(worker.continuation).toEqual({ ...expected, source: target.source });
     const { taskVersion: _taskVersion, ...legacyFrom } = from;
@@ -82,7 +84,7 @@ describe('web continuation frozen source identity', () => {
     const wrong = await post({ ...body, requestId: 'forged-identity', continueFrom: { ...from, taskVersion: 'not-the-selected-version' } });
     expect(wrong.status).toBe(409);
     const restart = new WebJobs(runner, { concurrency: 1, queueLimit: 8 }, { storage: service.storage }); closing.push(() => restart.close());
-    expect(restart.replay(owner, { ...input, task: body.task, continueFrom: from }, provider, body.requestId)?.id).toBe(continued.id);
+    expect(restart.replay(owner, continuedInput, provider, body.requestId)?.id).toBe(continued.id);
     expect(restart.get(owner, continued.id)?.continueFrom).toEqual(expected);
   });
 });

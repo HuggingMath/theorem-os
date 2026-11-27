@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 // Disposable HTTP/Chromium state and a controlled runner. No models, Lean or mail.
+import { seedCooperativeRun } from './web-cooperative-fixture';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -87,7 +88,7 @@ try {
     await http(page, 'PUT', '/api/research/profile', { requestId: crypto.randomUUID(), expectedRevision: 0, displayName: 'Solo Researcher', visibility: 'public' });
     await http(peer, 'PUT', '/api/research/profile', { requestId: crypto.randomUUID(), expectedRevision: 0, displayName: 'Private Teammate', visibility: 'private' });
     const peerId = service.research.projects.identity(peerOwner);
-    const { run } = await http<{ run: { id: string } }>(page, 'POST', '/api/runs', { requestId: crypto.randomUUID(), providerId: 'openai', apiKey: 'sk-disposable-audit-fixture', model: 'fixture', effort: 'low', environment: 'standard', source, task: 'Prove True', maxTurns: 2, maxRunSeconds: 600, workers: 2, coordination: 'cooperative' });
+    const run = await seedCooperativeRun(service, page.context(), origin, { providerId: 'openai', apiKey: 'sk-disposable-audit-fixture', model: 'fixture', effort: 'low', environment: 'standard', source, task: 'Prove True', maxTurns: 2, maxRunSeconds: 600, workers: 2, coordination: 'cooperative' });
     await waitForRun({page},run.id,item=>Boolean(item.observation));
 
     phase = `personal-guidance-unknown-${language}-${width}`;

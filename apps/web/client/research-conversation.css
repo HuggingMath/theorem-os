@@ -190,6 +190,8 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 /* The border and ring identify the active editor in both themes. */
 #natural-research .chat-composer #formalize-form:has(#formalize-original:focus){border-color:var(--blue-600);box-shadow:0 0 0 1px var(--blue-600),0 18px 42px -18px color-mix(in srgb,var(--blue-600) 28%,transparent),var(--shadow-card)}
 #natural-research .chat-composer #formalize-original{display:block;width:100%;min-width:0;min-height:92px;max-height:260px;margin:0;padding:12px 14px 10px;border:0;border-radius:10px;background:transparent;color:var(--ink);font:inherit;font-size:16px;line-height:1.75;resize:none;box-shadow:none;overflow-y:auto}
+/* The draft restores its own scroll offset, which must survive font swaps. */
+#natural-research .chat-composer #formalize-original{overflow-anchor:none}
 #natural-research .chat-composer[data-chat-followup=true] #formalize-original{min-height:56px}
 #natural-research .chat-composer #formalize-original:focus{outline:none}
 .chat-quote-notice{display:flex;align-items:center;gap:12px;margin:2px 4px 0;padding:2px 10px 6px;border-bottom:1px solid var(--line);color:var(--muted);font-size:12px;line-height:1.5}

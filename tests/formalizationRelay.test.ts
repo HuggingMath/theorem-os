@@ -506,7 +506,7 @@ describe('host credential relay for isolated formalization roles', () => {
     const changed = () => { lead.tokenBudget = buildTokenBudget(0, [lead, member]); };
     changed();
     const track = (record: SolverRunState, sessionId: string) => {
-      const usage = new ResearchUsage({ state: lead, research: record, maxTotalTokens: 0,
+      const usage = new ResearchUsage({ state: lead, research: record,
         signal: new AbortController().signal, remainingMs: () => Infinity, changed, emit: () => {} });
       const callbacks = usage.bindSession(sessionId, () => undefined);
       usage.sessionOpened({ threadId: sessionId, usageSource: 'upstream-requests',

@@ -20,13 +20,15 @@ export const DECLARATION_SUBMISSION_FILE = 'declaration-submission.json';
 export const DECLARATION_ARTIFACTS_FILE = 'declarations.json';
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const commitHash = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u);
-export const declarationSubmissionSchema = z.object({ declarations: z.array(z.object({
+export const teamDeclarationListSchema = z.array(z.object({
   file: z.string().refine(value => allowedKnowledgeFile(value) && value.endsWith('.lean')),
   name: z.string().min(1).max(1000).refine(isSimpleLeanName),
   kind: z.literal('definition').optional(),
   type: z.string().trim().min(1).refine(value => Buffer.byteLength(value) <= 24000),
   description: z.string().max(8000).optional(), premises: z.array(z.string().max(8000)).max(128).optional(),
-}).strict()).min(1).max(32) }).strict();
+}).strict()).min(1);
+export const declarationSubmissionSchema = z.object({ declarations: teamDeclarationListSchema.max(32) }).strict();
+const teamDeclarationSubmissionSchema = z.object({ declarations: teamDeclarationListSchema }).strict();
 export type DeclarationSubmission = z.infer<typeof declarationSubmissionSchema>;
 export type DeclarationArtifactIdentity = Pick<SolverRunState, 'runId' | 'problem' | 'environmentDigest'>;
 export type DeclarationArtifact = Readonly<{
@@ -73,8 +75,8 @@ const sameIdentity = (value: Partial<Record<keyof ReturnType<typeof identityOf>,
   state: DeclarationArtifactIdentity) => Object.entries(identityOf(state)).every(([key, expected]) =>
     value[key as keyof ReturnType<typeof identityOf>] === expected);
 const submissionFail = (reason: string): never => { throw new DeclarationSubmissionError(`math_declaration_artifact_${reason}`); };
-function parseDeclarationSubmission(value: unknown): DeclarationSubmission {
-  const parsed = declarationSubmissionSchema.safeParse(value);
+function parseDeclarationSubmission(value: unknown, schema = declarationSubmissionSchema): DeclarationSubmission {
+  const parsed = schema.safeParse(value);
   if (!parsed.success) throw new DeclarationSubmissionError(`math_declaration_artifact_submission_invalid:${parsed.error.message}`,
     { cause: parsed.error });
   return parsed.data;
@@ -244,31 +246,51 @@ export function writeDeclarationArtifacts(directory: string, state: DeclarationA
   } satisfies z.infer<typeof segmentedManifestSchema>);
 }
 
-/** The caller must hold its writer-stop guarantee until this operation and persistence finish. */
-export async function checkDeclarationArtifacts(input: {
+type DeclarationCheckInput = {
   state: DeclarationArtifactIdentity; worktree: string; commit: string;
   declarations: DeclarationSubmission['declarations']; env: NodeJS.ProcessEnv; signal: AbortSignal; timeoutMs?: number;
-  allowAuxiliaryDefinitions?: boolean;
+};
+type TeamDeclarationCheckInput = DeclarationCheckInput & {
+  /** Checks writer shutdown, run identity and the exact commit of the input workspace. */
+  assertFrozenSource: () => void;
   /** Only for host-selected declarations whose signature comes from independently checked source. */
   inferredExpectedTypes?: ReadonlySet<string>;
+};
+
+/** The caller must hold its writer-stop guarantee until this operation and persistence finish. */
+export async function checkDeclarationArtifacts(input: DeclarationCheckInput & {
   assertWriterStopped: () => void;
 }): Promise<readonly DeclarationArtifact[]> {
-  const declarations = parseDeclarationSubmission({ declarations: input.declarations }).declarations;
   const { state, worktree, commit, signal } = input, { problem } = state;
-  commitHash.parse(commit);
   const identity = canonicalMathJson(identityOf(state));
-  const stable = () => {
+  const assertFrozenSource = () => {
     signal.throwIfAborted(); input.assertWriterStopped(); assertSolverSources(problem, worktree);
     if (canonicalMathJson(identityOf(state)) !== identity) return fail('run_identity_changed');
     if (git(worktree, ['rev-parse', 'HEAD']) !== commit || git(worktree, ['status', '--porcelain', '--',
       ...problem.ownedFiles.map(file => path.join(problem.projectRelative, file))])) return fail('source_changed');
   };
-  stable();
+  return checkArtifacts({ ...input, assertFrozenSource }, declarationSubmissionSchema, false);
+}
+
+/** Host deliveries can include checked peer declarations in addition to a bounded member submission. */
+export async function checkTeamDeclarationArtifacts(input: TeamDeclarationCheckInput): Promise<readonly DeclarationArtifact[]> {
+  return checkArtifacts(input, teamDeclarationSubmissionSchema, true);
+}
+
+async function checkArtifacts(input: TeamDeclarationCheckInput, schema: typeof declarationSubmissionSchema, allowAuxiliaryDefinitions: boolean) {
+  const declarations = parseDeclarationSubmission({ declarations: input.declarations }, schema).declarations;
+  const { state, worktree, commit, signal, assertFrozenSource } = input, { problem } = state;
+  commitHash.parse(commit);
+  assertFrozenSource();
   if (new Set(declarations.map(item => `${item.file}\0${item.name}`)).size !== declarations.length) return submissionFail('duplicate_declaration');
   const environment = proofReuseEnvironment(path.join(worktree, problem.projectRelative), input.env);
   const records: DeclarationArtifact[] = [];
+  // Share the frozen snapshot across declarations. Each projection is still
+  // written to its own checkout and checked independently.
+  let project: ReturnType<typeof createTaskSourceProjector> | undefined;
+  let sourceDigest: string | undefined;
   for (const declaration of declarations) {
-    stable();
+    assertFrozenSource();
     if (!problem.ownedFiles.includes(declaration.file)) return submissionFail('outside_ownership');
     const checked = await withSolverWorktree(worktree, commit, async checkout => {
       const source = fs.readFileSync(path.join(checkout, problem.projectRelative, declaration.file), 'utf8');
@@ -276,7 +298,7 @@ export async function checkDeclarationArtifacts(input: {
         ['math_knowledge_declaration_missing_or_ambiguous']);
       const definition = declaration.kind === 'definition';
       if (definition) {
-        if (!input.allowAuxiliaryDefinitions) return submissionFail('requires_theorem');
+        if (!allowAuxiliaryDefinitions) return submissionFail('requires_theorem');
         if (location.kind !== 'definition' || !/^(?:def|abbrev)\s/u.test(source.slice(location.startOffset, location.bodyOffset)))
           return submissionFail('requires_definition');
       } else if (location.kind !== 'theorem') return submissionFail('requires_theorem');
@@ -292,8 +314,8 @@ export async function checkDeclarationArtifacts(input: {
         theoremName: declaration.name, type, dependsOn: [], revision: 0 };
       let checkedCommit = commit;
       if (!checkHelperInDraft) {
-        const project = createTaskSourceProjector(problem, checkout, commit, { compact: true });
-        const sources = submissionContent(() => project(task, []), ['math_task_type_invalid', 'math_task_missing_declaration',
+        const projector = project ??= createTaskSourceProjector(problem, worktree, commit, { compact: true });
+        const sources = submissionContent(() => projector(task, []), ['math_task_type_invalid', 'math_task_missing_declaration',
           'math_task_ambiguous_declaration', 'math_task_requires_theorem', 'math_task_requires_definition', 'math_task_helper_is_original_declaration']);
         for (const [file, text] of sources) fs.writeFileSync(path.join(checkout, problem.projectRelative, file), text);
         checkedCommit = commitSolverProjection(problem, checkout, `Check declaration ${declaration.name}`);
@@ -313,12 +335,13 @@ export async function checkDeclarationArtifacts(input: {
       const references = result.verification.results[0]?.declarationReferences;
       const record: DeclarationArtifact = { schema: 'theorem-os.declaration-artifact.v1', id: '', ...identityOf(state),
         declaration, declarationHash, declarationDigest,
-        proof: { commit, sourceDigest: ownedSourceDigest(problem, worktree, commit), passed: true, verification: result.verification },
+        proof: { commit, sourceDigest: sourceDigest ??= ownedSourceDigest(problem, worktree, commit),
+          passed: true, verification: result.verification },
         ...(references ? { references: captureProofReferences(problem, checkout, commit,
           { file: declaration.file, name: declaration.name }, references, state.environmentDigest) } : {}) };
       return { ...record, id: artifactId(record) };
     });
-    stable();
+    assertFrozenSource();
     const after = proofReuseEnvironment(path.join(worktree, problem.projectRelative), input.env);
     if (canonicalMathJson({ reusable: after.reusable, digest: after.digest, env: after.env }) !==
         canonicalMathJson({ reusable: environment.reusable, digest: environment.digest, env: environment.env })) return fail('environment_changed');

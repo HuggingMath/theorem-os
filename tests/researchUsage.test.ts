@@ -6,10 +6,10 @@ import { directSolverModules } from '../src/solver/modules';
 import type { SolverModules } from '../src/solver/modules';
 import type { ProofCheck } from '../src/solver/modules/evidence';
 import { commitSolverSources } from '../src/solver/problem';
-import { runResearchWorkers } from '../src/solver/research';
+import { runResearchLead } from '../src/solver/research';
 import { ResearchUsage } from '../src/solver/researchUsage';
 import { buildTokenBudget } from '../src/solver/usageBudget';
-import { workerAccess } from './helpers/cooperation';
+import { workerAccess } from './helpers/solver';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 
 vi.mock('../src/math/mathBuildManifest', () => ({ readMathBuildManifest: vi.fn() }));
@@ -33,8 +33,8 @@ function fixture(cooperative = false) {
           status: 'paused' as const, dependsOn: [], revision: 0 }, status: 'pending' as const, attempts: 0 })),
       ] } } : {}) });
   const emit = vi.fn(), save = vi.fn();
-  const run = (modules: SolverModules, maxTurns: number) => runResearchWorkers({ state, workers,
-    access: workerAccess(workers, directory), modules,
+  const run = (modules: SolverModules, maxTurns: number) => runResearchLead({ state,
+    access: workerAccess(workers, directory).get('solver')!, modules,
     root: directory, buildFile: path.join(directory, 'mock-build.json'), taskText: 'Fixture', executable: 'unused-fixture', profile: 'unused-fixture',
     signal: new AbortController().signal, deadline: Infinity, maxTurnMs: Infinity, maxTurns, maxTotalTokens: 0, save, emit });
   const check = vi.fn(async (): Promise<ProofCheck> => {
@@ -56,7 +56,7 @@ describe('research usage at the real research worker boundary', () => {
   it.each([true, false])('accounts native compaction without inventing a proof turn (usage reported: %s)', reported => {
     const { state, emit, save } = fixture();
     state.usageAccounting = { startedTurns: 0, reportedTurns: 0, pending: false, incomplete: false };
-    const usage = new ResearchUsage({ state, research: state, maxTotalTokens: 0,
+    const usage = new ResearchUsage({ state, research: state,
       signal: new AbortController().signal, remainingMs: () => Infinity, emit, changed: save });
     const callbacks = usage.bindSession('maintenance-session', () => 12);
     usage.sessionOpened({ threadId: 'maintenance-thread', usageSource: 'native-thread-totals', run: async () => 'completed', interrupt: async () => {}, close: async () => {} });
@@ -71,7 +71,7 @@ describe('research usage at the real research worker boundary', () => {
     const { state, emit, save } = fixture();
     state.tokenBudget = buildTokenBudget(0, [state]);
     state.usageAccounting = { startedTurns: 0, reportedTurns: 0, pending: false, incomplete: false };
-    const usage = new ResearchUsage({ state, research: state, maxTotalTokens: 0,
+    const usage = new ResearchUsage({ state, research: state,
       signal: new AbortController().signal, remainingMs: () => Infinity, emit, changed: save });
     const callbacks = usage.bindSession('maintenance-session', () => undefined);
     usage.sessionOpened({ threadId: 'maintenance-thread', usageSource: 'upstream-requests', run: async () => 'completed', interrupt: async () => {}, close: async () => {} });
@@ -89,7 +89,7 @@ describe('research usage at the real research worker boundary', () => {
   it('keeps usage incomplete when a turn starts without a bound native session', () => {
     const { state, emit, save } = fixture();
     state.usageAccounting = { startedTurns: 0, reportedTurns: 0, pending: false, incomplete: false };
-    const usage = new ResearchUsage({ state, research: state, maxTotalTokens: 0,
+    const usage = new ResearchUsage({ state, research: state,
       signal: new AbortController().signal, remainingMs: () => Infinity, emit, changed: save });
     const session: MathAgentSession = { usageSource: 'native-turn-totals',
       run: async () => 'completed', interrupt: async () => {}, close: async () => {} };
@@ -241,22 +241,4 @@ describe('research usage at the real research worker boundary', () => {
     expect(state.tokenBudget).toMatchObject({ status: 'unlimited', reportedTotalTokens: 13, usageComplete: complete });
   });
 
-  it('saves an interrupted cooperative assignment as an advisory draft without checking it', async () => {
-    const { state, run, modules, check } = fixture(true);
-    const open = vi.fn(async (options: MathAgentOptions): Promise<MathAgentSession> => ({ threadId: 'advisory-thread',
-      run: async (_message, _messageId, workspace, onStarted) => {
-        onStarted('advisory-checkpoint');
-        fs.writeFileSync(path.join(workspace, 'RESEARCH.md'), 'A useful boundary-case argument with one remaining gap.');
-        options.onUsage({ totalTokens: 20 }); return 'interrupted';
-      }, interrupt: async () => {}, close: async () => {} }));
-    await expect(run(modules(open), 1)).resolves.toBeUndefined();
-    expect(open).toHaveBeenCalledTimes(1); expect(check).not.toHaveBeenCalled();
-    const draft = state.cooperation!.researchDrafts!.investigation!;
-    expect(draft).toMatchObject({ workerId: 'peer' });
-    expect(draft.assignmentId).toBeTypeOf('string');
-    expect(state.workers!.find(worker => worker.id === 'peer')!.usage!.totalTokens).toBe(20);
-    expect(state.taskUsage).toEqual({ investigation: { totalTokens: 20 } });
-    expect(state.cooperation!.tasks.find(node => node.task.id === 'investigation')!.status).toBe('pending');
-    expect(state.cooperation!.tasks.filter(node => node.task.kind === 'goal').every(node => !node.integratedCheck)).toBe(true);
-  });
 });

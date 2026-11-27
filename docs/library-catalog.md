@@ -57,7 +57,7 @@ Web 默认使用 `resources/theorem-os-library/release/catalog.json`。私有 wo
 
 应用尝试 `exact` / `apply`，也可用 `Iff.mp` / `Iff.mpr` 消费双向命题的一侧，通过 `Eq.symm` 应用方向相反的等式，或用一次正向 `rw` 将库结论改写到目标的子表达式中。另有一个显式展开全部参数的 `refine'` 分支，使只出现在前提中的关系或谓词可以由局部假设确定；隐式参数、类实例和其余前提都必须关闭。这些主定理应用方式都可逐项尝试同一候选池中的其他定理来关闭前提或转换后的目标；辅助定理只应用一层，其剩余前提须由局部假设或 `rfl` 关闭，不递归展开。带前提的双向定理先形成显式证明目标，关闭其前提后再处理被转换的一侧，避免内部证明失败阻断后续尝试。重写后的目标和定理前提都必须关闭，每个分支必须关闭全部目标才算成功，总检查预算仍为 30 秒；界面和模型上下文保持最多三条简要推荐。最终证明引用才进入实际使用记录。
 
-Web 的 Mathlib 解题 agent 还可主动检索整个固定版本，包括本题尚未安装的模块。宿主每回合写入 `LIBRARY.json`，绑定目录摘要、当前题目回执、seed commit 与已冻结模块；agent 使用独立工具：
+Web 的 Mathlib 解题 Agent 可检索整个固定版本，包括本题尚未安装的模块。`LIBRARY.json` 绑定目录摘要、当前题目回执、seed commit 与已冻结模块。Lead 和成员都可用 `search`、`get`。需要补装时，成员通过原生消息把声明名、用途和所需前提发给 Lead，由 Lead 提交 `request`。单人运行可直接提交请求。
 
 ```bash
 theorem-os library search --worktree WORKTREE --query '数学关键词' --goal 'Lean 目标及局部假设'

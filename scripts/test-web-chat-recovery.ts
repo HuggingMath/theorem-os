@@ -21,7 +21,7 @@ const mark = (name: string) => { checks.push(name); console.log(`PASS ${name}`);
 let proofCalls = 0, runtimeReady = true, browser: Browser | undefined, page: Page | undefined;
 const credential = 'sk-chat-recovery-disposable-secret';
 const runner: WebRunner = {
-  async readiness() { return { ready: runtimeReady, message: 'Local recovery fixture' }; },
+  async readiness() { return { ready: runtimeReady, nativeTeam: runtimeReady, message: 'Local recovery fixture' }; },
   async run() { proofCalls++; throw new Error('Recovery checks must not start proof research'); },
   async formalize(input, send) {
     formalizations.push(input.id);
@@ -161,6 +161,7 @@ try {
   page = await defaultsContext.newPage(); await page.goto(origin); await initialized();
   await page.locator('#formalize-original').fill(webFormalizationStatement);
   await clickWorkbenchAction(page, '#open-settings');
+  await participation('guided');
   await openAdvancedChatSettings(page);
   await page.locator('#formalize-environment').selectOption('mathlib'); await page.locator('#formalize-key').fill(credential);
   let defaultRequestId = '', defaultDropped = false;
@@ -186,6 +187,7 @@ try {
   await page.reload(); await initialized();
   await page.locator('#topbar-draft').click(); await page.locator('#formalize-original').fill(webFormalizationStatement);
   await clickWorkbenchAction(page, '#open-settings'); await page.locator('#formalize-key').fill(credential);
+  await participation('guided');
   await page.locator('#formalize-settings > summary').click();
   let releaseConversation!: () => void, conversationHeld = false;
   const gate = new Promise<void>(resolve => { releaseConversation = resolve; });

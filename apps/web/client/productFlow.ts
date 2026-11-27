@@ -17,7 +17,7 @@ export function recoveryDescription(run: WebRun, step: NextStep, limits?: WebSes
   if (step.id === 'turns') return tx(`保留原题与配置，将轮次从 ${run.maxTurns} 预填为 ${next(run.maxTurns, limits?.maxTurns)}，提交前可修改。`, `Keep the problem and settings; prepare ${next(run.maxTurns, limits?.maxTurns)} turns instead of ${run.maxTurns}. Review before submitting.`);
   if (step.id === 'key') return tx('保留原题和模型配置，先修正连接凭据，再由你提交新研究。', 'Keep the problem and model settings. Correct the connection credentials before submitting a new run.');
   if (step.id === 'tokens') return tx('保留原题和本次配置，打开 Token 上限供你调整；核对后再提交新研究。', 'Keep the original problem and settings, then review the token limit before submitting a new run.');
-  if (step.id === 'workers') return tx('保留原题，打开 Agent 数量设置；调整协作配置后再提交新研究。', 'Keep the original problem and review the number of agents and collaboration settings before submitting a new run.');
+  if (step.id === 'workers') return tx('保留原题，把团队人数上限调低一人。确认设置后可发起新研究。', 'Keep the original problem and lower the team size limit by one. Review the settings before starting a new run.');
   if (step.id === 'task') return tx('保留原题，在新草稿中修改研究方向；已检查代码需另选保存版本带入。', 'Keep the original problem and revise the approach in a new draft. Select a saved version separately to carry checked code.');
   if (step.id === 'source') return tx('打开原始 Lean 陈述供你修改。修改后的陈述需要重新核对与验收。', 'Open the original Lean statement for editing. A changed statement needs a new review and acceptance check.');
   return tx('载入原始题目和本次配置供你核对；候选代码不会自动带入，发送后才启动新研究。', 'Load the original problem and settings for review. Candidate code is not carried automatically; a new run starts only when you submit.');

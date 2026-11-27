@@ -23,7 +23,7 @@ const credential = 'sk-disposable-round8-budget-fixture';
 const checks: object[] = [], errors: string[] = [], external: string[] = [];
 const starts: Array<{ id: string; maxTotalTokens?: number }> = [];
 const runner: WebRunner = {
-  async readiness() { return { ready: true, message: 'Disposable budget regression fixture' }; },
+  async readiness() { return { ready: true, nativeTeam: true, message: 'Disposable budget regression fixture' }; },
   async run(input, send) {
     starts.push({ id: input.id, ...(input.input.maxTotalTokens !== undefined ? { maxTotalTokens: input.input.maxTotalTokens } : {}) });
     send({ type: 'result', result: { status: 'incomplete', proof: '', report: { localBudgetFixture: true } } });

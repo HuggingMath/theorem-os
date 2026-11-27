@@ -8,7 +8,7 @@ Usage: bash examples/imo2026/reproduce.sh prepare|check|solve|resume /absolute/c
 prepare  Build the CLI, bootstrap pinned public IMO2026 Q1, and fetch Lean caches.
 check    Prepare the proof environment without invoking a model.
 solve    Start a fresh model run; use resume after check or an interrupted run.
-resume   Resume with the same case, model, worker count, and build manifest.
+resume   Resume with the saved team configuration and build manifest.
 
 Optional environment:
   MATH_EXAMPLE_REPO        Existing Humanfia checkout at the pinned commit.
@@ -51,9 +51,9 @@ TASK
     const bootstrap = await Bun.file(root + "/bootstrap.json").json();
     const build = await Bun.file(root + "/build.json").json();
     await Bun.write(root + "/case.json", JSON.stringify({
-      schema: "deepscientist.math.public-example.v1", problem: bootstrap.problemId,
+      schema: "deepscientist.math.public-example.v2", problem: bootstrap.problemId,
       sourceCommit: bootstrap.sourceCommit, buildManifestRef: build.buildManifestRef,
-      model: "gpt-6.1-sol", effort: "xhigh", workers: 4,
+      model: "gpt-6.1-sol", effort: "xhigh", nativeTeamCapacity: 4,
       method: "direct", maxRunSeconds: 1800, maxTurns: 20,
       taskSha256: new Bun.CryptoHasher("sha256").update(await Bun.file(root + "/task.md").arrayBuffer()).digest("hex"),
       evaluator: "host-lean-kernel-all-targets", official: false
@@ -79,7 +79,7 @@ bun -e '
 
 manifest=$(bun -e 'console.log((await Bun.file(process.argv[1]).json()).buildManifestRef)' "$case_root/case.json")
 args=(run --build-manifest "$manifest" --workspace "$case_root/workspace"
-  --task-file "$case_root/task.md" --workers 4 --method direct
+  --task-file "$case_root/task.md" --method direct
   --model gpt-6.1-sol --effort xhigh --max-run-seconds 1800 --max-turns 20
   --output "$case_root/result.json")
 if [[ $mode == check ]]; then
@@ -87,5 +87,15 @@ if [[ $mode == check ]]; then
   if [[ -f $case_root/result.json.runtime/state.json ]]; then args+=(--resume); fi
 elif [[ $mode == resume ]]; then
   args+=(--resume)
+fi
+if [[ $mode == solve || ( $mode == check && ! -f $case_root/result.json.runtime/state.json ) ]]; then
+  capacity=$(bun -e '
+    const example = await Bun.file(process.argv[1]).json();
+    if (example.schema !== "deepscientist.math.public-example.v2") {
+      throw new Error("Prepare a new case for the native team or use the original TheoremOS revision for this historical case.");
+    }
+    console.log(example.nativeTeamCapacity);
+  ' "$case_root/case.json")
+  args+=(--agent-team "$capacity")
 fi
 bun run math "${args[@]}"

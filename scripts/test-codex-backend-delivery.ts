@@ -20,7 +20,7 @@ import { buildAgentTeamContributions } from '../src/solver/agentTeamContribution
 import { evaluateSolverProof } from '../src/solver/evaluation';
 import { directSolverModules } from '../src/solver/modules';
 import { git, readSolverProblem } from '../src/solver/problem';
-import { runResearchWorkers } from '../src/solver/research';
+import { runResearchLead } from '../src/solver/research';
 import { prepareResearchSkill, researchSkillIdentity } from '../src/solver/researchSkill';
 
 type Json = Record<string, any>;
@@ -35,7 +35,7 @@ function freezeRuntime(repository: string, runtime: string) {
     fs.cpSync(path.join(repository, relative), destination, { recursive: true });
   }
   const bundleRoot = path.join(runtime, 'out/main');
-  buildSync({ entryPoints: Object.fromEntries(['runMathProof', 'searchLean', 'checkLean', 'proofSearch']
+  buildSync({ entryPoints: Object.fromEntries(['runMathProof', 'searchLean', 'checkLean']
     .map((name, index) => [MATH_RUNTIME_BUNDLES[index].replace(/\.js$/u, ''),
       path.join(runtime, 'scripts/mathematics', name + '.ts')])),
     outdir: bundleRoot, bundle: true, platform: 'node', format: 'cjs',
@@ -269,7 +269,7 @@ export async function verifyNativeProofDelivery(input: { repository: string; exe
       DEEPSCIENTIST_MATH_ENV_FILE: path.join(directory, 'missing.env') };
     const modules = input.webProvider ? webSolverModules(webRequest, { sink: action => webActions.push(action),
       hidden: [directory], solverRunId: () => state?.runId }) : directSolverModules;
-    const winner = await runResearchWorkers({ state, root: runtime, buildFile,
+    const winner = await runResearchLead({ state, root: runtime, buildFile,
       taskText: 'Prove NativeProof.original by consuming one independently checked child declaration.',
       executable: input.executable, profile, modules: { ...modules, M1: { ...modules.M1,
         open: async options => {
@@ -282,8 +282,7 @@ export async function verifyNativeProofDelivery(input: { repository: string; exe
           return session;
         } } }, signal, deadline: Infinity,
       maxTurns: Infinity, maxTurnMs: Infinity, maxTotalTokens: 0,
-      workers: [{ id: 'solver', role: 'lead', worktree, ownedFiles: problem.ownedFiles }],
-      access: new Map([['solver', { environment, researchSkill: skill, retrievalRoot: path.join(worktree, problem.projectRelative) }]]),
+      access: { environment, researchSkill: skill, retrievalRoot: path.join(worktree, problem.projectRelative) },
       save: () => {
         for (const current of [state!.writerProcess, ...(state!.agentTeam?.workers.map(worker => worker.writerProcess) ?? [])])
           if (current) processes.set(current.pid + ':' + current.startTime, current);

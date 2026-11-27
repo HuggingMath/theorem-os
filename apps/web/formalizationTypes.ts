@@ -41,6 +41,8 @@ export type WebFormalization = {
   backgroundReview?: WebFormalizationBackgroundReview;
 };
 export type WebFormalizationCapabilities = { available: boolean; reason?: 'provider' | 'runtime'; providerId?: string;
+  /** The current worker can run the proof stage after compiling the statement. */
+  solveAvailable?: boolean;
   model: string; key: 'required' | 'saved' | 'server'; limits: typeof webFormalizationLimits;
   providers?: (WebProvider & { defaultModel: string; key: 'required' | 'saved' | 'server'; keyUrl?: string })[];
   defaults?: typeof webFormalizationDefaults };

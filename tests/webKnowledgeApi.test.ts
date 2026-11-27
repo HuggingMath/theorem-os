@@ -28,11 +28,11 @@ const candidate = (name: string): KnowledgeCandidate => ({
 });
 const input = (): WebRunInput => ({ providerId: 'openai', apiKey: 'sk-disposable-http-fixture', model: 'never-called', effort: 'high',
   source: 'theorem example : True := by sorry', task: 'Offline HTTP fixture only', maxTurns: 1,
-  maxRunSeconds: 30, workers: 2, coordination: 'cooperative', environment: 'standard' });
+  maxRunSeconds: 30, workers: 1, coordination: 'independent', environment: 'standard' });
 
 class ApiFixtureRunner implements WebRunner {
   calls: WorkerInput[] = [];
-  async readiness() { return { ready: true, message: 'Offline fixture ready' }; }
+  async readiness() { return { ready: true, nativeTeam: true, message: 'Offline fixture ready' }; }
   async run(value: WorkerInput, send: (message: WorkerMessage) => void) {
     this.calls.push(value);
     send({ type: 'result', result: { status: 'incomplete', proof: '', report: {} } });
@@ -177,8 +177,8 @@ describe('knowledge and module configuration through the real HTTP service witho
     const response = await request(alice, '/api/module-plans', { name: 'HTTP scheme', plan });
     expect(response.status).toBe(200); const saved = (await response.json()).plan;
     expect((await get(bob, '/api/module-plans')).plans).toEqual([]);
-    const runResponse = await request(alice, '/api/runs', { ...input(), modulePlan: saved.plan });
-    expect(runResponse.status).toBe(201); const run = (await runResponse.json()).run;
+    const run = service.jobs.create(alice.owner, { ...input(), workers: 2, coordination: 'cooperative', modulePlan: saved.plan },
+      config.providers.find(provider => provider.id === 'openai')!);
     const update = await request(alice, '/api/module-plans', { id: saved.id, baseUpdatedAt: saved.updatedAt, name: saved.name,
       plan: { scheduler: 'continuation', context: 'full', custom: [] } });
     expect(update.status).toBe(200); const changed = (await update.json()).plan;

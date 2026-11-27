@@ -39,7 +39,7 @@ async function harness(concurrency: number, queueLimit = 8, formalizationFixture
   const workerStarts: string[] = [];
   const compiles = new Map<string, { signal: AbortSignal; finish: () => void }>();
   const runner: WebRunner = {
-    async readiness() { return { ready: true, message: 'Local review fixture' }; },
+    async readiness() { return { ready: true, nativeTeam: true, message: 'Local review fixture' }; },
     async run(value, send, signal) {
       workerStarts.push(value.id);
       await new Promise<void>((resolve, reject) => {

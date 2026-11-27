@@ -60,7 +60,7 @@ import fs from 'node:fs';import path from 'node:path';
 import { withMathRuntimeLease,writeMathJsonDurable } from './src/math/mathRuntimeIo';
 import { readSolverRunState,writeSolverRunState } from './src/solver/archive';
 import { prepareResearchSkill } from './src/solver/researchSkill';
-import { runResearchWorkers } from './src/solver/research';
+import { runResearchLead } from './src/solver/research';
 import { git } from './src/solver/problem';
 import { directSolverModules } from './src/solver/modules';
 const config=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),recovery=process.argv[3]==='resume';
@@ -90,9 +90,8 @@ await withMathRuntimeLease({lockPath,flockExecutable:'/usr/bin/flock'},async lea
   if(!recovery&&config.phase==='whole-proof-pending'&&state.pendingProofCheck)hold();
   if(!recovery&&config.phase==='whole-proof-accepted'&&state.pendingProofCheck&&state.check?.passed)hold();};
  if(!recovery&&config.phase==='prepared')hold();
- const result=await runResearchWorkers({state,root:config.repo,buildFile:config.buildFile,taskText:'Prove the fixed original target.',
- workers:[{id:'solver',role:'lead',worktree:state.worktree,ownedFiles:state.problem.ownedFiles}],
- access:new Map([['solver',{researchSkill:skill,environment:{...config.environment,FIXTURE_ROOT:config.root,FIXTURE_PHASE:config.phase,FIXTURE_RECOVERY:recovery?'1':'0'},retrievalRoot:state.worktree}]]),
+ const result=await runResearchLead({state,root:config.repo,buildFile:config.buildFile,taskText:'Prove the fixed original target.',
+ access:{researchSkill:skill,environment:{...config.environment,FIXTURE_ROOT:config.root,FIXTURE_PHASE:config.phase,FIXTURE_RECOVERY:recovery?'1':'0'},retrievalRoot:state.worktree},
  modules:directSolverModules,executable:path.join(config.root,'peer'),profile:path.join(config.root,'profile'),signal:lease.signal,
  deadline:Infinity,maxTurns:config.phase==='pending-verifier'?1:config.phase==='frozen'?2:1,maxTurnMs:Infinity,maxTotalTokens:1000,proofTimeoutMs:30000,
  save,emit:(event,details)=>{fs.appendFileSync(path.join(config.root,'events.jsonl'),JSON.stringify({event,details})+'\n');
@@ -121,7 +120,7 @@ beforeAll(() => {
   fs.cpSync(path.join(sourceRoot, 'scripts'), path.join(runtimeRoot, 'scripts'), { recursive: true });
   const startedAt = new Date().toISOString(), source = mathBuildSource(runtimeRoot);
   const bundleRoot = path.join(runtimeRoot, 'out/main');
-  buildSync({ entryPoints: Object.fromEntries(['runMathProof', 'searchLean', 'checkLean', 'proofSearch']
+  buildSync({ entryPoints: Object.fromEntries(['runMathProof', 'searchLean', 'checkLean']
     .map((name, index) => [MATH_RUNTIME_BUNDLES[index].replace(/\.js$/u, ''),
       path.join(runtimeRoot, 'scripts/mathematics', name + '.ts')])),
     outdir: bundleRoot, bundle: true, platform: 'node', format: 'cjs',

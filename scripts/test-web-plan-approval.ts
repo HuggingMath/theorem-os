@@ -15,10 +15,8 @@ import { closeSettings, openHistory, openSettings, openTab, refreshHistory, sele
 import { freePort, postRun, ready, settled, startBrowser } from './web-scenario';
 
 /**
- * 先审计划 against a local runner (no Docker, no model): the option needs task collaboration and two Agents and reaches
- * the worker; a run whose plan waits shows the approval banner with its four actions; an approval of a plan that changed
- * meanwhile is rejected with a readable reason, whether the saved checkpoint or the running solver rejects it; the
- * approval of the current version releases the run; while the Lead revises from a note nothing can be approved.
+ * Native route approval against a local runner. The browser submits the opt-in, reads the frozen route,
+ * reconciles stale approvals, and releases the same run after approval of the current version.
  * Audited, and laid out at 1440 and 375 px in Chinese and at 1440 px in English.
  */
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -44,10 +42,12 @@ function observation(id: string): WebObservation {
     id: name, kind: 'goal' as const, objective: `证明 ${name}`, dependsOn: [], revision: 0, theoremName: name, proofPath: 'Submission.lean', type })) };
   const snapshot = { schema: 'theoremos.run-observation.v1', runId: `solver-${id}`, stateDigest: digest('a'), resultDigest: null };
   const inspection: WebInspection = { schema: 'deepscientist.math.inspection.v1', runId: snapshot.runId, snapshot,
-    evidence: 'recorded-not-replayed', phase: 'cooperative',
+    evidence: 'recorded-not-replayed', phase: 'running',
     problem: { id: 'plan-approval-fixture', statement: '证明两个自然数加零的等式', formalStatement: source, assumptions: [],
       targets: tasks.map(([name]) => ({ proofPath: 'Submission.lean', theoremName: name })) },
-    configuration: { model: 'fixture', effort: 'low', workers: 2, coordination: 'cooperative', buildDigest: digest('b'), environmentDigest: digest('e') },
+    configuration: { model: 'fixture', effort: 'low', workers: 1, coordination: 'independent', buildDigest: digest('b'), environmentDigest: digest('e'),
+      researchMode: 'skill', researchDelegation: { mode: 'team', maxAgents: 3 },
+      researchSkill: { name: 'theoremos-research', digest: digest('f'), loading: 'native' } },
     turns: 1, planVersion: plan.baseVersion,
     scheduling: { evidence: 'recorded-dispatch-state', observedWorkers: 2, working: 0, proofAssignments: 0, preparing: 0, stopping: 0, idle: 2, stopped: 0 },
     knowledge: { status: 'disabled', evidence: 'recorded-not-replayed', attribution: 'model-reported-origin', retrievalCoverage: 'recorded',
@@ -74,7 +74,7 @@ function revise(control: Control, version: string) {
   control.observation.inspection.planVersion = control.approval.planVersion = version;
 }
 const runner: WebRunner = {
-  async readiness() { return { ready: true, message: '本地计划批准验证环境' }; },
+  async readiness() { return { ready: true, nativeTeam: true, message: '本地计划批准验证环境' }; },
   async run(input, send: (message: WorkerMessage) => void, signal) {
     started.push(input.input);
     await new Promise<void>(resolve => {
@@ -112,7 +112,8 @@ const runner: WebRunner = {
 const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin,
   THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web'), THEOREMOS_WEB_CONCURRENCY: '4' }), runner);
 const input: WebRunInput = { providerId: 'openai', apiKey: 'sk-plan-approval-fixture', model: 'fixture-plan-model', effort: 'low',
-  environment: 'standard', source, task: '证明两个加零的等式', maxTurns: 6, maxRunSeconds: 600, workers: 2, coordination: 'cooperative', planApproval: true };
+  environment: 'mathlib', source, task: '证明两个加零的等式', maxTurns: 6, maxRunSeconds: 600,
+  workers: 1, coordination: 'independent', researchMode: 'skill', nativeTeamCapacity: 3, planApproval: true };
 const mark = (check: string) => console.log(`PASS ${check}`);
 const banner = (page: Page) => page.locator('[data-run-approval]');
 const shot = async (page: Page, name: string) => { await settled(page); await page.screenshot({ path: path.join(output, name) }); };
@@ -162,23 +163,16 @@ try {
   browser = await startBrowser(service.server, port);
   const { context, page } = await open(1440);
 
-  // The option is offered only where it means something: task collaboration with at least two Agents.
   await openSettings(page);
   const option = page.locator('#plan-approval');
-  assert.equal(await option.isDisabled(), true, 'one Agent has no peers to hold');
-  await page.locator('#workers').fill('2');
-  assert.equal(await option.isDisabled(), false);
+  assert.equal(await option.isEnabled(), true);
+  assert.equal(await option.isChecked(), false);
   await option.check();
-  await page.locator('input[name="coordination"][value="independent"]').check({ force: true });
-  assert.equal(await option.isDisabled(), true, 'independent Agents share no plan');
-  assert.equal(await option.isChecked(), true, 'the choice is kept for when it applies again');
-  await page.locator('input[name="coordination"][value="cooperative"]').check({ force: true });
-  assert.equal(await option.isDisabled(), false);
   await page.locator('.plan-approval-option').scrollIntoViewIfNeeded();
   assert.deepEqual(await audit(page, { scope: '#run-settings' }), [], 'settings with the plan-approval option');
   await shot(page, 'option-1440.png');
   await closeSettings(page);
-  mark('先审计划 needs task collaboration and two Agents');
+  mark('approval is an explicit opt-in on the Codex native team');
 
   await page.locator('#task').fill(input.task);
   await page.evaluate(([key, value]) => {
@@ -191,16 +185,24 @@ try {
   await page.locator('#submit-run:enabled').click();
   const body = JSON.parse((await request).postData() ?? '{}');
   assert.equal(body.planApproval, true, 'the option is submitted');
+  assert.equal(body.nativeTeamCapacity, 3);
+  assert.equal(body.coordination, 'independent');
   // The new run opens on its chat, whose card names the wait; the banner and its actions are in the run panel.
   await page.locator('body[data-view="run"] .detail-heading[data-run]').waitFor({ state: 'attached' });
   await showArtifacts(page);
-  await banner(page).waitFor({ timeout: 15_000 });
+  await banner(page).waitFor({ timeout: 15_000 }).catch(async error => {
+    const data = await page.evaluate(async () => (await (await fetch('/api/runs')).json()).runs?.map((run: { status: string; phase?: string; observation?: WebObservation; events: { event: string }[] }) => ({
+      status: run.status, phase: run.phase, approval: run.observation?.inspection.planApproval, events: run.events.map(event => event.event),
+    })));
+    console.error('Native approval observations at timeout:', data, 'document:', await page.locator('#run-detail').innerText(), 'page errors:', errors);
+    throw error;
+  });
   assert.equal(started.at(-1)?.planApproval, true, 'the option reaches the worker');
   const first = [...controls.keys()].at(-1)!, control = controls.get(first)!;
   mark('the option reaches the worker');
   // The waiting plan: the banner says what is asked and why nothing runs, and the run reads as waiting everywhere.
   assert.equal(await page.locator('#run-approval-heading').innerText(), '研究计划等你批准');
-  assert.match(await banner(page).innerText(), /Lead 把题目拆成了 2 项任务。批准后 Agent 才开始工作[\s\S]*等待确认不计入证明预算/u);
+  assert.match(await banner(page).innerText(), /请核对 Lead 的初始路线，批准后团队开始证明/u);
   assert.equal(await page.locator('.detail-statusline [data-status]').innerText(), '等你批准计划');
   assert.match(await page.locator('#detail-panel').innerText(), /Lead 已经拟好研究计划，等你批准后 Agent 才开始工作/u);
   // The history sits folded under 证明任务 beside the chat.
@@ -223,21 +225,16 @@ try {
   assert.equal(await page.locator('[data-run-approval] [data-action="approve-plan"]').isEnabled(), true);
   mark('returning to a pending plan keeps the same run ready to approve');
 
-  // Its other actions lead to the plan, its editor and a note to the Lead; the banner stays above every tab.
+  // The banner links to the saved plan so the reader can review what they are about to approve.
   await page.locator('[data-run-approval] [data-action="show-plan"]').click();
   await page.locator('#detail-tab-collaboration[aria-selected="true"]').waitFor();
   await page.locator('[data-collab-task="add_zero"]:visible').first().waitFor();
   assert.equal(await banner(page).count(), 1);
-  await page.locator('[data-run-approval] [data-action="edit-plan"]').click();
-  await page.locator('.collab-plan-dialog[open]').waitFor();
-  await page.locator('[data-plan-close]').click();
-  await page.locator('.collab-plan-dialog[open]').waitFor({ state: 'detached' });
-  await page.locator('[data-run-approval] [data-action="guide-lead"]').click();
-  await page.waitForFunction(() => document.activeElement?.matches('[data-guidance-text]'));
-  assert.equal(await page.locator('[data-guidance-kind]').inputValue(), 'lead', 'the note is addressed to the Lead');
-  assert.equal(approvals.length, 0, 'looking, editing and writing a note approve nothing');
+  assert.equal(await page.locator('[data-run-approval] [data-action="edit-plan"]').count(), 0);
+  assert.equal(await page.locator('[data-run-approval] [data-action="guide-lead"]').count(), 0);
+  assert.equal(approvals.length, 0, 'reading the plan sends no approval');
   await openTab(page, 'result');
-  mark('查看计划, 修改计划 and 给 Lead 留言 open the plan, its editor and a note to the Lead');
+  mark('viewing the saved native plan does not send approval');
 
   // The plan changed after the page last read it: the saved checkpoint rejects the approval of the older version.
   revise(control, 'plan-v2');
@@ -255,7 +252,6 @@ try {
   await page.locator('[data-run-approval] [data-action="approve-plan"]').click();
   await page.locator('[data-run-original-plan-approval]').waitFor();
   assert.equal(await page.locator('[data-run-approval] [data-action="approve-plan"]').isDisabled(), true);
-  assert.equal(await page.locator('[data-run-approval] [data-action="edit-plan"]').isDisabled(), true);
   await page.locator('#toast:not([hidden])').getByText('批准已提交，运行确认后 Agent 就开始工作').waitFor();
   for (let tries = 0; control.approval.status !== 'approved' && tries < 50; tries++) await page.waitForTimeout(100);
   await poll(page);
@@ -311,7 +307,7 @@ try {
     const { context, page } = await open(1440, 'en');
     await selectHistoryRun(page, second);
     await page.locator('#run-approval-heading').getByText('The research plan is waiting for your approval').waitFor();
-    assert.match(await banner(page).innerText(), /The Lead split the problem into 2 tasks[\s\S]*Approve and start/u);
+    assert.match(await banner(page).innerText(), /Review the Lead’s initial route[\s\S]*Approve and start/u);
     assert.deepEqual(await audit(page, { scope: '[data-run-approval]' }), [], 'English approval banner');
     assert.equal(await page.locator('#result-verdict-heading').innerText(), 'Proving has not started');
     assert.equal(await page.locator('.result-goals .goal-row .badge').first().innerText(), 'Awaiting plan approval');
@@ -335,9 +331,14 @@ try {
     await page.locator('#detail-panel [data-action="notify"][aria-pressed="true"]').waitFor();
     await page.locator('#toast:not([hidden])').getByText('研究结束或计划等你批准时会发送桌面通知').waitFor();
     await page.waitForFunction(() => document.title.startsWith('(1) 等你批准计划'));
+    await page.clock.install();
     await setHidden(page, true);
     Object.assign(later.approval, { status: 'pending', requestedAt: Date.now() }); later.emit();
-    await page.waitForFunction(() => document.title.startsWith('(2) 等你批准计划'), undefined, { timeout: 25_000 });
+    // A hidden tab stops live updates and polls every 30 seconds.
+    await page.clock.fastForward(31_000);
+    await page.waitForFunction(() => document.title.startsWith('(2) 等你批准计划'));
+    // The browser lock for notification delivery can run after the title has been rendered.
+    await page.waitForFunction(() => (window as unknown as { __notifications: unknown[] }).__notifications.length > 0);
     const shown = await notifications(page);
     assert.equal(shown.length, 1);
     assert.equal(shown[0].title, 'TheoremOS · 研究计划等你批准');

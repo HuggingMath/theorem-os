@@ -10,7 +10,7 @@ import type { WebRunner } from '../apps/web/runner';
 import type { ResearchAccountDraftResult, ResearchAccountDraft } from '../apps/web/researchPersonalTypes';
 import type { ProblemDraftValue } from '../apps/web/problemDraftTypes';
 import { freePort, startBrowser } from './web-scenario';
-import { enterLean, closeSettings, openAdvancedChatSettings, openChatModelSettings } from './web-ui-controls';
+import { enterLean, closeSettings, openAdvancedChatSettings, openChatModelSettings, openChatParticipation } from './web-ui-controls';
 import { webFormalizationEvidence, webFormalizationStatement } from '../tests/helpers/webFormalizationFixture';
 
 const root=path.resolve(import.meta.dirname,'..'),output=process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root,'out/product-continuity/research-lifecycle/entry');
@@ -19,7 +19,7 @@ const temporary=await fs.mkdtemp(path.join(os.tmpdir(),'theoremos-lifecycle-'));
 const port=await freePort(),origin=`http://127.0.0.1:${port}`;
 const mail:{to:string;text:string}[]=[],external:string[]=[],errors:string[]=[],checks:object[]=[],contexts:BrowserContext[]=[];
 let formalizations=0,runs=0,phase='initial',failure:unknown,active:Page|undefined;
-const runner:WebRunner={async readiness(){return {ready:true,message:'Disposable lifecycle fixture'};},async formalize(input,send){formalizations++;send({type:'result',status:'approved',evidence:webFormalizationEvidence(input)});},async run(_input,send){runs++;send({type:'error',message:'Recorded lifecycle fixture; no proof execution.'});}};
+const runner:WebRunner={async readiness(){return {ready:true,nativeTeam:true,message:'Disposable lifecycle fixture'};},async formalize(input,send){formalizations++;send({type:'result',status:'approved',evidence:webFormalizationEvidence(input)});},async run(_input,send){runs++;send({type:'error',message:'Recorded lifecycle fixture; no proof execution.'});}};
 const emails=['lifecycle-zh@example.org','lifecycle-en@example.org'];
 const service=createWebService(readWebConfig({THEOREMOS_WEB_PORT:String(port),THEOREMOS_WEB_PUBLIC_URL:origin,THEOREMOS_WEB_STATIC_ROOT:path.join(root,'out/web'),THEOREMOS_WEB_DATA_ROOT:temporary,THEOREMOS_WEB_AUTH:'email',THEOREMOS_WEB_SMTP_URL:'log:',THEOREMOS_WEB_ALLOWLIST:emails.join(','),THEOREMOS_WEB_PROVIDERS:JSON.stringify([{id:'fixture',name:'Local fixture',baseUrl:'https://fixture.invalid/v1'}])}),runner,{sample:null,mailer:async message=>{mail.push(message);},captchaAnswer:()=> '24680'});
 const browser=await startBrowser(service.server,port);
@@ -64,6 +64,8 @@ try{
   await showArchived.check();const history=panel(page).locator(`[data-problem-draft="${first.draft.id}"]`);await history.waitFor();if(await history.getAttribute('open')!=='')await history.locator(':scope > summary').click();const row=history.locator(`[data-problem-draft-version="${first.version.id}"]`);assert.match(await row.innerText(),/已丢弃|Discarded/);
   await row.locator('[data-restore-problem-draft]').click();await page.waitForFunction(text=>(document.querySelector('#formalize-original') as HTMLTextAreaElement)?.value===text,webFormalizationStatement);
   phase=`submit-exact-version-${language}`;
+  await openChatParticipation(page); await page.locator('input[name="chat-participation"][value="guided"]').check();
+  await page.locator('#formalize-settings > summary').click();
   await page.locator('#formalize-settings > summary').click();await page.locator('#formalize-key').fill('sk-disposable-lifecycle');await page.locator('#formalize-settings > summary').click();
   let loseFormalizationReply=true;
   const unknownPattern='**/api/formalizations';
@@ -87,7 +89,7 @@ try{
   const leanSource='theorem lifecycle_target (n : Nat) : n + 0 = n := by\n  sorry\n';
   await page.locator('#source').fill(leanSource);await page.locator('#task').fill('Initial Lean instructions');
   await page.locator('#composer-settings').click();await page.locator('#model').fill('fixture-lean');await page.locator('#api-key').fill('sk-disposable-lifecycle');
-  await page.locator('[data-settings-section="settings-execution"]').click();await page.locator('#max-turns').fill('4');await page.locator('#max-seconds').fill('120');await page.locator('#workers').fill('1');await closeSettings(page);
+  await page.locator('[data-settings-section="settings-execution"]').click();await page.locator('#max-turns').fill('4');await page.locator('#max-seconds').fill('120');await closeSettings(page);
   const lean=await save(page,'Lean original');assert.equal(lean.version.value.mode,'lean');
   const parallel=await page.evaluate(async saved=>{const session=await(await fetch('/api/session')).json();const value=saved.version.value as Extract<ProblemDraftValue,{mode:'lean'}>;
     const reply=await fetch('/api/research/personal/drafts',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrfToken},body:JSON.stringify({requestId:crypto.randomUUID(),expectedRevision:saved.version.revision,scope:{kind:'problem',draftKey:saved.draft.scope.draftKey},value:{...value,draft:{...value.draft,task:'Parallel device instructions'}},summary:'Parallel Lean original',deviceId:'another-device',deviceName:'Another device',clientUpdatedAt:new Date().toISOString()})});if(!reply.ok)throw new Error(await reply.text());return(await reply.json()).item;},lean);

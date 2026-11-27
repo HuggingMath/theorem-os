@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { parseArgs } from 'node:util';
 import { MAX_RESEARCH_NOTES_BYTES } from '../../src/solver/deliveries';
-import { applyCooperationPlanFile, publishCooperationPlanFile, validateCooperationPlanFile } from '../../src/solver/planTool';
+import { validateCooperationPlanFile } from '../../src/solver/planTool';
 
 function readStandardInput(): string {
   const bytes = Buffer.alloc(MAX_RESEARCH_NOTES_BYTES + 1);
@@ -15,19 +15,18 @@ function readStandardInput(): string {
   return new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, length));
 }
 
-export function runPlanCommand(command: 'plan-validate' | 'plan-apply', args: string[]): void {
-  const usage = `theorem-os ${command} [--file FILE] [--workspace DIR]` + (command === 'plan-apply' ? ' [--publish]' : '');
+export function runPlanCommand(args: string[]): void {
+  const usage = 'theorem-os plan-validate [--file FILE] [--workspace DIR]';
   let field = 'arguments';
   try {
     const { values } = parseArgs({ args, options: {
       file: { type: 'string' }, workspace: { type: 'string' }, worktree: { type: 'string' },
-      ...(command === 'plan-apply' ? { publish: { type: 'boolean' as const } } : {}),
       help: { type: 'boolean', short: 'h' },
     } });
     if (values.help) {
       console.log(JSON.stringify({ usage, description: 'Read a complete plan or revision from --file or stdin. ' +
         'Use the Lead workspace with COOPERATION.json, or a prepared workspace with active-problem.json. ' +
-        (command === 'plan-apply' ? 'Save a validated draft in RESEARCH.md, or use --publish to queue it for the current Lead dispatch.' : 'Report validation issues.') }));
+        'Report validation issues.' }));
       return;
     }
     if (values.worktree && values.workspace) throw new Error('Choose --workspace or --worktree.');
@@ -37,8 +36,7 @@ export function runPlanCommand(command: 'plan-validate' | 'plan-apply', args: st
       field = 'stdin';
       input = { workspace, text: readStandardInput() };
     } else input = { workspace, file: values.file };
-    const result = values.publish ? publishCooperationPlanFile(input) :
-      command === 'plan-apply' ? applyCooperationPlanFile(input) : validateCooperationPlanFile(input);
+    const result = validateCooperationPlanFile(input);
     console.log(JSON.stringify(result));
     if (!result.ok) process.exitCode = 1;
   } catch (error) {

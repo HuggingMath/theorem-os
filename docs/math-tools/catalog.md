@@ -17,7 +17,7 @@
 
 ## 项目里的现成入口
 
-TheoremOS 已有 `search-lean`、`check-lean`、`proof-search`、`check-finite` 和 `kernel-certificate`。Skill 会按宿主的工具清单介绍可用命令。如果运行清单提供 `math-python`，它可携带 NumPy、SciPy、SymPy 和 PySAT。Web worker 的构建文件明确安装了固定 Lean、Mathlib 和 Pantograph，各运行的 Python 工具可用性取决于镜像和清单。固定 Mathlib 的依赖包含 Plausible、LeanSearchClient、import-graph、ProofWidgets4 和 Aesop。 [CLI](../../bin/math.ts) · [工具清单](../../docs/solver-modules.md) · [Skill 入口](../../src/solver/skillResearchContext.ts) · [Web worker](../../apps/web/Dockerfile) · [依赖清单](../../resources/mathlib/environment.json)
+TheoremOS 提供 `search-lean`、`check-lean`、`check-finite` 和 `kernel-certificate`。Skill 按运行的工具清单介绍命令。如果清单提供 `math-python`，它可携带 NumPy、SciPy、SymPy 和 PySAT。Web worker 提供固定 Lean 和 Mathlib。Mathlib 的依赖包含 Plausible、LeanSearchClient、import-graph、ProofWidgets4 和 Aesop。依赖固定任务图的 `proof-search` 使用对应的历史版本。 [CLI](../../bin/math.ts) · [工具清单](../../docs/solver-modules.md) · [Skill 入口](../../src/solver/skillResearchContext.ts) · [Web worker](../../apps/web/Dockerfile) · [依赖清单](../../resources/mathlib/environment.json)
 
 工作台的 Proof Map 读派工、试用、交付、采纳和验收回执。Lean 的 tactic 步骤、编译后声明依赖和模块 import 是另外三种关系，分别由语言服务器、编译产物和模块清单提供。图形可以引用同一份源码版本。原题是否通过由独立 Lean 验收确定。 [Proof Map](../../apps/web/client/proofMapModel.ts) · [原题验收](../../src/solver/evaluation.ts)
 

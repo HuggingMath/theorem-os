@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 // Disposable HTTP/Chromium state with a controlled runner; no real models, Lean or mail.
+import { seedCooperativeRun } from './web-cooperative-fixture';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -85,7 +86,7 @@ try {
     await Promise.all([owner, peer].map(page => page.goto(origin + '/theorems.html')));
     const peerSession = await http<{ researcherId: string }>(peer, 'GET', '/api/research/session');
     for (const [page, name] of [[owner, 'Owner'], [peer, 'Peer']] as const) await http(page, 'PUT', '/api/research/profile', { requestId: crypto.randomUUID(), expectedRevision: 0, displayName: name, visibility: 'public' });
-    const { run } = await http<{ run: { id: string } }>(owner, 'POST', '/api/runs', { requestId: crypto.randomUUID(), providerId: 'openai', apiKey: 'sk-disposable-inline-fixture', model: 'fixture', effort: 'low', environment: 'standard', source, task: 'Prove True', maxTurns: 2, maxRunSeconds: 600, workers: 2, coordination: 'cooperative' });
+    const run = await seedCooperativeRun(service, owner.context(), origin, { providerId: 'openai', apiKey: 'sk-disposable-inline-fixture', model: 'fixture', effort: 'low', environment: 'standard', source, task: 'Prove True', maxTurns: 2, maxRunSeconds: 600, workers: 2, coordination: 'cooperative' });
     await owner.waitForFunction(async id => (await (await fetch(`/api/runs/${id}`)).json()).run.observation, run.id);
     const routeUrl = `${origin}/problem.html?${new URLSearchParams({ run: run.id, tab: 'route', task: 'goal', taskVersion: 'goal-v1' })}`;
     await owner.goto(routeUrl); const inline = owner.locator('[data-research-inline-actions]'); await inline.locator('[data-inline-open]').click(); await inline.locator('[data-inline-approve-plan]').waitFor();

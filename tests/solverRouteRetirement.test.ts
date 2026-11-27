@@ -1,204 +1,153 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { MathAgentOptions, MathAgentSession } from '../src/runtime/codexSession';
-import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
-import { CooperativeResearch } from '../src/solver/cooperation';
-import { parseLeadPlan } from '../src/solver/cooperationShared';
-import { routeAllowsTask } from '../src/solver/modules/search';
-import { runResearchWorkers } from '../src/solver/research';
-import { parseCooperationPlan } from '../src/solver/tasks';
+import { bootstrapLeanTask } from '../src/math/leanTask';
+import { mathDigest } from '../src/math/mathRuntimeIo';
+import { readMathAgentSkill } from '../src/runtime/agentSkills';
+import type { MathAgentOptions, MathAgentSession } from '../src/runtime/agentSession';
+import type { NativeAgentControlConnection } from '../src/runtime/nativeAgentControl';
+import { AgentResearchTeam } from '../src/solver/agentTeam';
+import { readSolverRunState, writeSolverRunState, type SolverRunState } from '../src/solver/archive';
+import { directSolverModules } from '../src/solver/modules';
+import { readSolverProblem } from '../src/solver/problem';
+import { prepareResearchSkill, researchSkillIdentity } from '../src/solver/researchSkill';
 import { deferred } from './helpers/async';
-import { workerAccess, workerDeliveryModules } from './helpers/cooperation';
-import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
-import './helpers/solverTeamRouteRetirement';
+import { temporaryDirectory } from './helpers/files';
+import { solverState } from './helpers/solver';
 
-vi.mock('../src/math/mathBuildManifest', async importOriginal => ({
-  ...await importOriginal<typeof import('../src/math/mathBuildManifest')>(), readMathBuildManifest: vi.fn(),
-}));
-
-const directories: string[] = [];
-afterEach(() => { for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true }); });
-const budget = { maxTurns: 100, remainingMs: 30_000 };
-
-class FixtureResearch extends CooperativeResearch {
-  async publish(value: unknown) {
-    return this.acceptPlan(parseLeadPlan(this.input.state.problem, value, this.planPatchBase()));
-  }
-}
-
-function fixture(startWithPlan = true) {
-  const example = localExample('retire-cooperative-route-');
-  directories.push(example.directory);
-  const { problem, workspace } = example;
-  const lead = leadWorker(problem, workspace), peer = peerWorker(example, 'peer');
-  const workers = [lead, peer], file = path.join(example.directory, 'state.json');
-  const originalGoals = problem.targets.map((target, index) => ({
-    id: 'goal_' + index, kind: 'goal', objective: 'Prove ' + target.theoremName, ...target,
-    status: 'paused',
-  }));
-  const tasks = [
-    { id: 'dead_active', kind: 'research', groupId: 'dead', objective: 'Check the failing approach.', ownerId: peer.id },
-    { id: 'dead_queued', kind: 'research', groupId: 'dead', objective: 'Extend the failing approach.', ownerId: peer.id,
-      dependsOn: ['dead_active'] },
-    { id: 'live_ready', kind: 'research', objective: 'Explore the independent approach.', ownerId: peer.id, status: 'paused' },
-    ...originalGoals,
-  ];
-  const groups = [{ id: 'main', objective: 'Frozen goal and viable route' },
-    { id: 'dead', objective: 'A candidate route to falsify', maxConcurrent: 1 }];
-  const parsed = parseCooperationPlan(problem, { tasks, groups });
-  const state = solverState(problem, workspace, { runId: 'route-retirement-fixture', phase: 'running',
-    workers: workers.map(worker => ({ ...worker, phase: 'running', turns: 0 })),
-    ...(startWithPlan ? { cooperation: { canonicalCommit: problem.baseCommit,
-      tasks: parsed.tasks.map(task => ({ task, status: 'pending' as const, attempts: 0 })),
-      groups: parsed.groups.map(group => ({ group, turns: 0 })) } } : {}) });
-  const controller = new AbortController();
-  const emit = vi.fn();
-  const research = (snapshot = state) => new FixtureResearch({
-    state: snapshot, workers, access: workerAccess(workers, example.directory), modules: workerDeliveryModules,
-    signal: controller.signal, save: () => writeSolverRunState(file, snapshot), emit,
-    exclusiveCheck: async check => check(),
-  });
-  return { ...example, state, file, lead, peer, originalGoals, groups, research, emit };
-}
-
-describe('cooperative route retirement', () => {
-  it('atomically saves retirement, interrupts the active branch, and dispatches a viable successor', async () => {
-    const f = fixture(), research = f.research();
-    try {
-      const action = await research.next(f.peer, budget);
-      if (action?.kind !== 'task') throw new Error('Expected a route assignment.');
-      expect(action.task.id).toBe('dead_active');
-      expect(research.started(f.peer, action)).toBe(true);
-      const interrupt = vi.fn(async () => {
-        const saved = readSolverRunState(f.file).cooperation!;
-        expect(saved.retiredRoutes).toMatchObject([{ routeId: 'dead', reason: 'Counterexample at zero', evidenceRefs: ['probe-zero'] }]);
-        expect(saved.tasks.find(node => node.task.id === 'dead_active')?.status).toBe('blocked');
-        expect(saved.groups?.find(route => route.group.id === 'dead')?.busy).toBe(0);
-      });
-      research.activate(f.peer, action, interrupt, async () => {});
-      const baseVersion = f.state.cooperation!.planVersion;
-      await expect(research.publish({ baseVersion, retireRoutes: [{ routeId: 'dead', reason: '' }] }))
-        .rejects.toThrow('math_plan_invalid_retire_routes');
-      expect(interrupt).not.toHaveBeenCalled();
-      expect(research.current(action)).toBe(true);
-      await research.publish({ baseVersion, upsert: [{ id: 'live_ready', status: 'active' }],
-        retireRoutes: [{ routeId: 'dead', reason: 'Counterexample at zero', evidenceRefs: ['probe-zero'] }] });
-      expect(f.emit).toHaveBeenCalledWith('cooperative_route_retired', expect.objectContaining({ routeId: 'dead' }));
-      expect(interrupt).toHaveBeenCalledTimes(1);
-      // Observe errors inside the awaited interruption callback as well.
-      await interrupt.mock.results[0].value;
-      expect(research.current(action)).toBe(false);
-      expect(f.state.cooperation!.tasks.filter(node => node.task.groupId === 'dead').map(node =>
-        ({ status: node.status, policy: node.task.status, attempts: node.attempts, owner: node.assignment?.workerId })))
-        .toEqual([{ status: 'blocked', policy: 'stopped', attempts: 1, owner: undefined },
-          { status: 'blocked', policy: 'stopped', attempts: 0, owner: undefined }]);
-      research.interrupted(f.peer, action);
-      research.deactivate(f.peer);
-      expect(await research.next(f.peer, budget)).toMatchObject({ kind: 'task', task: { id: 'live_ready' } });
-      expect(JSON.parse(fs.readFileSync(path.join(f.peer.worktree, 'COOPERATION.json'), 'utf8')).retiredRoutes)
-        .toMatchObject([{ routeId: 'dead', source: 'lead' }]);
-
-      const restored = readSolverRunState(f.file);
-      const resumed = f.research(restored);
-      try {
-        await resumed.publish({ baseVersion: restored.cooperation!.planVersion,
-          groups: f.groups, upsert: [{ id: 'dead_queued', status: 'active' },
-            { id: 'replacement', kind: 'research', groupId: 'dead', objective: 'Retry the retired route.' }] });
-        const dead = restored.cooperation!.tasks.filter(node => node.task.groupId === 'dead');
-        expect(dead).toHaveLength(3);
-        expect(dead.every(node => node.task.status === 'stopped' && node.status === 'blocked')).toBe(true);
-        expect(dead.map(node => node.attempts)).toEqual([1, 0, 0]);
-      } finally { await resumed.stop(); }
-    } finally { await research.stop(); }
-  });
-
-  it('prunes an alternate proof route and keeps its shared foundation available to the surviving route', async () => {
-    const f = fixture(false), research = f.research();
-    try {
-      const goal = f.originalGoals[0], proofPath = goal.proofPath;
-      const lemma = (id: string, dependsOn: string[] = []) => ({
-        id, kind: 'lemma', objective: 'Prove the finite claim ' + id, theoremName: id, proofPath, type: 'True', dependsOn,
-      });
-      const routes = ['dead', 'live'].map(route => ({ id: route, targetTaskId: goal.id,
-        closingTaskId: route + '_closing', prerequisiteTaskIds: ['shared_foundation'] }));
-      const tasks = [...f.originalGoals, lemma('shared_foundation'), lemma('dead_only'),
-        lemma('dead_closing', ['dead_only', 'shared_foundation']), lemma('live_closing', ['shared_foundation'])];
-      await research.publish({ tasks, proofRoutes: routes });
-      const state = f.state.cooperation!;
-      await research.publish({ baseVersion: state.planVersion, retireRoutes: [{ routeId: 'dead', reason: 'Witness disproves its closing step.' }] });
-      expect(state.proofRoutes?.map(route => route.id)).toEqual(['live']);
-      expect(state.retiredRouteTasks).toMatchObject({ dead_only: 'dead', dead_closing: 'dead' });
-      const byId = new Map(state.tasks.map(node => [node.task.id, node]));
-      const allowed = (id: string) => routeAllowsTask(byId.get(id)!.task, state.tasks, state.groups);
-      expect(allowed('shared_foundation')).toBe(true);
-      expect(allowed('dead_only')).toBe(false);
-      expect(allowed('dead_closing')).toBe(false);
-      expect(allowed('live_closing')).toBe(true);
-    } finally { await research.stop(); }
-  });
-
-  it('installs the primary portfolio foundation ahead of its original consumers and imports gate tombstones', async () => {
-    const f = fixture(false);
-    const [goal] = f.originalGoals;
-    f.state.portfolioExploration = { phase: 'completed', durationMs: 500, scouts: [], gate: {
-      primaryRouteId: 'main', retiredRoutes: [{ routeId: 'dead', reason: 'The boundary case fails.', retiredAt: 1, source: 'portfolio' }],
-      foundationLemmas: [{ id: 'portfolio_base', theoremName: 'portfolio_base', proofPath: goal.proofPath,
-        objective: 'Prove the reusable base inequality.', type: '(n : Nat) → n = n' }],
-    } };
-    const research = f.research();
-    try {
-      await research.publish({ groups: f.groups, tasks: [...f.originalGoals.map(task => ({ ...task, status: 'active' })),
-        { id: 'wrong_direction', kind: 'research', objective: 'Repeat the falsified route.', groupId: 'dead' }] });
-      const state = f.state.cooperation!, byId = new Map(state.tasks.map(node => [node.task.id, node]));
-      expect(state.retiredRoutes).toMatchObject([{ routeId: 'dead', source: 'portfolio' }]);
-      expect(byId.get('wrong_direction')).toMatchObject({ status: 'blocked', task: { status: 'stopped' } });
-      expect(byId.get(goal.id)?.task.dependsOn).toContain('portfolio_base');
-      expect(byId.get('portfolio_base')).toMatchObject({ status: 'pending', attempts: 0,
-        task: { kind: 'lemma', theoremName: 'portfolio_base', sharing: 'problem' } });
-      expect(byId.get(goal.id)?.integratedCheck).toBeUndefined();
-    } finally { await research.stop(); }
-  });
+const goal = 'Show True.';
+const rootThreadId = '00000000-0000-4000-8000-000000000001';
+const cleanup: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const close of cleanup.splice(0)) await close();
 });
 
-it('asks Lead to publish and delegate once per turn when its planning command limit is exceeded', async () => {
-  const f = fixture(false), workers = [f.lead, f.peer];
-  const controller = new AbortController(), started = deferred(), done = deferred<string>();
-  const notify = vi.fn(async () => {});
-  const open = vi.fn(async (_options: MathAgentOptions): Promise<MathAgentSession> => ({
-    threadId: 'lead-guardrail-thread', notify, interrupt: async () => { done.resolve('interrupted'); },
-    close: async () => { done.resolve('interrupted'); },
-    run: async (_message, _messageId, _workspace, onStarted) => {
-      onStarted('lead-guardrail-turn'); started.resolve();
-      return done.promise;
-    },
-  }));
-  const completion = runResearchWorkers({
-    state: f.state, workers, access: workerAccess(workers, f.directory), root: f.directory,
-    buildFile: path.join(f.directory, 'build.json'), taskText: 'Prove the original targets.',
-    modules: { ...workerDeliveryModules, M1: { ...workerDeliveryModules.M1, open } },
-    executable: 'offline-fixture', profile: 'offline-fixture', signal: controller.signal,
-    deadline: Infinity, maxTurnMs: Infinity, maxTurns: 2, maxTotalTokens: 0, leadMaxPlanningCommands: 2,
-    save: () => {}, emit: f.emit,
+function nativeConnection(threadId: string, agentPath: string, cwd: string): NativeAgentControlConnection {
+  return {
+    info: { sessionId: rootThreadId, agent: { threadId, metadata: { threadId, agentPath }, status: 'running' },
+      configSnapshot: { cwd } },
+    request: vi.fn(async () => ({})),
+    input: vi.fn(async () => ({ accepted: true, threadId, submissionId: 'followup' })),
+    update: vi.fn(async request => ({ acceptedSequence: request.sequence })),
+  };
+}
+
+function fixture() {
+  const directory = temporaryDirectory('team-route-retirement-');
+  const task = bootstrapLeanTask(path.join(directory, 'lead'), { source: 'theorem target : True := by sorry\n', task: goal });
+  const problem = readSolverProblem(task.workspaceRoot, task.activeProblemPath);
+  const root = process.cwd();
+  const identity = researchSkillIdentity(readMathAgentSkill(path.join(root, 'skills/theoremos-research/SKILL.md')));
+  const state = solverState(problem, task.workspaceRoot, { runId: 'team-route-retirement', phase: 'running',
+    environmentDigest: mathDigest('offline route retirement fixture'),
+    researchMode: 'skill', researchSkillWorkflow: 'full', researchSkill: identity, workerCount: 1,
+    researchDelegation: { mode: 'team', maxAgents: 2 },
+    agentTeam: { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control', workers: [], events: [], deliveries: [], adoptions: [], operations: [] } });
+  const skill = prepareResearchSkill(root, state.worktree, identity, problem);
+  const controller = new AbortController(), stateFile = path.join(directory, 'state.json');
+  const current = new Map<string, { started: ReturnType<typeof deferred>; stopped: ReturnType<typeof deferred>;
+    interrupt: () => Promise<void>; finish: () => void; context?: string }>();
+  const teams: AgentResearchTeam[] = [];
+  const open = async (options: MathAgentOptions): Promise<MathAgentSession> => {
+    const id = options.environment!.DEEPSCIENTIST_MATH_WORKER_ID!;
+    const config = options.nativeAgentControl!;
+    const threadId = options.threadId ?? String(config.bootstrap!.threadId);
+    const connection = nativeConnection(threadId, '/root/' + id, options.workspace);
+    await config.request({ version: 1, threadId, sessionId: rootThreadId, operation: 'attach', operationId: 'attach-' + id,
+      payload: { threadId, sessionId: rootThreadId } }, connection, { signal: controller.signal });
+    await config.bound?.(connection);
+    const started = deferred(), stopped = deferred(), outcome = deferred<string>();
+    const record = { started, stopped, interrupt: vi.fn(async () => { outcome.resolve('interrupted'); }),
+      finish: () => { stopped.resolve(); outcome.resolve('completed'); }, context: undefined as string | undefined };
+    current.set(id, record);
+    return { threadId, usageSource: 'upstream-requests', nativeAgentControl: connection,
+      run: async (message, _id, _workspace, onStarted) => {
+        record.context = message; onStarted('turn-' + id); started.resolve(); return outcome.promise;
+      },
+      interrupt: record.interrupt, stopForFreeze: async () => { await stopped.promise; return { status: 'stopped' }; },
+      close: async () => { await config.disconnected?.(connection); } };
+  };
+  const create = (saved: SolverRunState) => {
+    const team = new AgentResearchTeam({ state: saved, root, taskText: goal,
+      leadAccess: { researchSkill: skill, environment: {}, retrievalRoot: saved.worktree },
+      executable: 'offline', profile: 'offline', signal: controller.signal,
+      modules: { ...directSolverModules, M1: { ...directSolverModules.M1, open } },
+      maxAgents: 2, maxTurns: Infinity, maxTotalTokens: 0, maxTurnMs: Infinity, remainingMs: () => Infinity,
+      save: () => writeSolverRunState(stateFile, saved), emit: () => {}, exclusiveCheck: operation => operation() });
+    teams.push(team); return team;
+  };
+  const team = create(state);
+  let sequence = 0;
+  const call = (args: Record<string, unknown>, actor = 'lead', instance = team) => instance.tools(actor).call('theoremos_team', args, {
+    threadId: 'fixture', turnId: 'fixture', callId: 'tool-' + ++sequence, signal: controller.signal,
   });
-  try {
-    await Promise.race([started.promise, completion.then(() => { throw new Error('Lead never started.'); })]);
-    const activity = open.mock.calls[0][0].onActivity!;
-    const command = () => {
-      activity({ event: 'item_started', itemType: 'commandExecution' });
-      activity({ event: 'command_output', itemType: 'commandExecution' });
-      activity({ event: 'item_completed', itemType: 'commandExecution' });
-    };
-    command(); command();
-    expect(notify).not.toHaveBeenCalled();
-    command(); command();
-    expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/publish the plan now.*Delegate further computations/u),
-      { waitForRequest: true });
-    expect(f.emit.mock.calls.filter(([event]) => event === 'lead_planning_command_guardrail_triggered')).toEqual([
-      ['lead_planning_command_guardrail_triggered', expect.objectContaining({ workerId: 'solver', commandCount: 3, limit: 2 })],
+  const session = async (id: string) => {
+    await expect.poll(() => current.get(id)).toBeDefined();
+    const worker = current.get(id)!;
+    await worker.started.promise; return worker;
+  };
+  cleanup.push(async () => {
+    for (const session of current.values()) session.finish();
+    controller.abort();
+    await Promise.all(teams.map(team => team.close()));
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  return { team, state, stateFile, create, call, session, signal: controller.signal };
+}
+
+const retirement = { operation: 'retire_route', routeId: 'counterexample',
+  reason: 'The symmetric reduction fails at the boundary.', evidenceRefs: ['RESEARCH.md#boundary-witness'] };
+
+describe('atomic AgentResearchTeam route retirement', () => {
+  it('tags native spawn work, exposes the Lead operation, and blocks retired native requests', async () => {
+    const f = fixture();
+    const options = f.team.nativeAgentControlOptions('lead')!;
+    const connection = nativeConnection(rootThreadId, '/root', f.state.worktree);
+    let sequence = 0;
+    const native = (operation: string, payload: Record<string, unknown>) => options.request({
+      version: 1, operation, operationId: 'native-' + ++sequence, threadId: rootThreadId, sessionId: rootThreadId, payload,
+    }, connection, { signal: f.signal });
+    await native('attach', { threadId: rootThreadId, sessionId: rootThreadId });
+    await options.bound?.(connection);
+    const spawn = (id: string, route: string) => native('spawn', { caller: rootThreadId,
+      source: { subagent: { thread_spawn: { agent_path: '/root/' + id, parent_thread_id: rootThreadId, depth: 1 } } },
+      bootstrap: { config: { cwd: f.state.worktree, model: f.state.model, reasoningEffort: f.state.effort } },
+      input: { kind: 'message', mode: 'triggerTurn',
+        message: { kind: 'plaintext', text: 'Route: ' + route + '\nExplore a local reduction.' } },
+    });
+    await spawn('old', 'counterexample');
+    const old = await f.session('old');
+    expect(f.team.archive.workers[0]!.tasks[0]).toMatchObject({ routeId: 'counterexample', message: 'Explore a local reduction.' });
+    expect(await f.call(retirement, 'old')).toMatchObject({ ok: false, error: 'math_team_native_operation_required' });
+    const task = f.team.archive.workers[0]!.tasks[0]!;
+    expect(await f.call(retirement)).toMatchObject({ ok: true, releasedAgentIds: ['old'], cancelledTaskIds: [task.id] });
+    expect(old.interrupt).toHaveBeenCalled();
+    expect(await f.call(retirement)).toMatchObject({ ok: true, cancelledTaskIds: [], releasedAgentIds: [] });
+    expect(readSolverRunState(f.stateFile).agentTeam?.retiredRoutes).toMatchObject([
+      { routeId: 'counterexample', source: 'lead', evidenceRefs: retirement.evidenceRefs },
     ]);
-  } finally {
-    controller.abort(new Error('fixture_complete'));
-    await expect(completion).rejects.toThrow('fixture_complete');
-  }
+    await expect(spawn('new', 'counterexample')).rejects.toThrow('math_team_route_retired:counterexample');
+    await spawn('new', 'replacement');
+    const replacement = await f.session('new');
+    expect(replacement.context).toContain('"routeId":"replacement"');
+    await expect(native('send', { caller: rootThreadId, target: { kind: 'path', reference: '/root/new' },
+      input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: 'Route: counterexample\nRepeat the route.' } },
+    })).rejects.toThrow('math_team_route_retired:counterexample');
+    old.finish(); replacement.finish();
+    await expect.poll(() => f.team.hasActiveWorkers).toBe(false);
+    expect(task.status).toBe('cancelled');
+    await f.team.close();
+    const saved = readSolverRunState(f.stateFile), restored = f.create(saved);
+    await restored.restore();
+    const restoredOptions = restored.nativeAgentControlOptions();
+    await restoredOptions.request({ version: 1, operation: 'attach', operationId: 'restored-attach',
+      threadId: rootThreadId, sessionId: rootThreadId, payload: { threadId: rootThreadId, sessionId: rootThreadId } },
+    connection, { signal: f.signal });
+    await restoredOptions.bound?.(connection);
+    await expect(restoredOptions.request({ version: 1, operation: 'send', operationId: 'restored-followup',
+      threadId: rootThreadId, sessionId: rootThreadId, payload: { caller: rootThreadId,
+        target: { kind: 'path', reference: '/root/new' },
+        input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: 'Route: counterexample\nReopen it.' } },
+      } }, connection, { signal: f.signal })).rejects.toThrow('math_team_route_retired:counterexample');
+  });
 });

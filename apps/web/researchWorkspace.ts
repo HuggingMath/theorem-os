@@ -234,6 +234,7 @@ export class WebResearchWorkspace {
     })() : data.runs.find(view => view.run.id === runId && view.owned);
     if (!view) throw new WebStorageError(404, '运行不存在或不属于当前会话。');
     const { run } = view, observation = run.observation;
+    const approval = run.initialPlanApproval?.receipt ?? observation?.inspection.planApproval;
     const runOwner = view.owned ? viewer : this.projects.resolveBinding(viewer, projectId!, runId).runOwner;
     const recorded = this.storage.listObservations(runOwner, runId);
     const project = projectId ? data.projects.find(project => project.id === projectId)
@@ -267,8 +268,8 @@ export class WebResearchWorkspace {
       tasks: observation?.inspection.tasks.map(task => researchBriefTask(task, observation, checks, task => runHref(view, task))) ?? [],
       routes: (observation?.plan?.proofRoutes ?? []).map(route => ({ id: route.id, prerequisites: [...route.prerequisiteTaskIds],
         closingTaskId: route.closingTaskId, targetTaskId: route.targetTaskId })), decisions,
-      ...(observation?.inspection.planApproval ? { planApproval: { status: observation.inspection.planApproval.status,
-        planVersion: observation.inspection.planApproval.planVersion } } : {}),
+      ...(approval ? { planApproval: { status: approval.status,
+        planVersion: run.initialPlanApproval?.receipt.approvedVersion ?? approval.planVersion } } : {}),
       blockers: (observation?.inspection.mathematics.snapshot.blockers ?? []).filter(blocker =>
         observation?.inspection.tasks.some(task => task.id === blocker.taskId && task.version === blocker.taskDigest))
         .map(blocker => ({ id: blocker.id, taskId: blocker.taskId, taskVersion: blocker.taskDigest, mechanism: blocker.mechanism,

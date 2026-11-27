@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { clickWorkbenchAction, openAdvancedChatSettings, openChatParticipation, openChatResultDetails } from './web-ui-controls';
+import { clickWorkbenchAction, openAdvancedChatSettings, openChatResultDetails } from './web-ui-controls';
 // The solving process: the checklist under the task's status, and the live workspace beside it on a wide screen.
 // Local fixtures only: a formalization and a run are replayed through a runner. No model, no Lean.
 import assert from 'node:assert/strict';
@@ -32,7 +32,7 @@ let runInput: WorkerInput | undefined;
 // The proof stays live until the reader has looked at it; the test releases the end of the run itself.
 let releaseRun: (() => void) | undefined;
 const runner: WebRunner = {
-  async readiness() { return { ready: true, message: '本地解题过程验证环境' }; },
+  async readiness() { return { ready: true, nativeTeam: true, message: '本地解题过程验证环境' }; },
   formalize(input, send, signal) {
     return new Promise<void>(resolve => { pending = { input: structuredClone(input), send, resolve };
       signal.addEventListener('abort', () => resolve(), { once: true }); });
@@ -78,8 +78,6 @@ async function eventually(check: () => boolean, _description: string) {
   while (!check()) { assert.ok(Date.now() < until, _description); await sleep(40); }
 }
 async function credentials(page: Page) {
-  await openChatParticipation(page);
-  await page.locator('input[name="chat-participation"][value="automatic"]').check();
   if (!await page.locator('#formalize-key').isVisible()) await clickWorkbenchAction(page, '#open-settings');
   await page.locator('#formalize-key').fill('sk-disposable-browser-fixture');
   await openAdvancedChatSettings(page);
@@ -142,6 +140,8 @@ try {
     formalization.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(formalization.input) }); formalization.resolve();
     await eventually(() => Boolean(runInput), 'The confirmed statement starts one proof');
     await eventually(() => runInput!.input.source.length > 0, 'The proof receives the statement');
+    assert.equal(runInput!.input.nativeTeamCapacity, 3, 'Automatic research uses the native team by default');
+    assert.equal(runInput!.input.planApproval, undefined);
     // A wide screen's check rows open the workspace beside the chat; a phone's open their record in place.
     await page.waitForFunction(wide => document.querySelectorAll(wide ? '[data-solve-check]' : '.solve-row[data-solve-row]').length > 0,
       width === 1440, { timeout: 15_000 });
@@ -177,6 +177,7 @@ try {
       await page.locator('[data-research-artifact="live"]').click();
       await page.waitForFunction(() => document.body.dataset.chatArtifact === 'live');
       assert.equal(await live(page).isVisible(), true);
+      await live(page).locator('[data-live-tab="file"]').click();
       await live(page).locator('.live-code .lean-line').first().waitFor();
       assert.match(await live(page).locator('.live-file-head').innerText(), /Submission\.lean/u);
       // The check list stays folded to one line under the code until the reader opens it.

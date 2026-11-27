@@ -72,7 +72,8 @@ export function confirmHarnessProcessStopped(identity: HarnessProcessIdentity): 
 }
 
 /** Native tool permissions do not constrain arbitrary shell children. Both CLI harnesses use this OS contract. */
-export function prepareHarnessProcess(options: Pick<MathAgentOptions, 'workspace' | 'profile' | 'environment' | 'hiddenRoots' | 'isolatedWorkspaceParent'>,
+export function prepareHarnessProcess(options: Pick<MathAgentOptions, 'workspace' | 'profile' | 'environment' |
+  'hiddenRoots' | 'isolatedWorkspaceParent' | 'readOnlyWorkspace'>,
   executable: string, arguments_: readonly string[], infoDescriptor?: number) {
   if (process.platform !== 'linux' || !fs.existsSync('/usr/bin/bwrap'))
     throw new Error('math_harness_process_isolation_unavailable');
@@ -88,7 +89,8 @@ export function prepareHarnessProcess(options: Pick<MathAgentOptions, 'workspace
     if (workspaceParent !== path.dirname(options.workspace) || workspaceParent === '/' ||
         isMathPathWithin(workspaceParent, options.profile)) throw new Error('math_harness_workspace_parent_invalid');
   }
-  const temporary = path.join(options.workspace, '.scratch', 'tmp');
+  const scratch = path.join(options.workspace, '.scratch');
+  const temporary = path.join(scratch, 'tmp');
   assertMathCanonicalPath(temporary);
   fs.mkdirSync(temporary, { recursive: true, mode: 0o700 });
   const env: NodeJS.ProcessEnv = { ...(options.environment ?? process.env), TMPDIR: temporary };
@@ -128,7 +130,9 @@ export function prepareHarnessProcess(options: Pick<MathAgentOptions, 'workspace
   }
   for (const root of masks) args.push(...(fs.statSync(root).isDirectory() ? ['--tmpfs', root] : ['--ro-bind', '/dev/null', root]));
   // Resolve the bind source in the host namespace after masking peers in the child namespace.
-  args.push('--bind', options.workspace, options.workspace, '--bind', options.profile, options.profile);
+  args.push(options.readOnlyWorkspace ? '--ro-bind' : '--bind', options.workspace, options.workspace,
+    '--bind', options.profile, options.profile);
+  if (options.readOnlyWorkspace) args.push('--bind', scratch, scratch);
   const lock = env.DEEPSCIENTIST_MATH_LEAN_LOCK;
   if (lock) {
     assertMathCanonicalPath(lock);
@@ -139,6 +143,6 @@ export function prepareHarnessProcess(options: Pick<MathAgentOptions, 'workspace
   args.push('--chdir', options.workspace, '--', executable, ...arguments_);
   return { command: '/usr/bin/bwrap', args, env,
     isolationReceipt: { schema: 'theorem-os.harness-process.v1', backend: 'bwrap',
-      writableDirectories: [options.workspace, options.profile], hiddenRoots: masks,
+      writableDirectories: [options.readOnlyWorkspace ? scratch : options.workspace, options.profile], hiddenRoots: masks,
       pidNamespace: true, network: 'inherited' } as Record<string, unknown> };
 }

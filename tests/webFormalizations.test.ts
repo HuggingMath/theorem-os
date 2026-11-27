@@ -32,7 +32,8 @@ class Runner implements WebRunner {
   runs: WorkerInput[] = [];
   proofs: { input: WorkerInput; signal: AbortSignal; send(message: WorkerMessage): void; resolve(): void }[] = [];
   ready = true;
-  async readiness() { return { ready: this.ready, message: 'Disposable test runner' }; }
+  nativeTeam = true;
+  async readiness() { return { ready: this.ready, nativeTeam: this.nativeTeam, message: 'Disposable test runner' }; }
   run(input: WorkerInput, send: (message: WorkerMessage) => void, signal: AbortSignal) {
     this.runs.push(input);
     return new Promise<void>(resolve => {
@@ -503,7 +504,8 @@ describe('online formalization ownership and evidence handoff', () => {
     expect(completed).toMatchObject({ status: 'confirmed', confirmation: 'automatic', workflow: 'solve' });
     expect(completed.runId).toMatch(/^[a-f0-9-]{36}$/u); expect(completed.researchError).toBeUndefined();
     expect(runner.runs).toHaveLength(1);
-    expect(runner.runs[0].input).toMatchObject({ ...webDefaults, effort: value.researchEffort ?? value.effort, environment: 'standard', apiKey: KEY,
+    expect(runner.runs[0].input).toMatchObject({ ...webDefaults, coordination: 'independent', nativeTeamCapacity: 3,
+      effort: value.researchEffort ?? value.effort, environment: 'standard', apiKey: KEY,
       providerId: 'sub2api', model: 'deepseek-flash', source: evidence.candidate.source, formalizationId: value.id });
     expect(runner.runs[0].input).toMatchObject({ maxRunSeconds: 0, maxTotalTokens: 0, maxTurns: 0 });
     expect(runner.runs[0].formalization).toEqual(evidence);
@@ -555,7 +557,7 @@ describe('online formalization ownership and evidence handoff', () => {
     expect((await (await request(alice, route + '/research', {})).json()).formalization.runId).toBe(started[0].runId);
     await settle(); expect(runner.runs).toHaveLength(1); expect(runner.inputs).toHaveLength(1);
     expect(runner.runs[0].input).toMatchObject({ ...research, providerId: 'openai', model: 'gpt-6.1-sol', effort: 'max', apiKey: KEY,
-      workers: 2, coordination: 'cooperative', planApproval: true, environment: 'standard', source: evidence.candidate.source, formalizationId: value.id });
+      workers: 1, coordination: 'independent', nativeTeamCapacity: 3, planApproval: true, environment: 'standard', source: evidence.candidate.source, formalizationId: value.id });
     expect(runner.runs[0].formalization).toEqual(evidence);
     const run = (await (await request(alice, `/api/runs/${started[0].runId}`)).json()).run as WebRun;
     expect(run.formalization).toMatchObject({ original: body.original, evidenceSha256: review.report!.evidenceSha256,
@@ -600,7 +602,7 @@ describe('online formalization ownership and evidence handoff', () => {
     expect(restored.report?.evidenceSha256).toBe(digest); expect(restored.confirmedAt).toBe(confirmed.confirmedAt);
     await settle(); expect(runner.inputs).toHaveLength(0); expect(runner.runs).toHaveLength(1);
     expect(runner.runs[0].input).toMatchObject({ ...research, providerId: 'openai', model: 'gpt-6.1-sol', apiKey: retryKey,
-      workers: 2, coordination: 'cooperative', planApproval: true, source: evidence.candidate.source, environment: 'standard' });
+      workers: 1, coordination: 'independent', nativeTeamCapacity: 3, planApproval: true, source: evidence.candidate.source, environment: 'standard' });
     expect(runner.runs[0].formalization).toEqual(evidence);
     await restart();
     expect((await (await request(alice, route + '/research', {})).json()).formalization.runId).toBe(restored.runId);
@@ -885,6 +887,26 @@ describe('online formalization ownership and evidence handoff', () => {
     expect((await request(alice, `/api/runs/${completed.runId}/cancel`, {})).status).toBe(200);
     service.storage.saveRecord(['operations', 'maintenance.json'], { enabled: false, updatedAt: new Date().toISOString() });
     expect((await fetch(base + '/readyz')).status).toBe(200);
+  });
+
+  it('reports when a legacy worker can compile statements but cannot run the native proof stage', async () => {
+    runner.nativeTeam = false;
+    const alice = await client();
+    expect((await fetch(base + '/healthz')).status).toBe(200);
+    const readiness = await fetch(base + '/readyz');
+    expect(readiness.status).toBe(503);
+    expect(await readiness.json()).toMatchObject({ ready: false, maintenance: false, nativeTeam: false });
+    const product = await (await fetch(base + '/api/product/status')).json();
+    expect(product.service).toMatchObject({ reachable: true, runtimeReady: false });
+    const capabilities = async () => (await (await request(alice, '/api/formalizations')).json()).generation;
+    expect(await capabilities()).toMatchObject({ available: true, solveAvailable: false });
+    expect((await request(alice, '/api/formalizations', { ...body, solve: true })).status).toBe(503);
+    expect(runner.inputs).toHaveLength(0);
+    await create(alice);
+    expect(runner.inputs).toHaveLength(1);
+    runner.nativeTeam = true;
+    expect((await fetch(base + '/readyz')).status).toBe(200);
+    expect(await capabilities()).toMatchObject({ available: true, solveAvailable: true });
   });
 
   it('keeps the independent fidelity policy mandatory on legacy reviewed records', async () => {

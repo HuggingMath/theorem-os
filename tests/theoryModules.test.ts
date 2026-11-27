@@ -14,7 +14,7 @@ import { buildResearchContext } from '../src/solver/modules/context';
 import { taskVersion } from '../src/solver/tasks';
 import { assertSolverSources, commitSolverSources, committedSource, git, readSolverProblem, solverProofImports,
   type SolverProblem } from '../src/solver/problem';
-import type { CooperativeTask } from '../src/solver/cooperation';
+import type { CooperativeTask } from '../src/solver/tasks';
 import { temporaryDirectory } from './helpers/files';
 import { newestLeanBinary } from './helpers/lean';
 

@@ -17,7 +17,7 @@ await fs.mkdir(output, { recursive: true });
 const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-chat-cancel-'));
 const controls = new Map<string, AbortSignal>();
 const runner: WebRunner = {
-  async readiness() { return { ready: true, message: 'Disposable cancellation fixture' }; },
+  async readiness() { return { ready: true, nativeTeam: true, message: 'Disposable cancellation fixture' }; },
   async run() { throw new Error('Cancellation must not launch proof research'); },
   async formalize(input, _send, signal) {
     controls.set(input.id, signal);

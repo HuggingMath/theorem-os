@@ -29,7 +29,7 @@ const workerInputs: Parameters<WebRunner['run']>[0][] = [];
 let compiler: (value: Parameters<WebPrecheckRunner>[0]) => Promise<WebPrecheckOutput> = async value =>
   ({ output: '', exitCode: 0, timedOut: false, checkedTarget: value.candidateTarget?.name });
 const runner: WebRunner = {
-  async readiness() { return { ready: true, message: 'Disposable trial fixture' }; },
+  async readiness() { return { ready: true, nativeTeam: true, message: 'Disposable trial fixture' }; },
   async run(value, send) {
     workerCalls++; workerInputs.push(structuredClone(value));
     const observed = structuredClone(loadWebSample()!.observations.at(-1)!);

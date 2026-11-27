@@ -8,7 +8,7 @@ import { localizeText, t } from '../i18n';
 type SavedPlan = { id: string; name: string; plan: ResearchModulePlan; updatedAt: string; configuration: { methodDigest?: string } };
 type Registry = { entries: Array<{ id: string; slot: string; name: string; version: string; fixed: boolean; inputs: string[]; outputs: string[] }> };
 
-/** Server plans and registered code selections apply to the next run. */
+/** Historical module settings and the knowledge directory for the next run. */
 export class ServerModulePlans {
   private root = createElement('div', 'server-module-plans');
   private plans: SavedPlan[] = [];
@@ -20,25 +20,30 @@ export class ServerModulePlans {
   private registry?: Registry;
   private digest = '';
   private catalogs?: KnowledgeCatalog[];
-  constructor(host: HTMLElement, private api: WebApi, private getPlan: () => ResearchModulePlan, private setPlan: (plan: ResearchModulePlan) => void, private changed: () => void) {
+  constructor(host: HTMLElement, private knowledgeRoot: HTMLElement, private api: WebApi, private getPlan: () => ResearchModulePlan,
+    private setPlan: (plan: ResearchModulePlan) => void, private changed: () => void) {
     const heading = host.querySelector('.module-plan-heading');
     if (heading) heading.after(this.root); else host.prepend(this.root);
     this.render();
+    this.renderKnowledge();
   }
   knowledgeDigest() { return this.digest === '__none__' ? null : this.digest || undefined; }
   setKnowledgeDigest(digest?: string | null) {
-    this.digest = digest === null ? '__none__' : digest ?? ''; this.render();
+    this.digest = digest === null ? '__none__' : digest ?? ''; this.renderKnowledge();
+  }
+  setKnowledgeCatalogs(catalogs?: KnowledgeCatalog[]) {
+    this.catalogs = catalogs;
+    this.renderKnowledge();
   }
   async refresh() {
     if (this.loading) return; this.pendingDelete = undefined; this.loading = true; this.render();
     try {
       const results = await Promise.allSettled([
-        this.api<{ plans: SavedPlan[] }>('/api/module-plans'), this.api<Registry>('/api/modules'), this.api<{ catalogs: KnowledgeCatalog[] }>('/api/knowledge/catalogs'),
+        this.api<{ plans: SavedPlan[] }>('/api/module-plans'), this.api<Registry>('/api/modules'),
       ]);
-      const [plans, registry, catalogs] = results;
+      const [plans, registry] = results;
       if (plans.status === 'fulfilled') this.setPlans(plans.value.plans); else throw plans.reason;
       if (registry.status === 'fulfilled') this.registry = registry.value; else this.notice = errorText(registry.reason);
-      if (catalogs.status === 'fulfilled') this.catalogs = catalogs.value.catalogs; else this.notice = errorText(catalogs.reason);
       if (results.every(result => result.status === 'fulfilled')) this.notice = t('方案列表已刷新');
     } catch (error) { this.notice = errorText(error); }
     finally { this.loading = false; this.render(); }
@@ -65,7 +70,7 @@ export class ServerModulePlans {
     this.render(); this.focus('[data-server-plan-delete-cancel]');
   };
   private readonly cancelDelete = () => { this.pendingDelete = undefined; this.render(); this.focus('[data-server-plan-delete]'); };
-  private readonly chooseCatalog = (digest: string) => { this.digest = digest; this.render(); this.changed(); };
+  private readonly chooseCatalog = (digest: string) => { this.digest = digest; this.renderKnowledge(); this.changed(); };
   private async remove() {
     const selected = this.pendingDelete;
     if (this.loading || !selected) return;
@@ -107,7 +112,8 @@ export class ServerModulePlans {
   }
   private catalogOptions() {
     const options = (this.catalogs ?? []).map(catalog => <option key={catalog.digest} value={catalog.digest} title={catalog.digest}>{catalogLabel(catalog)}</option>);
-    if (this.digest && !this.catalogs?.some(catalog => catalog.digest === this.digest)) options.push(<option key={this.digest} value={this.digest}>{t('{0} · 待核对目录', this.digest)}</option>);
+    if (this.digest && this.digest !== '__none__' && !this.catalogs?.some(catalog => catalog.digest === this.digest))
+      options.push(<option key={this.digest} value={this.digest}>{t('{0} · 待核对目录', this.digest)}</option>);
     return options;
   }
   private render() {
@@ -143,10 +149,14 @@ export class ServerModulePlans {
             <code>{entry.id} @ {entry.version}</code><small>{t('输入 {0} → 输出 {1}', entry.inputs.join(', '), entry.outputs.join(', '))}</small></div>)}
         </details>}</div>
       </div></details>
-      <label class="collab-catalog-label" for="knowledge-catalog">{t('新运行的知识目录')}<select id="knowledge-catalog" value={this.digest} onChange={event => this.chooseCatalog(event.currentTarget.value)}>
+    </>);
+  }
+  private renderKnowledge() {
+    renderSection(this.knowledgeRoot, <>
+      <label for="knowledge-catalog">{t('新运行的知识目录')}<select id="knowledge-catalog" value={this.digest} onChange={event => this.chooseCatalog(event.currentTarget.value)}>
         <option value="">{t('自动使用最新知识')}</option><option value="__none__">{t('不使用历史知识')}</option>{this.catalogOptions()}
       </select></label>
-      <p class="collab-help">{t('自动选择本账户最新的非空目录；创建时固定版本，历史证据需要重新检查。')}</p>
+      <p class="field-note">{t('自动选择本账户最新的非空目录；创建时固定版本，历史证据需要重新检查。')}</p>
     </>);
   }
 }

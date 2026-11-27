@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 // Real HTTP + Chromium, with disposable data and deterministic approval receipts. No mathematical acceptance.
+import { webAgentTeamPreset } from '../apps/web/researchMode';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -25,9 +26,9 @@ let phase = 'setup';
 function observation(id: string): WebObservation {
   const tasks = [{ id: 'goal', kind: 'goal' as const, objective: '核对原题再开始证明', dependsOn: [], revision: 0, theoremName: 'approval_fixture', proofPath: 'Main.lean', type: 'True' }];
   const snapshot = { schema: 'theoremos.run-observation.v1', runId: 'fixture-' + id, stateDigest: mathDigest('initial'), resultDigest: null };
-  const inspection: WebInspection = { schema: 'deepscientist.math.inspection.v1', runId: snapshot.runId, snapshot, evidence: 'recorded-not-replayed', phase: 'cooperative',
+  const inspection: WebInspection = { schema: 'deepscientist.math.inspection.v1', runId: snapshot.runId, snapshot, evidence: 'recorded-not-replayed', phase: 'research',
     problem: { id: 'round8-approval-fixture', statement: 'Prove True', formalStatement: 'True', assumptions: [], targets: [{ theoremName: 'approval_fixture', proofPath: 'Main.lean' }] },
-    configuration: { model: 'fixture', effort: 'low', workers: 2, coordination: 'cooperative', buildDigest: mathDigest('build'), environmentDigest: mathDigest('environment') }, turns: 1, planVersion: 'plan-v1',
+    configuration: { model: 'fixture', effort: 'low', workers: 1, coordination: 'independent', buildDigest: mathDigest('build'), environmentDigest: mathDigest('environment') }, turns: 1, planVersion: 'plan-v1',
     scheduling: { evidence: 'recorded-dispatch-state', observedWorkers: 0, working: 0, proofAssignments: 0, preparing: 0, stopping: 0, idle: 0, stopped: 0 },
     knowledge: { status: 'disabled', evidence: 'recorded-not-replayed', attribution: 'model-reported-origin', retrievalCoverage: 'recorded', droppedRetrievals: 0, retrievals: [], originalUses: [], uses: [] },
     tokenBudget: {}, continuation: {}, mathematics: { snapshot: { schema: 'theorem-os.obligation.v1', evidence: 'recorded-not-replayed', acceptance: 'not-assessed', digest: mathDigest('mathematics'), obligations: [], goals: [], blockers: [], routes: [], advisory: [] }, recentChanges: [], retainedChangeLimit: 64 },
@@ -39,7 +40,7 @@ function observation(id: string): WebObservation {
     plan: { schema: 'deepscientist.math.plan-edit.v1', baseVersion: 'plan-v1', tasks }, sources: [], checks: [], guidance: [], coverage: { sources: 'partial', checks: 'partial' } };
 }
 const runner: WebRunner = {
-  async readiness() { return { ready: true, message: 'Disposable project plan approval regression' }; },
+  async readiness() { return { ready: true, nativeTeam: true, message: 'Disposable project plan approval regression' }; },
   async check() { throw new Error('Approval regressions must not check or accept proofs'); },
   async run(input, send, signal) {
     await new Promise<void>(resolve => {
@@ -48,6 +49,9 @@ const runner: WebRunner = {
         this.observation.inspection.snapshot.stateDigest = this.observation.snapshot.stateDigest;
         send({ type: 'observation', observation: structuredClone(this.observation) });
       } };
+      Object.assign(control.observation.inspection.configuration, { researchMode: 'skill',
+        researchSkill: { name: 'theoremos-research', digest: mathDigest('fixture skill'), loading: 'native' },
+        researchDelegation: { mode: 'team', maxAgents: input.input.nativeTeamCapacity } });
       controls.set(input.id, control); signal.addEventListener('abort', () => resolve(), { once: true }); control.emit();
     });
   },
@@ -107,8 +111,9 @@ try {
   const version = project.currentStatementVersionId!, posts: any[] = [];
   page.on('request', request => { if (request.method() === 'POST' && new URL(request.url()).pathname === feedbackPath) posts.push(request.postDataJSON()); });
   const create = async (task: string) => {
-    const run = (await http<{ run: { id: string } }>('POST', '/api/runs', { requestId: crypto.randomUUID(), providerId: 'openai', apiKey: 'sk-local-approval-fixture', model: 'fixture', effort: 'low',
-      environment: 'standard', source, task, maxTurns: 2, maxRunSeconds: 600, workers: 2, coordination: 'cooperative', planApproval: true })).run;
+    const { run } = await http<{ run: { id: string } }>('POST', '/api/runs', { providerId: 'openai', apiKey: 'sk-local-approval-fixture',
+      model: 'fixture', effort: 'low', environment: 'standard', source, task, maxTurns: 2, maxRunSeconds: 600,
+      ...webAgentTeamPreset(), planApproval: true });
     for (let attempt = 0; attempt < 100 && !controls.has(run.id); attempt++) await new Promise(resolve => setTimeout(resolve, 20));
     assert.ok(controls.has(run.id)); project = (await http<{ item: ResearchProjectDetail }>('GET', projectPath)).item;
     await http('POST', projectPath + '/runs', { requestId: crypto.randomUUID(), expectedRevision: project.revision, statementVersionId: version, runId: run.id,

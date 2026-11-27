@@ -20,8 +20,9 @@ bun run math component check --name my-search
 `check` 不调用模型或 Lean，用几个本地任务检查排序是否保留了依赖、暂停、路线和预算约束。
 它只检查这个排序模板的基本约定，策略是否有效仍需要实验。
 改变策略后，更新 `id` 和 M3 的 `version`，再运行检查。
+当前版本生成的组件运行脚本用于恢复已有运行。
 
-可以把组件接到[小题示例](../getting-started/README.md)中。先配置好 Codex 和 Lean 环境，再使用一个仓库外的新目录：
+以下运行命令用于复现历史调度器中的组件实验。在实验固定的 TheoremOS 版本中，先配置 Codex 和 Lean 环境，再使用一个仓库外的新目录。
 
 ```bash
 export THEOREMOS_COMPONENT_CASE="$PWD/../theorem-os-runs/my-search"
@@ -75,7 +76,7 @@ const modules: SolverModules = {
 `goalsFirstResearchTasks` 先调用原有就绪筛选，再排序，保留依赖、暂停与路线预算检查。
 可以在此基础上实现自己的排序规则；返回值必须来自当前可启动任务。
 
-按[快速开始](../../README.md#快速开始)准备依赖、题目和任务文件后，从仓库根目录执行：
+在实验固定的历史版本中，按[快速开始](../../README.md#快速开始)准备依赖、题目和任务文件后，从仓库根目录执行。
 
 ```bash
 bun run build

@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 // Chromium + disposable HTTP state; controlled checks fail without running Lean or models.
+import { seedCooperativeRun } from './web-cooperative-fixture';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -82,7 +83,7 @@ try {
   const projectPath = '/api/research/theorems/' + project.id;
   project = (await http<{ item: ResearchProjectDetail }>(owner, 'POST', projectPath + '/versions', { requestId: crypto.randomUUID(), expectedRevision: project.revision, statement: 'Prove True', source, environment: 'standard' })).item;
   const version = project.currentStatementVersionId!;
-  const createdRun = (await http<{ run: { id: string } }>(owner, 'POST', '/api/runs', { requestId: crypto.randomUUID(), providerId: 'openai', apiKey: 'sk-disposable-collaboration', model: 'fixture', effort: 'low', environment: 'standard', source, task: 'Collaboration continuity', maxTurns: 2, maxRunSeconds: 600, workers: 2, coordination: 'cooperative' })).run;
+  const createdRun = await seedCooperativeRun(service, owner.context(), origin, { providerId: 'openai', apiKey: 'sk-disposable-collaboration', model: 'fixture', effort: 'low', environment: 'standard', source, task: 'Collaboration continuity', maxTurns: 2, maxRunSeconds: 600, workers: 2, coordination: 'cooperative' });
   for (let attempt = 0; attempt < 100 && !controls.has(createdRun.id); attempt++) await new Promise(resolve => setTimeout(resolve, 20));
   assert.ok(controls.has(createdRun.id));
   project = (await http<{ item: ResearchProjectDetail }>(owner, 'POST', projectPath + '/runs', { requestId: crypto.randomUUID(), expectedRevision: project.revision, statementVersionId: version, runId: createdRun.id, exposure: 'members', grants: { guidance: true, edit: true, approve: true, proof: true } })).item;

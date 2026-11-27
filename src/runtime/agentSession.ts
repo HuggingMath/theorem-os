@@ -4,7 +4,6 @@ import type { MathAgentSkill } from './agentSkills';
 import type { MathAgentFailureDiagnostic } from './failureDiagnostic';
 export type { MathAgentFailureDiagnostic } from './failureDiagnostic';
 import type { ModelRequestGate } from './modelRequest';
-import type { NativeDelegationOptions, NativeResearchAgent } from './nativeDelegation';
 import type { MathAgentTools } from './agentTeamTools';
 export type { MathAgentTools, MathAgentToolDefinition, MathAgentToolContext } from './agentTeamTools';
 import type { HarnessProcessIdentity } from './harnessProcess';
@@ -32,13 +31,13 @@ export type MathAgentOptions = {
   effort: string;
   instructions: string;
   skills?: readonly MathAgentSkill[];
-  delegation?: NativeDelegationOptions;
-  onNativeAgent?: (agent: NativeResearchAgent) => void;
   tools?: MathAgentTools;
   /** Host backend for Codex's built-in collaboration tools, with isolated native children. */
   nativeAgentControl?: NativeAgentControlOptions;
   /** Tie the complete native writer tree to this host with a dedicated PID namespace. */
   isolateProcess?: boolean;
+  /** Native planning can read the proof workspace and write only to its scratch directory. */
+  readOnlyWorkspace?: boolean;
   environment?: NodeJS.ProcessEnv;
   proofProjectRoot?: string;
   /** Host-owned environment probe, run in the same isolated namespace before native/model startup. */

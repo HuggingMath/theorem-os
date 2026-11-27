@@ -930,7 +930,7 @@ describe('conversation HTTP boundary with local fake provider only', () => {
     const guidance = guidanceInput();
     expect((await fetch(route + '/guidance', { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify(guidance) })).status).toBe(403);
     expect((await fetch(route + '/guidance', { method: 'POST', headers: { ...headers, Cookie: otherCookie, 'X-CSRF-Token': otherSession.csrfToken }, body: JSON.stringify(guidance) })).status).toBe(404);
-    expect((await fetch(route + '/guidance', { method: 'POST', headers, body: JSON.stringify({ ...guidance, receipt: { status: 'delivered' } }) })).status).toBe(400);
+    expect((await fetch(route + '/guidance', { method: 'POST', headers, body: JSON.stringify({ ...guidance, receipt: { status: 'delivered' } }) })).status).toBe(409);
     expect((await (await fetch(route, { headers })).json() as { conversation: WebConversation }).conversation.messages).toHaveLength(saved.messages.length);
     const title = { title: '  我的证明\n  第一版  ' };
     expect((await fetch(route, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(title) })).status).toBe(401);

@@ -57,13 +57,12 @@ function taskProjection(task: AgentTeamTask, historyOffset: number, full = false
   return { ...result, ...(textTruncated.length ? { textTruncated } : {}) };
 }
 
-function activity(team: Readonly<AgentTeamState>, worker: AgentTeamWorker): Activity {
+function activity(worker: AgentTeamWorker, current: AgentTeamTask | undefined, integrating: boolean): Activity {
   if (worker.writerStopUnconfirmed) return 'stopping';
   if (worker.activity) return worker.activity;
-  const current = worker.tasks.find(task => task.status === 'running');
   if (current?.cancelRequested || current?.pauseRequested) return 'stopping';
   if (worker.pendingDelivery || worker.phase === 'checking') return 'checking';
-  if (team.adoptions.some(item => item.targetId === worker.id && ['queued', 'integrating'].includes(item.status))) return 'integrating';
+  if (integrating) return 'integrating';
   if (worker.status === 'preparing') return 'preparing';
   if (worker.status === 'running') return 'running';
   if (worker.status === 'paused' || worker.tasks.at(-1)?.status === 'paused') return 'paused';
@@ -86,20 +85,30 @@ function taskBudget(state: Readonly<SolverRunState>, worker: AgentTeamWorker, ta
     usageUnavailable: projection.usageUnavailable, turnUsageKnown: turns !== null };
 }
 
-function visibleTasks(state: Readonly<SolverRunState>, worker: AgentTeamWorker, assignmentTaskId?: string) {
-  const selected = new Set(worker.tasks.filter(task => task.status === 'running').map(task => task.id));
-  const next = worker.tasks.find(task => task.status === 'queued');
-  if (next) selected.add(next.id);
-  for (const task of worker.tasks.toReversed().filter(task => !['running', 'queued'].includes(task.status)).slice(0, 2))
-    if (selected.size < TASKS) selected.add(task.id);
-  for (const task of worker.tasks.toReversed()) {
-    if (selected.size >= TASKS) break;
-    selected.add(task.id);
+function workerTaskView(state: Readonly<SolverRunState>, worker: AgentTeamWorker, assignmentTaskId?: string) {
+  const selected = new Set<number>();
+  let current: AgentTeamTask | undefined, queuedTaskCount = 0;
+  for (const [index, task] of worker.tasks.entries()) {
+    if (task.status === 'running') {
+      current ??= task;
+      selected.add(index);
+    } else if (task.status === 'queued' && queuedTaskCount++ === 0) selected.add(index);
   }
-  return worker.tasks.flatMap((task, index) => selected.has(task.id)
-    ? [{ ...taskProjection(task, index),
+  let recent = 0;
+  for (let index = worker.tasks.length - 1; index >= 0 && selected.size < TASKS && recent < 2; index--) {
+    const { status } = worker.tasks[index]!;
+    if (status === 'running' || status === 'queued') continue;
+    selected.add(index);
+    recent++;
+  }
+  for (let index = worker.tasks.length - 1; index >= 0 && selected.size < TASKS; index--) selected.add(index);
+  const tasks = [...selected].sort((left, right) => left - right).slice(-TASKS).map(index => {
+    const task = worker.tasks[index]!;
+    return { ...taskProjection(task, index),
       ...(task.id === assignmentTaskId ? { objective: undefined, profileEvidence: undefined } : {}),
-      budget: taskBudget(state, worker, task) }] : []).slice(-TASKS);
+      budget: taskBudget(state, worker, task) };
+  });
+  return { current, tasks, queuedTaskCount };
 }
 
 function contextBudget(state: Readonly<SolverRunState>, focusAgentId?: string) {
@@ -121,29 +130,31 @@ export function agentTeamOverview(state: Readonly<SolverRunState>,
   options: { focusAgentId?: string; assignmentTaskId?: string; budget?: unknown; workerLimit?: number } = {}) {
   const team = state.agentTeam;
   const workers = team?.workers ?? [];
-  const selected = [...workers].sort((left, right) => {
-    const rank = (worker: AgentTeamWorker) => worker.id === options.focusAgentId ? 0 :
-      worker.status === 'running' || worker.status === 'preparing' || worker.pendingDelivery ||
-      team!.adoptions.some(item => item.targetId === worker.id && ['queued', 'integrating'].includes(item.status)) ? 1 :
-      worker.status === 'stopped' ? 3 : 2;
-    return rank(left) - rank(right) || workers.indexOf(right) - workers.indexOf(left);
-  }).slice(0, options.workerLimit ?? WORKERS);
-  const visible = new Set(selected.map(worker => worker.id));
   const research = team?.researchState;
   const researchPreview = research && preview(research.summary, RESEARCH_TEXT);
   const refs = team?.researchArtifacts ?? [], deliveries = team?.deliveries ?? [], adoptions = team?.adoptions ?? [];
   const retiredRoutes = team?.retiredRoutes ?? [];
-  const selectedAdoptions = new Set(adoptions.filter(item => ['queued', 'integrating'].includes(item.status)).slice(0, 4).map(item => item.id));
-  for (const item of adoptions.toReversed()) {
-    if (selectedAdoptions.size >= REFERENCES) break;
-    selectedAdoptions.add(item.id);
+  const integrating = new Set<string>();
+  const selectedAdoptions = new Set<number>();
+  for (const [index, item] of adoptions.entries()) {
+    if (item.status !== 'queued' && item.status !== 'integrating') continue;
+    integrating.add(item.targetId);
+    if (selectedAdoptions.size < 4) selectedAdoptions.add(index);
   }
-  return {
-    workers: workers.filter(worker => visible.has(worker.id)).map(worker => {
-      const tasks = visibleTasks(state, worker, worker.id === options.focusAgentId ? options.assignmentTaskId : undefined), error = worker.error && preview(worker.error, TASK_TEXT);
+  for (let index = adoptions.length - 1; index >= 0 && selectedAdoptions.size < REFERENCES; index--) selectedAdoptions.add(index);
+  const rank = (worker: AgentTeamWorker) => worker.id === options.focusAgentId ? 0 :
+    worker.status === 'running' || worker.status === 'preparing' || worker.pendingDelivery || integrating.has(worker.id) ? 1 :
+    worker.status === 'stopped' ? 3 : 2;
+  const visibleWorkers = workers.map((worker, index) => ({ worker, index, rank: rank(worker) }))
+    .sort((left, right) => left.rank - right.rank || right.index - left.index)
+    .slice(0, options.workerLimit ?? WORKERS).sort((left, right) => left.index - right.index)
+    .map(({ worker }) => {
+      const { current, tasks, queuedTaskCount } = workerTaskView(state, worker,
+        worker.id === options.focusAgentId ? options.assignmentTaskId : undefined);
+      const error = worker.error && preview(worker.error, TASK_TEXT);
       const stopReason = worker.writerStopUnconfirmed && preview(worker.writerStopUnconfirmed.reason, TASK_TEXT);
       const usage = buildTokenBudget(0, [worker]), requests = worker.requestUsageAccounting;
-      return { id: worker.id, status: worker.status, activity: activity(team!, worker), turns: worker.turns,
+      return { id: worker.id, status: worker.status, activity: activity(worker, current, integrating.has(worker.id)), turns: worker.turns,
         ...(worker.native ? { nativeIdentity: { threadId: worker.native.threadId, agentPath: worker.native.agentPath,
           spawnHistory: worker.native.spawnHistory ?? 'unknown' } } : {}),
         error: error && error.text, ...(error && error.truncated ? { errorTruncated: true } : {}),
@@ -159,10 +170,13 @@ export function agentTeamOverview(state: Readonly<SolverRunState>,
         deliveryExposures: worker.exposures?.slice(-REFERENCES) ?? [],
         deliveryExposureCount: worker.exposures?.length ?? 0,
         tasks, taskCount: worker.tasks.length, tasksOmitted: worker.tasks.length - tasks.length,
-        queuedTaskCount: worker.tasks.filter(task => task.status === 'queued').length,
+        queuedTaskCount,
         writerStopUnconfirmed: worker.writerStopUnconfirmed && { at: worker.writerStopUnconfirmed.at,
           reason: stopReason!.text, ...(stopReason!.truncated ? { reasonTruncated: true } : {}) } };
-    }),
+    });
+  const taskCount = workers.reduce((sum, worker) => sum + worker.tasks.length, 0);
+  return {
+    workers: visibleWorkers,
     ...(research && { researchState: { revision: research.revision, publishedAt: research.publishedAt,
       summary: researchPreview!.text, advisory: true, ...(researchPreview!.truncated ? { summaryTruncated: true } : {}) } }),
     ...(retiredRoutes.length > 0 && { retiredRouteCount: retiredRoutes.length,
@@ -175,15 +189,17 @@ export function agentTeamOverview(state: Readonly<SolverRunState>,
       landedHelperCount: team.landedHelpers.length } : {}),
     researchArtifacts: refs.slice(-REFERENCES).map(({ id, agentId, taskId, commit }) => ({ id, agentId, taskId, commit })),
     deliveries: deliveries.slice(-REFERENCES).map(({ id, agentId, taskId, kind }) => ({ id, agentId, taskId, ...(kind ? { kind } : {}) })),
-    adoptions: adoptions.filter(item => selectedAdoptions.has(item.id)).map(item => ({ id: item.id, deliveryId: item.deliveryId, targetId: item.targetId,
-      status: item.status, expectedCommit: item.expectedCommit, commit: item.commit,
-      error: item.error && preview(item.error, TASK_TEXT).text,
-      ...(item.error && preview(item.error, TASK_TEXT).truncated ? { errorTruncated: true } : {}) })),
+    adoptions: [...selectedAdoptions].sort((left, right) => left - right).map(index => {
+      const item = adoptions[index]!, error = item.error && preview(item.error, TASK_TEXT);
+      return { id: item.id, deliveryId: item.deliveryId, targetId: item.targetId,
+        status: item.status, expectedCommit: item.expectedCommit, commit: item.commit,
+        error: error && error.text, ...(error && error.truncated ? { errorTruncated: true } : {}) };
+    }),
     budget: options.budget ?? contextBudget(state, options.focusAgentId),
-    totals: { workers: workers.length, tasks: workers.reduce((sum, worker) => sum + worker.tasks.length, 0),
+    totals: { workers: workers.length, tasks: taskCount,
       researchArtifacts: refs.length, deliveries: deliveries.length, adoptions: adoptions.length },
-    omissions: { workers: workers.length - selected.length,
-      tasks: workers.reduce((sum, worker) => sum + worker.tasks.length, 0) - selected.reduce((sum, worker) => sum + visibleTasks(state, worker).length, 0),
+    omissions: { workers: workers.length - visibleWorkers.length,
+      tasks: taskCount - visibleWorkers.reduce((sum, worker) => sum + worker.tasks.length, 0),
       researchArtifacts: Math.max(0, refs.length - REFERENCES), deliveries: Math.max(0, deliveries.length - REFERENCES),
       adoptions: Math.max(0, adoptions.length - REFERENCES) },
     retrieval: {
@@ -202,10 +218,11 @@ function oneLine(value: string, limit: number) {
 }
 
 /** Bound each section by its serialized UTF-8 bytes, including JSON escapes. */
-function routeSummaryRows<T>(rows: readonly T[], bytes: number) {
+function routeSummaryRows<T, Row>(rows: readonly T[], bytes: number, project: (item: T) => Row) {
   let used = 2; // Array brackets.
-  const selected: T[] = [];
-  for (const row of rows) {
+  const selected: Row[] = [];
+  for (const item of rows) {
+    const row = project(item);
     const size = Buffer.byteLength(JSON.stringify(row)) + Number(selected.length > 0);
     if (used + size > bytes) break;
     selected.push(row);
@@ -237,30 +254,33 @@ export function agentTeamRouteSummary(team: Readonly<AgentTeamState>,
       }
       group[status]++;
     }
-    return [{ taskId: oneLine(task.id, 64), workerId, routeId: key, status, workKind: task.workKind ?? null,
-      objective: oneLine(task.message, 100), sequence: task.sequence ?? 0 }];
-  }).sort((a, b) => routeTaskRank[a.status] - routeTaskRank[b.status] || b.sequence - a.sequence);
+    return [{ task, workerId, status }];
+  }).sort((a, b) => routeTaskRank[a.status] - routeTaskRank[b.status] || (b.task.sequence ?? 0) - (a.task.sequence ?? 0));
   const routes = routeSummaryRows([...activeRoutes.values()].sort((a, b) =>
-    (b.running + b.queued + b.paused) - (a.running + a.queued + a.paused)), 800);
-  const tasks = routeSummaryRows(taskRows.map(({ sequence: _sequence, ...row }) => row), 2200);
+    (b.running + b.queued + b.paused) - (a.running + a.queued + a.paused)), 800, route => route);
+  const tasks = routeSummaryRows(taskRows, 2200, ({ task, workerId, status }) => ({
+    taskId: oneLine(task.id, 64), workerId, routeId: task.routeId ?? null, status, workKind: task.workKind ?? null,
+    objective: oneLine(task.message, 100),
+  }));
   const retirementRows = includeRetired ? [...retired.values()].toReversed()
-    .filter(route => routeId === undefined || route.routeId === routeId)
-    .map(route => ({ routeId: route.routeId, source: route.source, reason: oneLine(route.reason, 120),
-      evidenceRefCount: route.evidenceRefs?.length ?? 0 })) : [];
-  const retiredRoutes = routeSummaryRows(retirementRows, 950);
+    .filter(route => routeId === undefined || route.routeId === routeId) : [];
+  const retiredRoutes = routeSummaryRows(retirementRows, 950, route => ({
+    routeId: route.routeId, source: route.source, reason: oneLine(route.reason, 120),
+    evidenceRefCount: route.evidenceRefs?.length ?? 0,
+  }));
   const helpers = team.landedHelpers ?? [];
-  const landedHelpers = routeSummaryRows(helpers.slice(-8).reverse().map(helper => ({
+  const landedHelpers = routeSummaryRows(helpers.slice(-8).reverse(), 1200, helper => ({
     file: oneLine(helper.file, 96), qualifiedName: oneLine(helper.qualifiedName, 120),
     signature: oneLine(helper.type, 120), landedAt: helper.landedAt ?? null,
-  })), 1200);
+  }));
   const deliveries = routeId === undefined && includeRetired ? team.deliveries :
     team.deliveries.filter(delivery => byTask.has(delivery.taskId));
-  const recentDeliveries = routeSummaryRows(deliveries.slice(-8).reverse().map(delivery => {
+  const recentDeliveries = routeSummaryRows(deliveries.slice(-8).reverse(), 1250, delivery => {
     const task = byTask.get(delivery.taskId);
     return { id: oneLine(delivery.id, 64), producer: delivery.agentId, kind: delivery.kind ?? 'proof',
       declarationCount: delivery.declarationCount ?? (task?.deliveryId === delivery.id && task.declarations ? task.declarations.length : null),
       summary: oneLine(delivery.summary ?? task?.summary ?? 'Independently checked delivery.', 100) };
-  }), 1250);
+  });
   const research = team.researchState;
   return {
     ok: true, routeId: routeId ?? null, canonicalCommit: team.canonicalCommit,
@@ -274,28 +294,35 @@ export function agentTeamRouteSummary(team: Readonly<AgentTeamState>,
 
 /** Task order is append-only once the host has filled the optional legacy sequence values. */
 export function agentTeamTaskHistory(team: Readonly<AgentTeamState>, input: { agentId?: string; offset?: number; limit?: number } = {}) {
-  const offset = input.offset ?? 0, limit = input.limit ?? 4;
+  const { agentId, offset = 0, limit = 4 } = input;
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 8)
     throw new Error('math_team_history_arguments_invalid');
-  if (input.agentId && !team.workers.some(worker => worker.id === input.agentId))
-    throw new Error('math_team_agent_unknown:' + input.agentId);
-  const all = team.workers.flatMap(worker => input.agentId && worker.id !== input.agentId ? [] :
-    worker.tasks.map((task, index) => ({ agentId: worker.id, task, index })));
-  if (!input.agentId) all.sort((left, right) => (left.task.sequence ?? Number.MAX_SAFE_INTEGER) -
-    (right.task.sequence ?? Number.MAX_SAFE_INTEGER));
+  let total: number;
+  let entries: { agentId: string; task: AgentTeamTask; index: number }[];
+  if (agentId) {
+    const worker = team.workers.find(item => item.id === agentId);
+    if (!worker) throw new Error('math_team_agent_unknown:' + agentId);
+    total = worker.tasks.length;
+    entries = worker.tasks.slice(offset, offset + limit).map((task, index) => ({ agentId, task, index: offset + index }));
+  } else {
+    const all = team.workers.flatMap(worker => worker.tasks.map((task, index) => ({ agentId: worker.id, task, index })));
+    all.sort((left, right) => (left.task.sequence ?? Number.MAX_SAFE_INTEGER) - (right.task.sequence ?? Number.MAX_SAFE_INTEGER));
+    total = all.length;
+    entries = all.slice(offset, offset + limit);
+  }
   // Include the next whole task or leave it for the next page; a byte limit never skips a row.
   // One legal task is always returned even when its full text exceeds the ordinary page budget.
-  const page: typeof all = [];
+  const tasks = [];
   let bytes = Buffer.byteLength(JSON.stringify(team.researchState ?? null));
-  for (const entry of all.slice(offset, offset + limit)) {
-    const size = Buffer.byteLength(JSON.stringify(taskProjection(entry.task, entry.index, true)));
-    if (page.length && bytes + size > HISTORY_BYTES) break;
-    page.push(entry); bytes += size;
+  for (const entry of entries) {
+    const projection = taskProjection(entry.task, entry.index, true);
+    const size = Buffer.byteLength(JSON.stringify(projection));
+    if (tasks.length && bytes + size > HISTORY_BYTES) break;
+    tasks.push({ agentId: entry.agentId, ...projection });
+    bytes += size;
   }
-  return { ok: true, agentId: input.agentId, offset, total: all.length,
-    coordination: team.coordination,
-    tasks: page.map(item => ({ agentId: item.agentId, ...taskProjection(item.task, item.index, true) })),
-    nextOffset: offset + page.length < all.length ? offset + page.length : null,
+  return { ok: true, agentId, offset, total, coordination: team.coordination, tasks,
+    nextOffset: offset + tasks.length < total ? offset + tasks.length : null,
     ...(team.researchState && { researchState: { ...team.researchState, advisory: true } }),
     declarations: 'Task text is complete. Declaration arrays are omitted; inspect a checked deliveryId for exact declarations and evidence.',
     pagination: 'Pages stop at a complete task boundary. Follow nextOffset; a single large task can exceed the ordinary 256 KiB page budget.',
@@ -309,20 +336,30 @@ function eventPreview(event: AgentTeamState['events'][number]) {
 
 /** A truncated preview never acknowledges the unreturned message body. */
 export function agentTeamInboxPreview(team: Readonly<AgentTeamState>, actor: string, after: number) {
-  const unread = team.events.filter(item => item.to === actor && item.sequence > after);
-  const events = unread.slice(0, EVENTS).map(eventPreview);
-  let through = after, truncated = false;
-  for (const event of events) {
+  const events: ReturnType<typeof eventPreview>[] = [];
+  let through = after, truncated = false, more = false;
+  for (const item of team.events) {
+    if (item.to !== actor || item.sequence <= after) continue;
+    if (events.length === EVENTS) {
+      more = true;
+      break;
+    }
+    const event = eventPreview(item);
+    events.push(event);
     truncated ||= Boolean(event.textTruncated);
     if (!truncated) through = event.sequence;
   }
   return { after, through, previewThrough: events.at(-1)?.sequence ?? after, events,
-    more: unread.length > events.length || truncated,
-    continuation: team.transport === 'native-agent-control'
-      ? 'Read addressed native messages for complete updates; use history and inspect-research for saved task results. Previews do not acknowledge their bodies.'
-      : 'Poll after through for complete unread messages. textTruncated previews do not acknowledge their bodies; previewThrough is not a receive cursor.' };
+    more: more || truncated,
+    continuation: 'Read addressed native messages for complete updates; use history and inspect-research for saved task results. Previews do not acknowledge their bodies.' };
 }
 
 export function agentTeamRecentEvents(team: Readonly<AgentTeamState> | undefined, actor: string) {
-  return team?.events.filter(event => event.to === actor).slice(-EVENTS).map(eventPreview) ?? [];
+  const events = team?.events ?? [];
+  const recent: ReturnType<typeof eventPreview>[] = [];
+  for (let index = events.length - 1; index >= 0 && recent.length < EVENTS; index--) {
+    const event = events[index]!;
+    if (event.to === actor) recent.push(eventPreview(event));
+  }
+  return recent.reverse();
 }

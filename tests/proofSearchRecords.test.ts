@@ -6,14 +6,13 @@ import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
 import { deliveryDetails } from '../src/solver/deliveries';
 import type { NextCheckRecord } from '../src/solver/nextCheckContract';
-import { parseCooperationPlan } from '../src/solver/cooperation';
+import { parseCooperationPlan } from '../src/solver/tasks';
 import { assignmentDeliveryFile } from '../src/solver/tasks';
 import {
   latestProofSearchRecord, MAX_PROOF_SEARCH_CHECKPOINT_BYTES, projectProofSearchRecord,
   proofSearchRecordMatches, proofSearchTargetForAssignment, readProofSearchCheckpoint, retainProofSearchCheckpoint,
   type ProofSearchCheckpointReference, type ProofSearchScope,
 } from '../src/solver/proofSearchRecords';
-import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 
 const forbidden = vi.hoisted(() => ({ model: vi.fn(), lean: vi.fn() }));
@@ -153,59 +152,5 @@ describe('host-retained advisory proof search records', () => {
     expect(deliveryDetails({ kind: 'progress', summary: 'Explored.', searchCheckpoint: reference }).searchCheckpoint).toEqual(reference);
     expect(deliveryDetails({ kind: 'progress', summary: 'Old event.' }).searchCheckpoint).toBeUndefined();
     expect(() => deliveryDetails({ kind: 'proof', searchCheckpoint: reference })).toThrow('math_delivery_invalid');
-  });
-});
-
-describe('proof search progress intake and archive recovery', () => {
-  it('keeps publication advisory, deduplicates intake and exposes a scoped recoverable checkpoint', async () => {
-    const example = localExample('proof-search-intake-'), lead = leadWorker(example.problem, example.workspace);
-    const worker = peerWorker(example, 'worker'), other = peerWorker(example, 'other');
-    const controller = new AbortController();
-    const plan = parseCooperationPlan(example.problem, { tasks: [
-      ...example.problem.targets.map((target, index) => ({ ...target, id: `goal_${index}`, kind: 'goal',
-        objective: 'Prove original target.', status: 'paused' })),
-      { id: 'explore', kind: 'research', objective: 'Explore a local proof.', ownerId: worker.id },
-    ] });
-    const state = solverState(example.problem, example.workspace, { runId: 'search-intake', phase: 'running',
-      cooperation: { canonicalCommit: example.problem.baseCommit,
-        tasks: plan.tasks.map(task => ({ task, status: 'pending', attempts: 0 })), groups: plan.groups.map(group => ({ group, turns: 0 })) } });
-    const cooperation = cooperativeResearch({ state, workers: [lead, worker, other], retrievalRoot: example.directory, signal: controller.signal });
-    try {
-      const action = await cooperation.next(worker, { maxTurns: Infinity, remainingMs: Infinity });
-      if (action?.kind !== 'task') throw new Error('missing fixture assignment');
-      expect(cooperation.started(worker, action)).toBe(true);
-      cooperation.activate(worker, action, async () => {}, async () => {});
-      const project = path.join(worker.worktree, example.problem.projectRelative);
-      const currentScope = { taskId: action.task.id, taskDigest: action.assignment.taskDigest,
-        problemReceiptDigest: example.problem.receiptDigest, environmentDigest: state.environmentDigest };
-      const saved = saveCheckpoint(project, currentScope);
-      const event = JSON.stringify({ kind: 'progress', id: saved.reference.digest, summary: 'A prefix remains open.', searchCheckpoint: saved.reference }) + '\n';
-      const log = path.join(worker.worktree, assignmentDeliveryFile(action.assignment));
-      const otherScope = saveCheckpoint(project, { ...currentScope, taskId: 'other-task' });
-      fs.appendFileSync(log, JSON.stringify({ kind: 'progress', id: 'wrong-scope', summary: 'Incorrect search scope.',
-        searchCheckpoint: otherScope.reference }) + '\n');
-      await cooperation.pulse(worker.id);
-      expect(state.cooperation!.proofSearchRecords).toBeUndefined();
-      expect(state.cooperation!.deliveryReceipts?.some(receipt => receipt.status === 'needs-correction')).toBe(true);
-      fs.appendFileSync(log, event + event); await cooperation.pulse(worker.id);
-      const record = state.cooperation!.proofSearchRecords!.explore;
-      expect(record.checkpoint.digest).toBe(saved.reference.digest);
-      expect(state.cooperation!.deliveries?.filter(item => item.submissionId === saved.reference.digest)).toHaveLength(1);
-      expect(state.cooperation!.tasks.find(node => node.task.id === 'explore')).toMatchObject({ status: 'running' });
-      expect(state.cooperation!.tasks.every(node => !node.proof && !node.integratedCheck)).toBe(true);
-      const visible = JSON.parse(fs.readFileSync(path.join(worker.worktree, 'COOPERATION.json'), 'utf8'));
-      expect(visible.proofSearchRecords.explore.checkpoint.path.startsWith(project + path.sep)).toBe(true);
-      const peer = JSON.parse(fs.readFileSync(path.join(other.worktree, 'COOPERATION.json'), 'utf8'));
-      expect(peer.proofSearchRecords).toEqual({});
-      const archive = path.join(example.directory, 'state.json'); writeSolverRunState(archive, state);
-      const restored = readSolverRunState(archive);
-      expect(restored.cooperation!.proofSearchRecords).toEqual(state.cooperation!.proofSearchRecords);
-      delete restored.cooperation!.proofSearchRecords; writeSolverRunState(archive, restored);
-      expect(readSolverRunState(archive).cooperation!.proofSearchRecords).toBeUndefined();
-    } finally {
-      controller.abort(); await cooperation.stop();
-      expect(forbidden.model).not.toHaveBeenCalled(); expect(forbidden.lean).not.toHaveBeenCalled();
-      fs.rmSync(example.directory, { recursive: true, force: true });
-    }
   });
 });

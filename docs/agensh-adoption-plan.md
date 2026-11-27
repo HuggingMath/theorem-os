@@ -38,7 +38,7 @@ Agensh 的大规模结果主要支持固定墙钟下增加并行投入的可行�
 
 完成条件：能从原始记录解释至少一个“有任务却未派发”的场景及一个成果交接场景；缺失记录可见；任务数量、消息数量和 worker 忙碌程度不被计为数学进展。
 
-主要入口：[inspection.ts](../src/solver/inspection.ts)、[archive.ts](../src/solver/archive.ts)、[cooperationCore.ts](../src/solver/cooperationCore.ts)、[cooperationIntegration.ts](../src/solver/cooperationIntegration.ts)。
+主要入口：[inspection.ts](../src/solver/inspection.ts)、[archive.ts](../src/solver/archive.ts)、[cooperationCore.ts](https://github.com/HuggingMath/theorem-os/blob/ef08987d6f686856c6fe9ecf86676ebbaa632546/src/solver/cooperationCore.ts)、[cooperationIntegration.ts](https://github.com/HuggingMath/theorem-os/blob/ef08987d6f686856c6fe9ecf86676ebbaa632546/src/solver/cooperationIntegration.ts)。
 
 **阶段二：让现有工作更容易被领取和消费**
 
@@ -56,7 +56,7 @@ Agensh 的大规模结果主要支持固定墙钟下增加并行投入的可行�
 
 交付：每项实际变更、对应回归和使用说明，以及阶段一口径下的等待变化。离线回归只能证明流程行为，解题收益留待阶段四判断。
 
-主要入口：[organization.ts](../src/solver/modules/organization.ts)、[context.ts](../src/solver/modules/context.ts)、[cooperationInputs.ts](../src/solver/cooperationInputs.ts)、[handoffPublication.ts](../src/solver/handoffPublication.ts)、[taskConnections.ts](../src/solver/taskConnections.ts)。
+主要入口：[organization.ts](../src/solver/modules/organization.ts)、[context.ts](../src/solver/modules/context.ts)、[cooperationInputs.ts](https://github.com/HuggingMath/theorem-os/blob/ef08987d6f686856c6fe9ecf86676ebbaa632546/src/solver/cooperationInputs.ts)、[handoffPublication.ts](../src/solver/handoffPublication.ts)、[taskConnections.ts](../src/solver/taskConnections.ts)。
 
 **阶段三：评估 Lead 故障后的有限收尾**
 
@@ -73,7 +73,7 @@ Agensh 的大规模结果主要支持固定墙钟下增加并行投入的可行�
 
 交付：明确的暂停/收尾/恢复语义及端到端故障回归。若无法在现有生命周期内保持这些约束，保留当前中止行为并记录原因，不先扩大容错范围。
 
-主要入口：[research.ts](../src/solver/research.ts)、[cooperation.ts](../src/solver/cooperation.ts)、[workerProofLifecycle.ts](../src/solver/workerProofLifecycle.ts)、[evaluation.ts](../src/solver/evaluation.ts)。
+主要入口：[research.ts](../src/solver/research.ts)、[cooperation.ts](https://github.com/HuggingMath/theorem-os/blob/ef08987d6f686856c6fe9ecf86676ebbaa632546/src/solver/cooperation.ts)、[workerProofLifecycle.ts](https://github.com/HuggingMath/theorem-os/blob/ef08987d6f686856c6fe9ecf86676ebbaa632546/src/solver/workerProofLifecycle.ts)、[evaluation.ts](../src/solver/evaluation.ts)。
 
 **阶段四：用对照决定是否扩大投入**
 

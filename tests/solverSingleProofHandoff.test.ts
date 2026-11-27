@@ -5,9 +5,9 @@ import { LOCAL_EXAMPLE_PROOF } from '../src/math/localExample';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/codexSession';
 import { directSolverModules, type SolverModules } from '../src/solver/modules';
 import { committedSource, git } from '../src/solver/problem';
-import { runResearchWorkers } from '../src/solver/research';
+import { runResearchLead } from '../src/solver/research';
 import { deferred } from './helpers/async';
-import { workerAccess } from './helpers/cooperation';
+import { workerAccess } from './helpers/solver';
 import { captureLeanCompletion } from './helpers/leanCompletion';
 import { leadWorker, localExample, solverState } from './helpers/solver';
 import { failedBatch, receiptBatch } from './helpers/verifier';
@@ -66,7 +66,7 @@ describe('single solver early proof submission', () => {
         message: 'Prove all original targets.', scope: 'original-problem-and-allowed-library',
         sources: { problemReceiptDigest: problem.receiptDigest } }) },
     };
-    const completion = runResearchWorkers({ state, workers, access: workerAccess(workers, directory), modules,
+    const completion = runResearchLead({ state, access: workerAccess(workers, directory).get('solver')!, modules,
       root: directory, buildFile: path.join(directory, 'unused-build.json'), taskText: 'Prove all original targets.',
       executable: 'offline-no-model', profile: 'offline-no-credentials', signal: controller.signal,
       deadline: Infinity, maxTurns: Infinity, maxTurnMs: Infinity, maxTotalTokens: 0,

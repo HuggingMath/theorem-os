@@ -22,7 +22,7 @@ const runnerEndings: string[] = [];
 let formalizationCalls = 0, phase = 'setup', failure: unknown, active: Page | undefined;
 const releaseGates: (() => void)[] = [];
 const runner: WebRunner = {
-  async readiness() { return { ready: true, message: 'Disposable key ordering regression; no model or Lean' }; },
+  async readiness() { return { ready: true, nativeTeam: true, message: 'Disposable key ordering regression; no model or Lean' }; },
   async formalize() { formalizationCalls++; throw new Error('Key management must not formalize'); },
   async run(input, send) {
     runnerEndings.push(input.input.apiKey.slice(-4));

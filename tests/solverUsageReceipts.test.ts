@@ -11,7 +11,6 @@ import { SUB2API_PROVIDER } from '../src/runtime/sub2api';
 import type { MathAgentSession } from '../src/runtime/codexSession';
 import { createCodexMathSession } from '../src/runtime/codexSession';
 import type { ModelRequestReceipt, ModelRequestIdentity } from '../src/runtime/modelRequest';
-import type { CooperativeAction } from '../src/solver/tasks';
 import { localExample, solverState } from './helpers/solver';
 import { temporaryDirectory } from './helpers/files';
 
@@ -27,13 +26,17 @@ describe('persistent provider request receipts', () => {
   it('deduplicates normal receipts across serialization and preserves subset tokens', () => {
     const first = record();
     const settle = beginRequestUsage(first, { requestId: 'request-1', runId: 'run', sessionId: 'session', taskId: 'task' });
-    settle({ usage, complete: true, outcome: 'completed' }); settle({ usage, complete: true });
+    const duplicate = beginRequestUsage(first, { requestId: 'request-1', taskId: 'another-task' });
+    expect(first.requestUsageAccounting).toMatchObject({ startedRequests: 1, pendingRequests: 1 });
+    settle({ usage, complete: true, outcome: 'completed' }); duplicate({ usage, complete: true });
     const resumed: Record = JSON.parse(JSON.stringify(first));
     initializeUsageAccounting(resumed);
     beginRequestUsage(resumed, { requestId: 'request-1' })({ usage, complete: true });
     expect(resumed.usage).toEqual(usage);
     expect(resumed.requestUsageAccounting).toMatchObject({ startedRequests: 1, reportedRequests: 1, pendingRequests: 0, incomplete: false });
-    expect(resumed.requestUsageAccounting!.receipts).toHaveLength(1);
+    expect(resumed.requestUsageAccounting!.receipts).toMatchObject([
+      { requestId: 'request-1', taskId: 'task', status: 'reported' },
+    ]);
     expect(buildTokenBudget(100, [resumed])).toMatchObject({ reportedTotalTokens: 13, usageComplete: true, status: 'available' });
   });
 
@@ -109,13 +112,12 @@ describe('persistent provider request receipts', () => {
 function researchFixture(source: MathAgentSession['usageSource']) {
   const state = { runId: 'run', turns: 0 } as SolverRunState;
   initializeUsageAccounting(state); state.tokenBudget = buildTokenBudget(0, [state]);
-  const emit = vi.fn(), research = new ResearchUsage({ state, research: state, maxTotalTokens: 0,
+  const emit = vi.fn(), research = new ResearchUsage({ state, research: state,
     signal: new AbortController().signal, remainingMs: () => 1000, changed: vi.fn(), emit });
   const callbacks = research.bindSession('session', () => 10);
   research.sessionOpened({ usageSource: source } as MathAgentSession);
   return { state, research, callbacks, emit };
 }
-const assignment = (id: string) => ({ kind: 'task', task: { id } }) as CooperativeAction;
 
 describe('usage attribution at task boundaries', () => {
   it('ignores cumulative replays before the next turn and flags new unscoped tokens', () => {
@@ -132,7 +134,7 @@ describe('usage attribution at task boundaries', () => {
       expect.objectContaining({ reason: 'native-turn-identity-unavailable', reportedTotalTokens: 21 }));
     expect(state.usage).toEqual({ totalTokens: 51 });
 
-    research.begin(assignment('next'));
+    research.begin('next');
     callbacks.onUsage!({ totalTokens: 21 }, { turnId: 'next-turn' });
     expect(emit).toHaveBeenCalledTimes(1);
     callbacks.onUsage!({ totalTokens: 21 }, { turnId: 'unrecognized-turn' });
@@ -140,9 +142,9 @@ describe('usage attribution at task boundaries', () => {
   });
   it('settles a late request into its original task without charging the next turn', () => {
     const { state, research, callbacks } = researchFixture('upstream-requests');
-    research.begin(assignment('first'));
+    research.begin('first');
     const first = callbacks.requestGate!({ requestId: 'first-request' });
-    research.finish(false); research.begin(assignment('second'));
+    research.finish(false); research.begin('second');
     if (!first.allowed) throw new Error('request rejected');
     first.settle({ complete: true, usage }); first.settle({ complete: true, usage });
     const second = callbacks.requestGate!({ requestId: 'second-request' });
@@ -154,9 +156,9 @@ describe('usage attribution at task boundaries', () => {
 
   it('uses native turn identity for delayed totals and leaves ambiguous cross-task deltas unassigned', () => {
     const { state, research, callbacks, emit } = researchFixture('native-thread-totals');
-    research.begin(assignment('first')); research.turnStarted('turn-1');
+    research.begin('first'); research.turnStarted('turn-1');
     callbacks.onUsage!({ totalTokens: 10 }, { turnId: 'turn-1' }); research.finish(true);
-    research.begin(assignment('second')); research.turnStarted('turn-2');
+    research.begin('second'); research.turnStarted('turn-2');
     callbacks.onUsage!({ totalTokens: 12 }, { turnId: 'turn-1' });
     expect(state.taskUsage).toEqual({ first: { totalTokens: 12 } });
     callbacks.onUsage!({ totalTokens: 20 }, { turnId: 'turn-2' });

@@ -29,7 +29,7 @@ bun bin/math.ts run --harness cli --harness-profile DEDICATED_PROFILE \
   --output RESULT_FILE --build-manifest BUILD_MANIFEST
 ```
 
-`--harness-executable` optionally overrides `executable`. The CLI harness defaults to Skill mode, file loading and one independent researcher. Explicit workers/coordination select host-managed independent or cooperative execution; explicit legacy research remains supported. Build the standalone runtime normally with an external `--state-root` and use its build manifest. Web operators can configure the same backend, and `compare` freezes a fresh configuration-only profile per attempt. Sealed formalization and audit roles retain their stronger isolation requirement; see [complete workflows](portable-workflows.md).
+`--harness-executable` optionally overrides `executable`. The CLI harness defaults to a solo researcher with file-loaded Skill guidance. Build the standalone runtime with an external `--state-root` and use its build manifest. Web operators can configure the same backend. Sealed formalization and audit roles retain their stronger isolation requirement. See [complete workflows](portable-workflows.md).
 
 ## Input and session contract
 

@@ -21,7 +21,17 @@ describe('search component starter', () => {
     expect(JSON.parse(probe.stdout).readyTasks).toEqual(['goal', 'research']);
     const help = spawnSync('bun', [files.entry, '--help'], { encoding: 'utf8', timeout: 20_000, maxBuffer: 8_000 });
     expect(help.status, help.stderr).toBe(0);
-    expect(help.stdout).toContain('--workspace');
+    expect(help.stdout).toContain("pinned historical TheoremOS revision");
+  });
+  it('keeps the generated and bundled component scripts from creating fresh host scheduling runs', () => {
+    const root = temp(), files = createSearchComponent(root, 'my-search');
+    fs.symlinkSync(path.resolve('src/solver'), path.join(root, 'src/solver'), 'dir');
+    for (const entry of [files.entry, path.resolve('scripts/mathematics/runGoalsFirst.ts')]) {
+      const result = spawnSync('bun', [entry, '--workers', '4', '--startup-only'],
+        { encoding: 'utf8', timeout: 20_000, maxBuffer: 8_000 });
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain('math_legacy_collaboration_retired');
+    }
   });
   it('preserves an existing component or entry', () => {
     const root = temp(), files = createSearchComponent(root, 'my-search');

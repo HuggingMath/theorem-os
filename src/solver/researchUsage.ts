@@ -1,19 +1,13 @@
 import type { MathAgentOptions, MathAgentSession } from '../runtime/agentSession';
-import { randomUUID } from 'node:crypto';
 import type { ModelRequestAdmission, ModelRequestIdentity, ModelRequestStopReason } from '../runtime/modelRequest';
 import type { SolverRunState } from './archive';
-import type { CooperativeAction } from './tasks';
 import { attributeTaskUsage, beginRequestUsage, initializeRequestUsageAccounting, modelDispatchAllowed,
   recordThreadUsage, recordTurnUsage, reportedTotalTokens } from './usageBudget';
 import { normalizeModelRequestUsage, type ModelRequestUsage } from '../runtime/modelRequest';
 
 type UsageCallbacks = Pick<MathAgentOptions, 'onUsage' | 'onUsageIncomplete' | 'requestGate'>;
 
-const assignmentTask = (assignment?: CooperativeAction) =>
-  assignment?.kind === 'task' ? assignment.task.id :
-    assignment?.kind === 'backtranslate' || assignment?.kind === 'statement-review' ? assignment.taskId : undefined;
-
-type TurnUsageScope = { reported: boolean; incomplete: boolean; initialPlanning: boolean;
+type TurnUsageScope = { reported: boolean; incomplete: boolean;
   taskId?: string; turnId?: string; upstreamRequests: boolean; nativeTurnTotals: boolean; finished: boolean;
   reportedUsage?: ModelRequestUsage };
 
@@ -29,16 +23,16 @@ export class ResearchUsage {
   constructor(private input: {
     state: SolverRunState; research: Pick<SolverRunState, 'turns' | 'lastInputTokens' | 'usageBeforeThread' | 'usage' |
       'usageAccounting' | 'requestUsageAccounting'>;
-    maxTotalTokens: number; signal: AbortSignal; remainingMs: () => number;
+    signal: AbortSignal; remainingMs: () => number;
     changed: () => void; emit: (event: string, details: Record<string, unknown>) => void;
   }) {}
 
   resetTurn() { this.stopReason = undefined; }
 
   /** Native compaction can make model requests between proof turns. It is maintenance, not a solver turn. */
-  beginMaintenance(assignment?: CooperativeAction) {
+  beginMaintenance() {
     if (this.active) throw new Error('math_model_maintenance_during_turn');
-    this.active = { reported: false, incomplete: false, initialPlanning: false, taskId: assignmentTask(assignment),
+    this.active = { reported: false, incomplete: false,
       upstreamRequests: this.requestSessionId === this.sessionId && this.sessionId !== undefined,
       nativeTurnTotals: Boolean(this.boundSession && this.boundSession.id === this.sessionId && this.boundSession.nativeTurnTotals),
       finished: false };
@@ -56,15 +50,14 @@ export class ResearchUsage {
     maintenance.finished = true; this.active = undefined; this.input.changed();
   }
 
-  begin(assignment?: CooperativeAction, taskId = assignmentTask(assignment)) {
-    const { state, research, maxTotalTokens } = this.input;
+  begin(taskId?: string) {
+    const { research } = this.input;
     research.usageAccounting!.startedTurns++;
     research.usageAccounting!.pending = true;
     this.active = { reported: false, incomplete: false,
       taskId, upstreamRequests: this.requestSessionId === this.sessionId && this.sessionId !== undefined,
       nativeTurnTotals: Boolean(this.boundSession && this.boundSession.id === this.sessionId && this.boundSession.nativeTurnTotals),
-      finished: false,
-      initialPlanning: assignment?.kind === 'lead' && state.cooperation?.tasks.length === 0 && maxTotalTokens > 0 };
+      finished: false };
     if (!this.active.upstreamRequests) {
       this.nativeTurns.push(this.active);
       if (research.requestUsageAccounting) {
@@ -183,40 +176,27 @@ export class ResearchUsage {
   }
 
   private rejectRequest(sessionId: string, reason: ModelRequestStopReason): ModelRequestAdmission {
-    if (this.sessionId === sessionId && this.active) {
-      const changed = this.stopReason !== reason;
-      this.stopReason = reason;
-      if (changed && reason === 'math_initial_planning_limit') this.input.emit('planning_budget_stopped', {
-        reason, maxPlanningTokens: Math.max(1, Math.floor(this.input.maxTotalTokens / 4)), maxRequests: 2,
-        reportedTotalTokens: reportedTotalTokens(this.input.research.usage),
-        startedRequests: this.input.research.requestUsageAccounting?.startedRequests ?? 0,
-      });
-    }
+    if (this.sessionId === sessionId && this.active) this.stopReason = reason;
     return { allowed: false, reason };
   }
 
   private admitRequest(sessionId: string, identity?: ModelRequestIdentity): ModelRequestAdmission {
-    const { state, research, signal, remainingMs, maxTotalTokens, changed } = this.input;
+    const { state, research, signal, remainingMs, changed } = this.input;
     if (!modelDispatchAllowed(state.tokenBudget!)) return this.rejectRequest(sessionId, state.tokenBudget!.reason!);
     if (this.sessionId !== sessionId || !this.active || signal.aborted || remainingMs() <= 0)
       return this.rejectRequest(sessionId, 'math_model_request_stopped');
-    const requests = research.requestUsageAccounting;
-    if (this.active.initialPlanning && state.cooperation?.tasks.length === 0 && requests && (requests.startedRequests >= 2 ||
-        (reportedTotalTokens(research.usage) ?? 0) >= Math.max(1, Math.floor(maxTotalTokens / 4))))
-      // Only settled requests can yield a checkpoint with complete accounting.
-      return this.rejectRequest(sessionId, requests.pendingRequests ? 'math_model_request_stopped' : 'math_initial_planning_limit');
     initializeRequestUsageAccounting(research);
-    const turn = this.active, taskId = turn.taskId, requestId = identity?.requestId ?? randomUUID();
-    const settle = beginRequestUsage(research, { ...identity, requestId, runId: state.runId, sessionId, taskId });
+    const turn = this.active, taskId = turn.taskId;
+    const settle = beginRequestUsage(research, { ...identity, runId: state.runId, sessionId, taskId });
     let settled = false;
     changed();
     return { allowed: true, settle: receipt => {
       if (settled) return;
       settled = true;
       const before = research.usage;
-      settle(receipt);
+      const status = settle(receipt);
       if (taskId) attributeTaskUsage(state, taskId, before, research.usage);
-      if (research.requestUsageAccounting!.receipts?.find(item => item.requestId === requestId)?.status !== 'reported') turn.incomplete = true;
+      if (status !== 'reported') turn.incomplete = true;
       changed();
     } };
   }

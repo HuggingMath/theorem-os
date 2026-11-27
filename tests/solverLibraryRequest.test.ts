@@ -10,9 +10,9 @@ import { agentLibrary, LibraryInstallationRequested, LIBRARY_REQUEST_FILE } from
 import { writeLibraryCatalog } from '../src/solver/libraryCatalog';
 import { directSolverModules, type SolverModules } from '../src/solver/modules';
 import { committedSource, git, readSolverProblem } from '../src/solver/problem';
-import { runResearchWorkers } from '../src/solver/research';
+import { runResearchLead } from '../src/solver/research';
 import { deferred } from './helpers/async';
-import { workerAccess } from './helpers/cooperation';
+import { workerAccess } from './helpers/solver';
 import { temporaryDirectory } from './helpers/files';
 import { leadWorker, solverState } from './helpers/solver';
 import { failedBatch, verifiedBatch } from './helpers/verifier';
@@ -87,7 +87,7 @@ function fixture({ parallel = false, previous = false } = {}) {
         message: 'Inspect the pinned catalog and save an installation request when required.',
         scope: 'original-problem-and-allowed-library', sources: { problemReceiptDigest: problem.receiptDigest } }) },
     };
-    const completion = runResearchWorkers({ state, workers, modules, access, root: directory,
+    const completion = runResearchLead({ state, modules, access: access.get('solver')!, root: directory,
       buildFile: path.join(directory, 'build.json'), taskText: 'Prove the original identity.',
       executable: 'offline-fixture', profile: 'offline-fixture', signal: controller.signal,
       deadline: Infinity, maxTurns: state.turns + workers.length, maxTurnMs: Infinity, maxTotalTokens: 1000,
@@ -108,63 +108,6 @@ function reportUsage(options: MathAgentOptions) {
 }
 
 describe('solver library installation handoff', () => {
-  it('waits for every writer to close, retains cumulative usage and never accepts the request as a proof', async () => {
-    const f = fixture({ parallel: true, previous: true });
-    const bothStarted = gate(), requestClosing = gate(), peerClosing = gate();
-    const releaseRequest = gate(), releasePeer = gate(), peerTurn = gate<string>();
-    const closes = [vi.fn(), vi.fn()];
-    const draft = challenge.replace('by sorry', 'by\n  -- The saved draft still needs its library dependency.\n  sorry');
-    let started = 0;
-    const open = vi.fn(async (options: MathAgentOptions): Promise<MathAgentSession> => {
-      const index = options.environment!.DEEPSCIENTIST_MATH_WORKER_ID === 'solver' ? 0 : 1;
-      return { threadId: `library-request-${index}`, usageSource: 'upstream-requests',
-        run: async (_message, _messageId, _workspace, onStarted) => {
-          onStarted(`turn-${index}`); reportUsage(options);
-          if (++started === 2) bothStarted.resolve();
-          await bothStarted.promise;
-          if (index) return peerTurn.promise;
-          fs.writeFileSync(path.join(options.workspace, f.problem.projectRelative, 'Submission.lean'), draft);
-          fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), 'Saved work needs Catalog.identity.\n');
-          expect(f.request(options.workspace)).toMatchObject({ status: 'queued' });
-          return 'completed';
-        }, interrupt: async () => {}, close: async () => {
-          closes[index]();
-          if (index) { peerClosing.resolve(); peerTurn.resolve('interrupted'); await releasePeer.promise; }
-          else { requestClosing.resolve(); await releaseRequest.promise; }
-        } };
-    });
-    let settled = false;
-    const result = f.run(open).then(value => ({ value }), error => ({ error }));
-    void result.then(() => { settled = true; });
-    await requestClosing.promise;
-    expect(settled).toBe(false); expect(closes[1]).not.toHaveBeenCalled();
-    expect(f.check).not.toHaveBeenCalled();
-    releaseRequest.resolve(); await peerClosing.promise;
-    expect(settled).toBe(false);
-    releasePeer.resolve();
-    const outcome = await result;
-    expect(outcome).toHaveProperty('error');
-    const error = 'error' in outcome ? outcome.error : undefined;
-    expect(error).toBeInstanceOf(LibraryInstallationRequested);
-    expect(error).toMatchObject({ worktree: f.workers[0].worktree, request: {
-      names: ['Catalog.identity'], catalogDigest: f.catalog.digest, problemReceiptDigest: f.problem.receiptDigest,
-    } });
-    for (const close of closes) expect(close).toHaveBeenCalledOnce();
-    expect(open).toHaveBeenCalledTimes(2); expect(f.state.turns).toBe(4);
-    expect(f.state.usage).toEqual({ inputTokens: 132, outputTokens: 88, totalTokens: 220 });
-    expect(f.state.tokenBudget).toMatchObject({ reportedTotalTokens: 220, usageComplete: true, status: 'available' });
-    for (const worker of f.state.workers!) expect(worker).toMatchObject({ turns: 2, phase: 'finished',
-      usageAccounting: { startedTurns: 2, reportedTurns: 2, pending: false, incomplete: false },
-      requestUsageAccounting: { startedRequests: 2, reportedRequests: 2, pendingRequests: 0, incomplete: false } });
-    expect(f.state.check).toBeUndefined(); expect(f.state.candidate).toBeUndefined();
-    expect(f.state.winningWorker).toBeUndefined(); expect(f.state.error).toBeUndefined();
-    expect(f.check).not.toHaveBeenCalled(); expect(host.verify).not.toHaveBeenCalled();
-    expect(committedSource(f.workers[0].worktree, git(f.workers[0].worktree, ['rev-parse', 'HEAD']),
-      path.join(f.problem.projectRelative, 'Submission.lean'))).toBe(draft);
-    expect(fs.existsSync(path.join(f.workers[0].worktree, f.problem.projectRelative, moduleFile))).toBe(false);
-    expect(f.events.filter(item => item.event === 'library_installation_requested')).toHaveLength(1);
-  });
-
   it.each(['catalog', 'problem', 'seed', 'name', 'json'] as const)(
     'rejects an invalid %s request and continues ordinary proof checking without installation', async kind => {
       const f = fixture(), close = vi.fn(async () => {});
@@ -194,36 +137,4 @@ describe('solver library installation handoff', () => {
       expect(fs.existsSync(path.join(f.workers[0].worktree, f.problem.projectRelative, moduleFile))).toBe(false);
     });
 
-  it('returns an accepted winner when a peer finishes its pending request during winner cleanup', async () => {
-    const f = fixture({ parallel: true });
-    host.verify.mockImplementation(async request => verifiedBatch(request, { sessionId: 'library-request-winner' }));
-    const bothStarted = gate(), requestClosing = gate(), releaseRequest = gate();
-    const closes = [vi.fn(), vi.fn()];
-    let started = 0;
-    const open = vi.fn(async (options: MathAgentOptions): Promise<MathAgentSession> => {
-      const index = options.environment!.DEEPSCIENTIST_MATH_WORKER_ID === 'solver' ? 0 : 1;
-      return { threadId: `winner-request-${index}`, usageSource: 'upstream-requests',
-        run: async (_message, _messageId, _workspace, onStarted) => {
-          onStarted(`winner-turn-${index}`); reportUsage(options);
-          if (++started === 2) bothStarted.resolve();
-          await bothStarted.promise;
-          if (index) { f.request(options.workspace); return 'completed'; }
-          await requestClosing.promise;
-          fs.writeFileSync(path.join(options.workspace, f.problem.projectRelative, 'Submission.lean'),
-            challenge.replace('by sorry', 'by rfl'));
-          return 'completed';
-        }, interrupt: async () => {}, close: async () => {
-          closes[index]();
-          if (index) { requestClosing.resolve(); await releaseRequest.promise; }
-        } };
-    });
-    const winner = await f.run(open, event => { if (event === 'candidate_selected') releaseRequest.resolve(); });
-    expect(winner).toMatchObject({ worktree: f.workers[0].worktree, check: { passed: true } });
-    expect(f.state.winningWorker).toBe('solver'); expect(f.state.check).toBe(winner!.check);
-    expect(f.check).toHaveBeenCalledOnce(); expect(host.verify).toHaveBeenCalledOnce();
-    for (const close of closes) expect(close).toHaveBeenCalledOnce();
-    expect(f.state.turns).toBe(2); expect(f.state.usage).toEqual({ inputTokens: 120, outputTokens: 80, totalTokens: 200 });
-    expect(f.state.tokenBudget).toMatchObject({ reportedTotalTokens: 200, usageComplete: true });
-    expect(f.state.error).toBeUndefined();
-  });
 });

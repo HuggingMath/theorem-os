@@ -401,7 +401,7 @@ try {
   lead = await open({ executable, profile, workspace: worktree, proofProjectRoot: path.join(worktree, problem.projectRelative),
     model: state.model, effort: state.effort, environment, skills: [skill], tools: team.tools(),
     nativeAgentControl: team.nativeAgentControlOptions(), isolateProcess: true, hiddenRoots: team.hiddenRoots,
-    instructions: agentTeamInstructions({ id: 'lead', role: 'lead' }, maxAgents, 'native-agent-control'),
+    instructions: agentTeamInstructions({ id: 'lead', role: 'lead' }, maxAgents),
     signal: controller.signal, onUsage: () => {} });
   team.setLeadSession(lead); state.writerProcess = lead.processIdentity; save();
   if (largeForkTest) for (const index of [1, 2, 3, 4]) {

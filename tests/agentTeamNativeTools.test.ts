@@ -20,10 +20,6 @@ const executable = process.env.THEOREMOS_TEST_CODEX_EXECUTABLE ?? 'codex';
 const nativeAvailable = spawnSync(executable, ['--version'], {
   env: { PATH: process.env.PATH }, timeout: 5000, stdio: 'ignore',
 }).status === 0;
-const operations = ['spawn', 'assign', 'amend', 'finish', 'budget', 'resume', 'history', 'publish', 'cancel',
-  'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'retire_route', 'route_summary'];
-const memberOperations = ['progress', 'yield', 'history', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'submit',
-  'route_summary'];
 const nativeLeadOperations = ['finish', 'history', 'inspect', 'inspect-research', 'adopt', 'retire_route', 'route_summary'];
 const nativeMemberOperations = ['yield', 'history', 'inspect', 'inspect-research', 'submit', 'route_summary'];
 
@@ -96,15 +92,14 @@ function fixtureResponse(response: ServerResponse, id: string, items: Json[]) {
 
 // This checks the real native client's wire protocol. The upstream is local and
 // scripted, so passing this test says nothing about a model choosing to delegate.
-describe.skipIf(!nativeAvailable)('real Codex dynamic team tool transport without a model', () => {
-  it.each([{ actor: 'lead', finiteBudget: true }, { actor: 'lead', finiteBudget: false }, { actor: 'member', finiteBudget: false }])(
-    'advertises historical $actor operations for finite budget = $finiteBudget', async ({ actor, finiteBudget }) => {
+describe.skipIf(!nativeAvailable || !process.env.THEOREMOS_TEST_CODEX_EXECUTABLE)('real Codex dynamic team tool transport without a model', () => {
+  it.each(['lead', 'member'])('round trips the %s mathematical tool contract', async actor => {
     const temporaryRoot = process.env.TMPDIR ?? '/data/lzh/default-storage/tmp';
     fs.mkdirSync(temporaryRoot, { recursive: true });
     directory = fs.realpathSync(fs.mkdtempSync(path.join(temporaryRoot, 'agent-team-native-tools-')));
     const requests: Json[] = [], routes: string[] = [], errors: unknown[] = [];
-    const summary = 'Transport fixture: the host received this advisory publication.';
-    const args = actor === 'lead' ? { operation: 'publish', summary } : { operation: 'message', agentId: 'lead', message: summary };
+    const summary = 'Transport fixture: save Lead finish intent.';
+    const args = actor === 'lead' ? { operation: 'finish', summary } : { operation: 'route_summary' };
     const call = { type: 'function_call', id: 'fc_team_probe', call_id: 'call_team_probe',
       name: 'theoremos_team', arguments: JSON.stringify(args), status: 'completed' };
     server = createServer(async (request, response) => {
@@ -115,7 +110,7 @@ describe.skipIf(!nativeAvailable)('real Codex dynamic team tool transport withou
         requests.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
         const index = requests.length;
         const final = { type: 'message', id: 'msg_team_probe', role: 'assistant', status: 'completed',
-          content: [{ type: 'output_text', text: 'The host publication was received.', annotations: [] }] };
+          content: [{ type: 'output_text', text: 'The host result was received.', annotations: [] }] };
         const item = index === 1 ? call : final;
         const isCall = item.type === 'function_call';
         const base = { id: 'resp_team_probe_' + index, object: 'response', created_at: 1,
@@ -154,12 +149,11 @@ describe.skipIf(!nativeAvailable)('real Codex dynamic team tool transport withou
     const state = solverState(readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath), receipt.workspaceRoot,
       { runId: 'offline-native-tools', phase: 'running', researchMode: 'skill',
         researchDelegation: { mode: 'team', maxAgents: 3 } });
-    if (actor === 'member') state.agentTeam = { schema: 'theorem-os.agent-team.v1', events: [], deliveries: [], adoptions: [], operations: [],
-      workers: [{ id: 'member', role: 'researcher', worktree: path.join(directory, 'member'), phase: 'prepared', turns: 0,
-        status: 'idle', seedCommit: state.problem.baseCommit, tasks: [], cursor: 0 }] };
+    state.agentTeam = { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control',
+      events: [], deliveries: [], adoptions: [], operations: [], workers: [] };
     const team = new AgentResearchTeam({ state, root: process.cwd(), taskText: 'Offline transport fixture only.',
       leadAccess: { environment: {}, retrievalRoot: receipt.workspaceRoot }, modules: directSolverModules,
-      executable, profile, signal: new AbortController().signal, maxAgents: 3, maxTurns: finiteBudget ? 4 : Infinity, maxTurnMs: 10_000,
+      executable, profile, signal: new AbortController().signal, maxAgents: 3, maxTurns: 4, maxTurnMs: 10_000,
       maxTotalTokens: 0, remainingMs: () => 10_000, save: () => {}, emit: () => {}, exclusiveCheck: operation => operation() });
     const tools = team.tools(actor), hostCalls: { name: string; arguments: unknown; threadId: string; turnId: string }[] = [];
     session = await createCodexMathSession({ executable, profile, workspace: receipt.workspaceRoot,
@@ -174,55 +168,16 @@ describe.skipIf(!nativeAvailable)('real Codex dynamic team tool transport withou
     expect(errors).toEqual([]); expect(routes).toEqual(Array(2).fill('/v1/responses'));
     expect(requests).toHaveLength(2);
     const advertised = declaredTools(requests[0]).find(tool => tool.name === 'theoremos_team');
-    // Codex normalizes provider schemas (for example, omitting numeric bounds).
-    // Capability names, required arguments and the host round trip are the contract.
-    expect(advertised?.parameters, JSON.stringify(advertised)).toMatchObject({ type: 'object', required: ['operation'], additionalProperties: false,
-      properties: { operation: { type: 'string' }, agentId: { type: 'string' }, message: { type: 'string' } } });
-    const allowed = actor === 'member' ? memberOperations :
-      finiteBudget ? operations : operations.filter(name => name !== 'budget');
-    expectAdvertisedOperations(advertised!, allowed, tools.definitions[0]!.inputSchema);
-    expect(advertised?.description).toContain('message: required agentId, message;');
-    expect(advertised?.description).toContain(`the host fixes the sender as "${actor}"; agentId names the recipient`);
-    expect(advertised?.description).toContain('Self-addressed messages are rejected.');
-    if (actor === 'member') {
-      const messageSchema = advertised?.parameters.oneOf.find((branch: Json) => branch.properties.operation.enum[0] === 'message');
-      expect(messageSchema).toMatchObject({ required: ['operation', 'agentId', 'message'], additionalProperties: false });
-    }
-    expect(advertised?.description).toContain('route_summary: required none; optional routeId, includeRetired; other fields forbidden.');
-    expect(advertised?.parameters.properties.includeRetired).toMatchObject({ type: 'boolean' });
-    expect(advertised?.parameters.properties.routeId).toMatchObject({ type: 'string' });
-    if (actor === 'lead') {
-      expect(advertised?.description).not.toContain('coordinate');
-      expect(advertised?.description).toContain('retire_route: required routeId, reason; optional evidenceRefs; other fields forbidden.');
-      expect(advertised?.parameters.properties).not.toHaveProperty('decision');
-      expect(advertised?.parameters.properties).toMatchObject({ reason: { type: 'string' },
-        evidenceRefs: { type: 'array', items: { type: 'string' } } });
-    } else {
-      expect(advertised?.description).toContain('submit: required summary, declarations; optional objectiveRevision, helpersOnly; other fields forbidden.');
-      const submitSchema = advertised?.parameters.oneOf.find((branch: Json) => branch.properties.operation.enum[0] === 'submit');
-      expect(submitSchema.required).toEqual(['operation', 'summary', 'declarations']);
-      expect(submitSchema.properties).not.toHaveProperty('agentId');
-      expect(advertised?.parameters.properties).not.toHaveProperty('decision');
-    }
-    if (finiteBudget) {
-      expect(advertised?.parameters.properties.budget).toMatchObject({ type: 'object',
-        properties: { tokens: { type: 'integer' }, turns: { type: 'integer' } } });
-      expect(advertised?.parameters.properties.leadReserve).toMatchObject({ type: 'object',
-        properties: { tokens: { type: 'integer' }, turns: { type: 'integer' } } });
-      expect(advertised?.description).toContain('message: required agentId, message;');
-      expect(advertised?.description).toContain('budget: required none; optional leadReserve, agentId, taskId, budget;');
-    }
-    else {
-      expect(advertised?.parameters.properties).not.toHaveProperty('budget');
-      expect(advertised?.parameters.properties).not.toHaveProperty('leadReserve');
-    }
+    expectAdvertisedOperations(advertised!, actor === 'member' ? nativeMemberOperations : nativeLeadOperations,
+      tools.definitions[0]!.inputSchema);
+    expect(advertised!.parameters.properties).not.toHaveProperty('budget');
+    expect(advertised!.parameters.properties).not.toHaveProperty('leadReserve');
     expect(hostCalls).toEqual([{ name: 'theoremos_team', arguments: args,
       threadId: session.threadId, turnId: expect.any(String) }]);
-    if (actor === 'lead') expect(state.agentTeam!.researchState).toMatchObject({ revision: 1, summary });
-    else expect(state.agentTeam!.events).toContainEqual(expect.objectContaining({ from: 'member', to: 'lead', kind: 'message', text: summary }));
+    if (actor === 'lead') expect(state.agentTeam!.completionRequested).toMatchObject({ summary });
     const returned = requests.at(-1)!.input.find((item: Json) => item.type === 'function_call_output' && item.call_id === call.call_id);
-    expect(JSON.stringify(returned?.output)).toContain(actor === 'lead' ? summary : 'saved-inbox');
-    expect(session.lastCompletedResponse?.text).toBe('The host publication was received.');
+    expect(JSON.stringify(returned?.output)).toContain(actor === 'lead' ? 'pending-writer-stop' : 'routes');
+    expect(session.lastCompletedResponse?.text).toBe('The host result was received.');
     expect(await session.stopForFreeze!()).toEqual({ status: 'stopped' });
   }, 20_000);
 
@@ -458,7 +413,7 @@ describe.skipIf(!nativeAvailable)('real Codex dynamic team tool transport withou
       team.beginLeadTurn();
       session = await createCodexMathSession({ executable, profile, workspace: state.worktree, environment,
         model: state.model, effort: state.effort, signal: controller.signal, skills: [researchSkill],
-        instructions: agentTeamInstructions({ id: 'lead', role: 'lead' }, 2, 'native-agent-control'),
+        instructions: agentTeamInstructions({ id: 'lead', role: 'lead' }, 2),
         nativeAgentControl: team.nativeAgentControlOptions(), requestGate: team.leadRequestGate(() => ({ allowed: true, settle: () => {} })),
         onUsage: () => {}, onItem: (phase, item) => {
           if (phase === 'started' && item.id === 'native_wait') waitStarted = true;
@@ -568,7 +523,7 @@ child.on('close', code => process.exit(code ?? 0));
     const state = solverState(readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath), receipt.workspaceRoot,
       { runId: 'offline-native-adopt', phase: 'running', researchMode: 'skill',
         researchDelegation: { mode: 'team', maxAgents: 3 },
-        agentTeam: { schema: 'theorem-os.agent-team.v1', workers: [], events: [], adoptions: [], operations: [],
+        agentTeam: { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control', workers: [], events: [], adoptions: [], operations: [],
           deliveries: [{ id: deliveryId, agentId: 'producer', taskId: 'offline-delivery',
             path: path.join(directory, 'unused-delivery.json') }] } });
     initializeRequestUsageAccounting(state);
@@ -636,7 +591,7 @@ child.on('close', code => process.exit(code ?? 0));
   }, 20_000);
 });
 
-describe.skipIf(!nativeAvailable)('native child decision checkpoints without a model', () => {
+describe.skipIf(!nativeAvailable || !process.env.THEOREMOS_TEST_CODEX_EXECUTABLE)('native child decision checkpoints without a model', () => {
   it.each(['submit', 'yield'] as const)('finishes the paid tool group before %s releases the writer', async operation => {
     const [{ readMathAgentSkill }, { prepareResearchSkill, researchSkillIdentity }, { deferred }] = await Promise.all([
       import('../src/runtime/agentSkills'), import('../src/solver/researchSkill'), import('./helpers/async'),
@@ -651,39 +606,31 @@ describe.skipIf(!nativeAvailable)('native child decision checkpoints without a m
     const decision = operation === 'submit'
       ? { operation, summary: 'The fixture equality helper is ready.', declarations }
       : { operation, reason: 'The saved fixture draft needs a peer interface.' };
-    const toolCalls = [decision, { operation: 'message', agentId: 'lead', message: 'The final paid tool has finished.' }]
+    const toolCalls = [decision, { operation: 'history' }]
       .map((arguments_, index) => ({ type: 'function_call', id: `fc_native_${operation}_${index}`,
         call_id: `call_native_${operation}_${index}`, name: 'theoremos_team',
         arguments: JSON.stringify(arguments_), status: 'completed' }));
+    let leadRequests = 0;
     server = createServer(async (request, response) => {
       try {
         const chunks: Buffer[] = [];
         for await (const chunk of request) chunks.push(Buffer.from(chunk));
-        requests.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-        const index = requests.length;
-        response.once('close', () => { if (!response.writableEnded) prematureCloses.push(index); });
-        const final = { type: 'message', id: `msg_native_${operation}`, role: 'assistant', status: 'completed',
-          content: [{ type: 'output_text', text: 'Unexpected extra paid continuation.', annotations: [] }] };
-        const items: Json[] = index === 1 ? toolCalls : [final];
-        const base = { id: `resp_native_${operation}_${index}`, object: 'response', created_at: 1,
-          model: 'deepseek-flash', status: 'in_progress', output: [] };
-        const events: Json[] = [{ type: 'response.created', response: base }];
-        for (const [output_index, item] of items.entries()) {
-          events.push({ type: 'response.output_item.added', output_index,
-            item: item.type === 'function_call' ? { ...item, arguments: '', status: 'in_progress' }
-              : { ...item, content: [], status: 'in_progress' } });
-          if (item.type === 'function_call') events.push(
-            { type: 'response.function_call_arguments.delta', item_id: item.id, output_index, delta: item.arguments },
-            { type: 'response.function_call_arguments.done', item_id: item.id, output_index, arguments: item.arguments });
-          else events.push(
-            { type: 'response.output_text.delta', item_id: item.id, output_index, content_index: 0, delta: final.content[0].text },
-            { type: 'response.output_text.done', item_id: item.id, output_index, content_index: 0, text: final.content[0].text });
-          events.push({ type: 'response.output_item.done', output_index, item });
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        const text = body.input.filter((item: Json) => ['message', 'agent_message'].includes(item.type))
+          .flatMap((item: Json) => item.content ?? []).map((part: Json) => part.text ?? part.encrypted_content ?? '').join('\n');
+        const final = (text: string) => ({ type: 'message', id: 'msg_fixture', role: 'assistant', status: 'completed',
+          content: [{ type: 'output_text', text, annotations: [] }] });
+        if (!text.includes('NATIVE_CHILD_PAID_TOOLS')) {
+          const index = ++leadRequests;
+          const spawn = { type: 'function_call', id: 'spawn_child', call_id: 'spawn_child', name: 'spawn_agent',
+            namespace: 'collaboration', status: 'completed', arguments: JSON.stringify({ task_name: 'child', fork_turns: 'none',
+              message: 'NATIVE_CHILD_PAID_TOOLS Save the fixture handoff.' }) };
+          fixtureResponse(response, 'resp_child_fixture_lead_' + index, [index === 1 ? spawn : final('Child dispatched.')]);
+          return;
         }
-        events.push({ type: 'response.completed', response: { ...base, status: 'completed', output: items,
-          usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } } });
-        response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
-        response.end(events.map(event => 'event: ' + event.type + '\ndata: ' + JSON.stringify(event) + '\n\n').join(''));
+        const index = requests.push(body);
+        response.once('close', () => { if (!response.writableEnded) prematureCloses.push(index); });
+        fixtureResponse(response, `resp_native_${operation}_${index}`, index === 1 ? toolCalls : [final('Unexpected extra paid continuation.')]);
       } catch (error) { errors.push(error); response.writeHead(500); response.end(); }
     });
     await new Promise<void>((resolve, reject) => { server!.once('error', reject); server!.listen(0, '127.0.0.1', resolve); });
@@ -703,7 +650,9 @@ describe.skipIf(!nativeAvailable)('native child decision checkpoints without a m
     const state = solverState(problem, receipt.workspaceRoot, { runId: `offline-native-${operation}`, phase: 'running',
       environmentDigest: 'e'.repeat(64),
       model: 'deepseek-flash', effort: 'high', researchMode: 'skill', researchSkill: identity,
-      researchDelegation: { mode: 'team', maxAgents: 2 } });
+      researchDelegation: { mode: 'team', maxAgents: 2 },
+      agentTeam: { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control', workers: [], events: [],
+        deliveries: [], adoptions: [], operations: [] } });
     const researchSkill = prepareResearchSkill(root, state.worktree, identity, problem);
     const toolchain = path.join(process.env.HOME!, '.elan/toolchains/leanprover--lean4---v4.33.0');
     const environment = { PATH: `${toolchain}/bin:${process.env.PATH}`,
@@ -719,7 +668,7 @@ describe.skipIf(!nativeAvailable)('native child decision checkpoints without a m
         session = await createCodexMathSession({ ...options, tools: { definitions: options.tools!.definitions,
           call: async (name, value, context) => {
             const args = value as Json; hostCalls.push(args.operation);
-            if (args.operation === 'message') {
+            if (args.operation === 'history') {
               tailRunning = true; await releaseTail.promise;
               fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), 'The final paid tool output was preserved.');
               tailFinished = true;
@@ -733,9 +682,14 @@ describe.skipIf(!nativeAvailable)('native child decision checkpoints without a m
       leadAccess: { environment, researchSkill, retrievalRoot: receipt.workspaceRoot }, signal: controller.signal,
       maxAgents: 2, maxTurns: Infinity, maxTurnMs: Infinity, maxTotalTokens: 0, remainingMs: () => Infinity,
       save: () => {}, emit: () => {}, exclusiveCheck: check => check() });
+    const lead = await createCodexMathSession({ executable, profile, workspace: state.worktree, environment,
+      model: state.model, effort: state.effort, signal: controller.signal, skills: [researchSkill],
+      instructions: 'Dispatch the disposable child fixture.', nativeAgentControl: team.nativeAgentControlOptions(), tools: team.tools(),
+      requestGate: team.leadRequestGate(() => ({ allowed: true, settle: () => {} })), onUsage: () => {} });
     try {
-      expect(await team.tools().call('theoremos_team', { operation: 'spawn', agentId: 'child', message: 'Exercise the native fixture handoff.' },
-        { callId: 'native-spawn', turnId: 'lead-turn', threadId: 'lead-thread', signal: controller.signal })).toMatchObject({ ok: true });
+      team.setLeadSession(lead);
+      expect(await lead.run('Run the isolated child checkpoint fixture.', 'native-child-fixture', state.worktree, () => {})).toBe('completed');
+      expect(leadRequests).toBe(2);
       const worker = team.archive.workers[0]!;
       await expect.poll(() => ({ tailRunning, error: worker.error ?? worker.tasks[0]?.error,
         requests: requests.length, opened: opened.length, activity: worker.activity, status: worker.tasks[0]?.status }),
@@ -747,7 +701,7 @@ describe.skipIf(!nativeAvailable)('native child decision checkpoints without a m
       releaseTail.resolve();
       await expect.poll(() => team.hasActiveWorkers, { timeout: 60_000 }).toBe(false);
       expect(tailFinished).toBe(true); expect(requests).toHaveLength(1);
-      expect(hostCalls).toEqual([operation, 'message']);
+      expect(hostCalls).toEqual([operation, 'history']);
       expect(worker.error).toBeUndefined(); expect(worker.writerStopUnconfirmed).toBeUndefined();
       expect(worker.requestUsageAccounting).toMatchObject({ startedRequests: 1, reportedRequests: 1, pendingRequests: 0, incomplete: false });
       expect(worker.usageAccounting).toMatchObject({ reportedTurns: 1, pending: false, incomplete: false });
@@ -761,6 +715,6 @@ describe.skipIf(!nativeAvailable)('native child decision checkpoints without a m
       }
       expect(errors).toEqual([]); expect(prematureCloses).toEqual([]);
       expect(state.tokenBudget?.status).toBe('unlimited'); expect(state.check).toBeUndefined();
-    } finally { releaseTail.resolve(); controller.abort(); await team.close(); }
+    } finally { releaseTail.resolve(); controller.abort(); await lead.close(); await team.close(); }
   }, 90_000);
 });

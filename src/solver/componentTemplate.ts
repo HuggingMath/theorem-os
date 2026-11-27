@@ -41,7 +41,7 @@ import { modules } from '../../src/components/${name}';
 
 process.env.CODEX_HOME ||= path.join(os.homedir(), '.config/deepscientist/math-sol-codex');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-runSolver(process.argv.slice(2), root, modules).then(
+runSolver(process.argv.slice(2), root, modules, undefined, 'historical-component').then(
   code => { process.exitCode = code; },
   error => { console.error(error instanceof Error ? error.message : 'Component run failed.'); process.exitCode = 1; },
 );

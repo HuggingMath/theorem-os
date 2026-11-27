@@ -6,6 +6,7 @@ import { readSolverRunState, type SolverRunState, type SolverWorkerState } from 
 import { readContinuationInput, type ContinuationAttachmentKind } from '../../src/solver/continuationInput';
 import { requestedLibraryPack, type LibraryAccess, type LibraryRequest } from '../../src/solver/libraryAccess';
 import type { LibrarySelection } from '../../src/solver/libraryCatalog';
+import { nativeApprovalPlanBrief, planApprovalStatus } from '../../src/solver/planApproval';
 import { git, readSolverProblem } from '../../src/solver/problem';
 import { aggregateUsage, buildTokenBudget } from '../../src/solver/usageBudget';
 import { prepareWebProblem } from './formalizationSeed';
@@ -16,6 +17,7 @@ type Seed = ReturnType<typeof prepareWebProblem>;
 type Limits = { maxTurns: number; maxRunSeconds: number; maxTotalTokens: number };
 export type WebLibraryRound = {
   round: number; seed: Seed; output: string; continuationFile?: string; limits: Limits;
+  planApproval?: boolean;
   libraryCatalog?: LibraryAccess; previousSolverRunId?: string; requestedNames?: string[];
 };
 type Material = { kind: ContinuationAttachmentKind; text: string;
@@ -90,7 +92,8 @@ export async function runWebLibraryResearch(options: {
   const allowance: Limits = { maxTurns: options.request.input.maxTurns,
     maxRunSeconds: options.request.input.maxRunSeconds, maxTotalTokens: options.request.input.maxTotalTokens ?? 0 };
   let current: WebLibraryRound = { round: 0, seed: options.seed, output: options.output,
-    continuationFile: options.continuationFile, limits: allowance, libraryCatalog: options.libraryCatalog };
+    continuationFile: options.continuationFile, limits: allowance, libraryCatalog: options.libraryCatalog,
+    planApproval: options.request.input.planApproval };
   const materials = new Map<string, Material>();
   if (options.continuationFile) {
     const input = readContinuationInput(options.continuationFile, {
@@ -138,6 +141,18 @@ export async function runWebLibraryResearch(options: {
     if (!value || typeof value.worktree !== 'string' ||
         ![state.worktree, ...(state.workers ?? []).map(worker => worker.worktree)].includes(value.worktree) ||
         !isMathPathWithin(options.directory, value.worktree)) throw new Error('math_library_request_worker_changed');
+    const initialNativeApproval = options.request.input.nativeTeamCapacity && current.planApproval;
+    if (initialNativeApproval) {
+      const approved = state.cooperation?.planApproval;
+      if (planApprovalStatus(state) !== 'approved' || !approved?.approvedId ||
+          !approved.approvedVersion || approved.approvedVersion !== state.cooperation?.planVersion)
+        throw new Error('math_library_request_plan_not_approved');
+      const text = `This route was approved before proof work began. Continue the research with the installed library.\n` +
+        nativeApprovalPlanBrief(state.cooperation.tasks);
+      materials.set(mathDigest(text), { kind: 'research-notes', text, provenance: {
+        source: `Approved initial route, version ${approved.approvedVersion}`, evidence: 'recorded-not-replayed', runId: state.runId,
+      } });
+    }
     const next = requestedLibraryPack(problem, value.request, options.libraryCatalog, value.worktree);
     Object.assign(rounds.at(-1)!, { libraryRequest: next.request, librarySelection: next.selection });
     const limits: Limits = { maxTurns: allowance.maxTurns ? Math.max(0, allowance.maxTurns - turns) : 0,
@@ -161,6 +176,7 @@ export async function runWebLibraryResearch(options: {
       rounds, turns, solveWallMs, solveExecutionMs, tokenBudget, pending: { round, previousSolverRunId: state.runId,
         problemReceiptDigest: continued.receiptDigest, selection: next.selection, request: next.request } });
     current = { round, seed, output: path.join(directory, 'result.json'), limits, continuationFile,
-      libraryCatalog: options.libraryCatalog, previousSolverRunId: state.runId, requestedNames: next.request.names };
+      libraryCatalog: options.libraryCatalog, previousSolverRunId: state.runId, requestedNames: next.request.names,
+      planApproval: initialNativeApproval ? false : current.planApproval };
   }
 }

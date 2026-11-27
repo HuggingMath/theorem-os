@@ -8,12 +8,12 @@ import type { MathAgentOptions, MathAgentSession } from '../src/runtime/codexSes
 import { directSolverModules, type SolverModules } from '../src/solver/modules';
 import { committedSource, git } from '../src/solver/problem';
 import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
-import { runResearchWorkers, type WorkerAccess } from '../src/solver/research';
+import { runResearchLead, type WorkerAccess } from '../src/solver/research';
 import { DeclarationArtifactCheckError } from '../src/solver/declarationArtifacts';
 import { VerificationCheckpointError, withVerificationCheckpoints } from '../src/solver/verificationCheckpoint';
 import { VerifierFailureError } from '../src/solver/verifierFailure';
 import { deferred } from './helpers/async';
-import { leadWorker, localExample, solverState } from './helpers/solver';
+import { localExample, solverState } from './helpers/solver';
 import { failedBatch, receiptBatch } from './helpers/verifier';
 
 const host = vi.hoisted(() => ({ verify: vi.fn(), declarations: vi.fn(), writeDeclarations: vi.fn() }));
@@ -72,7 +72,7 @@ describe('skill research runtime', () => {
         agentTeam: { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control',
           workers: [], events: [], deliveries: [], adoptions: [], operations: [] } } as const : {}),
       ...(common ? { commonResearchSkill: { name: skill.name, digest: skill.digest, loading: skill.loading } } : {}) });
-    const workers = [leadWorker(problem, workspace)], controller = new AbortController();
+    const controller = new AbortController();
     const opened: MathAgentOptions[] = [], messages: string[] = [], events: { event: string; details?: Record<string, unknown> }[] = [];
     const stops = vi.fn(async () => {
       if (stop === 'throw') throw new Error('fixture-shutdown-failed');
@@ -111,18 +111,18 @@ describe('skill research runtime', () => {
       M1: { ...directSolverModules.M1, open }, M2: { ...directSolverModules.M2, applyLibrary },
       M3: { ...directSolverModules.M3, select }, M4: { ...directSolverModules.M4, build, tools },
     };
-    const access = new Map<string, WorkerAccess>([['solver', { environment: {}, retrievalRoot: directory,
+    const access: WorkerAccess = { environment: {}, retrievalRoot: directory,
       researchSkill: skill, ...(common ? { commonResearchSkill: skill } : {}), installedLibrary: { digest: 'installed-fixture',
-        base: { entries: [], evidence: [], contexts: [], routeFindings: [] } } }]]);
+        base: { entries: [], evidence: [], contexts: [], routeFindings: [] } } };
     const source = path.join(workspace, problem.projectRelative, 'Submission.lean'), notes = path.join(workspace, 'RESEARCH.md');
     const requestFile = path.join(workspace, '.scratch/declaration-submission.json');
     const savedStates: Record<string, unknown>[] = [];
-    const current = { ...base, state, workers, access, modules, controller, opened, messages, events, savedStates,
+    const current = { ...base, state, access, modules, controller, opened, messages, events, savedStates,
       open, close, stops, select, build, applyLibrary, source, notes, requestFile, skill };
     const completion = withVerificationCheckpoints({ environmentDigest: state.environmentDigest,
       problemReceiptDigest: problem.receiptDigest, checkpoints: state.verificationCheckpoints ??= [],
       save: () => { savedStates.push(JSON.parse(JSON.stringify(state))); },
-      emit: (event, details) => events.push({ event, details }) }, () => runResearchWorkers({ state, workers, access, modules, root: directory,
+      emit: (event, details) => events.push({ event, details }) }, () => runResearchLead({ state, access, modules, root: directory,
       buildFile: path.join(directory, 'unused-build.json'), taskText: 'Prove both original addition targets.',
       executable: 'offline-no-model', profile: 'offline-no-credentials', signal: controller.signal,
       deadline: Infinity, maxTurns: plans.length, maxTurnMs: Infinity, maxTotalTokens: 0,
@@ -144,8 +144,8 @@ describe('skill research runtime', () => {
     checkpoints: current.state.verificationCheckpoints ??= [],
     save: () => { current.savedStates.push(JSON.parse(JSON.stringify(current.state))); },
     emit: (event, details) => current.events.push({ event, details }),
-  }, () => runResearchWorkers({
-    state: current.state, workers: current.workers, access: current.access, modules: current.modules,
+  }, () => runResearchLead({
+    state: current.state, access: current.access, modules: current.modules,
     root: current.directory, buildFile: path.join(current.directory, 'unused-build.json'),
     taskText: 'Prove both original addition targets.', executable: 'offline-no-model', profile: 'offline-no-credentials',
     signal: new AbortController().signal, deadline: Infinity, maxTurnMs: Infinity, ...limits,
@@ -256,33 +256,6 @@ describe('skill research runtime', () => {
     for (const message of current.messages) expect(message).toContain('Prove both original addition targets.');
     expect(current.events.filter(item => item.event === 'context_dispatched').map(item => item.details?.mode))
       .toEqual(['full', 'full']);
-  });
-
-  it('retains child observations on disk and records uncertain recovery without replaying investigations', async () => {
-    const plans: Plan[] = [f => { fs.writeFileSync(f.notes, 'Initial research saved.\n'); }];
-    const current = fixture(plans);
-    await current.completion;
-    current.state.researchDelegation = { mode: 'read-only', maxAgents: 2 };
-    current.state.nativeAgents = [{ threadId: 'previous-child', parentThreadId: 'previous-parent',
-      startedAt: 1, updatedAt: 1, status: 'running', dispatch: 'host-mediated-native-threads' }];
-    plans.push((f, options) => {
-      expect(f.state.nativeAgents![0].status).toBe('unknown');
-      expect(options.delegation).toEqual(f.state.researchDelegation);
-      options.onNativeAgent!({ threadId: 'current-child', parentThreadId: 'persistent-native-research-thread',
-        startedAt: 2, updatedAt: 3, stoppedAt: 4, status: 'completed', permissionProfile: 'math-investigator',
-        dispatch: 'host-mediated-native-threads', parentTurnId: 'parent-turn', callId: 'call', turnId: 'child-turn',
-        question: 'Bounded question', message: 'Advisory source reference.' });
-      fs.appendFileSync(f.notes, 'Only the primary researcher updates notes.\n');
-    });
-    await resumeDeclarations(current, { maxTurns: 2, maxTotalTokens: 0 });
-    const stateFile = path.join(current.directory, 'delegation-state.json');
-    writeSolverRunState(stateFile, current.state);
-    expect(readSolverRunState(stateFile).nativeAgents).toEqual(current.state.nativeAgents);
-    expect(current.events.filter(item => item.event === 'investigator_recovery_recorded')).toEqual([
-      { event: 'investigator_recovery_recorded', details: { threadId: 'previous-child', replayed: false } },
-    ]);
-    expect(current.state.nativeAgents).toHaveLength(2);
-    expect(host.verify).not.toHaveBeenCalled();
   });
 
   it('uses the host-projected tool bundle when the application source is hidden', async () => {
@@ -771,7 +744,7 @@ describe('skill research runtime', () => {
     expect(current.state.writerStopUnconfirmed).toMatchObject({ reason: expect.any(String) });
     expect(host.verify).not.toHaveBeenCalled(); expect(host.declarations).not.toHaveBeenCalled();
     expect(host.writeDeclarations).not.toHaveBeenCalled(); expect(current.open).toHaveBeenCalledTimes(1);
-    await expect(runResearchWorkers({ state: current.state, workers: current.workers, access: current.access,
+    await expect(runResearchLead({ state: current.state, access: current.access,
       modules: current.modules, root: current.directory, buildFile: 'unused', taskText: 'Same original problem.',
       executable: 'offline-no-model', profile: 'offline-no-credentials', signal: current.controller.signal,
       deadline: Infinity, maxTurns: 1, maxTurnMs: Infinity, maxTotalTokens: 0, save: () => {}, emit: () => {} }))

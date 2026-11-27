@@ -18,7 +18,7 @@ vi.mock('../src/runtime/codexConnectivity', () => ({ checkCodexProviderConnectiv
 vi.mock('../src/math/verifier', async original => ({
   ...await original<typeof import('../src/math/verifier')>(), resolveMathematicsLakePackagesCache: () => undefined,
 }));
-vi.mock('../src/solver/research', () => ({ runResearchWorkers: host.research }));
+vi.mock('../src/solver/research', () => ({ runResearchLead: host.research }));
 vi.mock('../src/solver/evaluation', () => ({ evaluateSolverProof: host.evaluate }));
 
 describe('evaluator failure attribution in persisted run results', () => {

@@ -1,8 +1,12 @@
 # PutnamBench 小样本模块实验
 
+本页的准备和运行命令属于旧调度器实验。重新准备本页方案时，请在 TheoremOS
+提交 `ef08987d6f686856c6fe9ecf86676ebbaa632546` 的检出目录中执行。
+已有实验使用构建清单记录的原始版本和构建产物。当前 CLI 仍可汇总已保存的实验记录。
+
 从 [PutnamBench](https://github.com/trishullab/PutnamBench) 的 Lean 原题中固定抽取三道，
 每题分别准备默认方案、精简上下文、关键路径组合和自定义规则四组，共 12 次计划运行。
-新计划默认使用本地 Sub2API 的 `deepseek-flash` / `max`。准备与汇总命令不调用模型。
+该版本的计划默认使用本地 Sub2API 的 `deepseek-flash` / `max`。准备与汇总命令不调用模型。
 已完成一题默认方案的[请求级预算真实校准](CALIBRATION-REQUEST-BUDGET-20261019.md)：
 两次请求完整上报 38,104 token，后续请求被本地拒绝，尚无通过验收的证明。
 [此前的调度级校准](CALIBRATION-20261019.md)保留为历史记录。

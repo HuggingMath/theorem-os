@@ -17,7 +17,7 @@ const root = path.resolve(import.meta.dirname, '..'), output = process.env.THEOR
 const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-research-completion-')), port = await freePort(), origin = `http://127.0.0.1:${port}`;
 await fs.mkdir(output, { recursive: true });
 let workers = 0, prohibited = 0;
-const runner: WebRunner = { async readiness() { return { ready: true, message: 'Disposable fixture: /private/path sk-do-not-expose' }; },
+const runner: WebRunner = { async readiness() { return { ready: true, nativeTeam: true, message: 'Disposable fixture: /private/path sk-do-not-expose' }; },
   async run(input, send) { workers++; const run = readingRun(input.id); run.observation!.inspection.configuration.environmentDigest = readingEnvironment;
     for (const check of run.observation!.checks) check.record = { passed: true };
     send({ type: 'observation', observation: run.observation! }); send({ type: 'result', result: run.result! }); },

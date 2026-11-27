@@ -2,7 +2,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseFlags, required } from './arguments';
-import { seedSolverContinuation } from '../../src/solver/continuationSeed';
+import { seedSingleSolverContinuation } from '../../src/solver/singleContinuationSeed';
 
 try {
   const flags = parseFlags(process.argv.slice(2), ['source-run', 'run', 'build-manifest', 'timeout-seconds']);
@@ -13,7 +13,7 @@ try {
     const controller = new AbortController(), abort = () => controller.abort();
     process.once('SIGINT', abort); process.once('SIGTERM', abort);
     try {
-      const report = await seedSolverContinuation({ sourceRun: required(flags, 'source-run'), run: required(flags, 'run'),
+      const report = await seedSingleSolverContinuation({ sourceRun: required(flags, 'source-run'), run: required(flags, 'run'),
         buildManifest: required(flags, 'build-manifest'), root: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'),
         signal: controller.signal, timeoutMs: timeout === 0 ? Infinity : timeout * 1000,
         onProgress: (event, details) => console.log(JSON.stringify({ event, ...details })) });

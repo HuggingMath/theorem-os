@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { canonicalMathJson } from '../src/math/mathRuntimeIo';
+import { canonicalMathJson, createMathJsonCheckpointWriter } from '../src/math/mathRuntimeIo';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from '../src/solver/archive';
 import { captureResearchBasis, settleResearch } from '../src/solver/researchRecords';
 import { taskVersion, type CooperativeTask } from '../src/solver/tasks';
@@ -54,6 +54,21 @@ describe('research completion archive schema', () => {
     writeSolverRunState(file, state);
     expect(fs.readFileSync(file, 'utf8')).toBe(canonicalMathJson(state));
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+  });
+
+  it('persists deleted and truncated array slots without losing later entries or accepting undefined', () => {
+    const file = path.join(root, 'checkpoint.json'), write = createMathJsonCheckpointWriter();
+    const entries: (string | undefined)[] = ['first', 'removed', 'last'];
+    write(file, entries);
+    delete entries[1];
+    write(file, entries);
+    expect(fs.readFileSync(file, 'utf8')).toBe('["first",null,"last"]');
+    entries.length = 2;
+    write(file, entries);
+    expect(fs.readFileSync(file, 'utf8')).toBe('["first",null]');
+    entries[1] = undefined;
+    expect(() => write(file, entries)).toThrow('math_runtime_invalid_json');
+    expect(fs.readFileSync(file, 'utf8')).toBe('["first",null]');
   });
 
   it.each([undefined, [], ['relevant-candidate']])('preserves the automatic candidate filter independently of the raw pool: %j', relevant => {

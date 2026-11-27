@@ -24,7 +24,7 @@ const original = 'theorem preserved : 1 = 1 := by rfl\nnamespace Research\ntheor
 const commit = 'a'.repeat(40), environmentDigest = getLeanTaskEnvironment('standard').dependencyDigest;
 let workers = 0, compilerCalls = 0, prohibited = 0, pass = true;
 const inputs: Parameters<WebRunner['run']>[0][] = [];
-const runner: WebRunner = { async readiness() { return { ready: true, message: 'Disposable continuity fixture' }; },
+const runner: WebRunner = { async readiness() { return { ready: true, nativeTeam: true, message: 'Disposable continuity fixture' }; },
   async run(input, send) {
     workers++; inputs.push(structuredClone(input));
     const observation = structuredClone(loadWebSample()!.observations.at(-1)!); observation.webRunId = input.id; observation.sequence = 1;
@@ -119,11 +119,13 @@ try {
     await page.waitForFunction(expected => (document.querySelector('#source') as HTMLTextAreaElement)?.value === expected, passed.source);
     assert.equal(workers, workerStart); assert.equal(compilerCalls, compiledBeforeReading); assert.equal(await page.locator('#api-key').inputValue(), '');
     await page.reload(); await page.waitForFunction(expected => (document.querySelector('#source') as HTMLTextAreaElement)?.value === expected, passed.source);
+    await page.waitForFunction(() => document.querySelector<HTMLSelectElement>('#environment')?.value === 'standard');
     assert.equal(workers, workerStart);
     await page.screenshot({ path: path.join(output, `prepared-personal-${language}.png`), fullPage: true });
     await page.evaluate(() => { const key = document.querySelector<HTMLInputElement>('#api-key')!; key.value = 'sk-disposable-personal-attempt'; key.dispatchEvent(new Event('input', { bubbles: true })); });
     const launch = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/runs');
     await page.locator('#run-form').evaluate(form => (form as HTMLFormElement).requestSubmit()); const launched = await launch; assert.ok(launched.ok(), await launched.text());
+    assert.equal(launched.request().postDataJSON().environment, 'standard');
     assert.deepEqual(launched.request().postDataJSON().researchSelection.libraries, [release && { assetId: release.assetId, version: release.version, digest: release.digest }]);
     for (let attempt = 0; attempt < 40 && workers === workerStart; attempt++) await new Promise(resolve => setTimeout(resolve, 25));
     assert.equal(workers, workerStart + 1); assert.equal(inputs.at(-1)!.input.source, passed.source.trim());

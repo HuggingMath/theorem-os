@@ -218,49 +218,6 @@ describe('bounded role session recovery', () => {
     expect(host.official).toHaveBeenCalledOnce();
   });
 
-  it('keeps a cooperative proof worker available after an empty upstream failure', async () => {
-    const assignments = new Map<string, CooperativeAction>();
-    let proofTurns = 0;
-    let failedWorkspace: string | undefined, failedThread: string | undefined;
-    host.open.mockImplementation(async (options: MathAgentOptions) => {
-      let diagnostic: MathAgentFailureDiagnostic | undefined;
-      const current: MathAgentSession = session(options, async () => {
-        const action = assignments.get(options.workspace)!;
-        if (action.kind === 'lead') research(options, { tasks: [claim] });
-        else if (action.kind === 'task') {
-          if (++proofTurns === 1) {
-            failedWorkspace = options.workspace;
-            failedThread = current.threadId;
-            diagnostic = { code: 'other', reason: 'upstream_request_failed' };
-            return 'failed';
-          }
-          expect(options.workspace).toBe(failedWorkspace);
-          expect(options.threadId).toBe(failedThread);
-          expect(fs.readFileSync(proof(options), 'utf8')).toBe(original);
-          fs.writeFileSync(proof(options), completed);
-        } else throw new Error(`unexpected recovery action: ${action.kind}`);
-        return 'completed';
-      }, 'upstream request failed: completed turn had no assistant output or tool operation');
-      return { ...current, get lastFailureDiagnostic() { return diagnostic; } };
-    });
-    expect(await cooperate(assignments)).toBe(0);
-    expect(proofTurns).toBe(2);
-    expect(result().status).toBe('evaluated_passed');
-    expect(events().filter(event => event.event === 'worker_recovering')).toEqual([
-      expect.objectContaining({ reason: 'math_model_request_failed', attempt: 1, delayMs: 10_000 }),
-    ]);
-    expect(events().filter(event => event.event === 'turn_retry')).toHaveLength(1);
-    expect(events().filter(event => event.event === 'context_restarted' && event.reason === 'request' &&
-      event.previousThreadId === failedThread)).toHaveLength(0);
-    expect(events().filter(event => event.event === 'worker_failed')).toHaveLength(0);
-    expect(state().workers.some((worker: { lastFailure?: { reason: string; diagnostic?: MathAgentFailureDiagnostic } }) =>
-      worker.lastFailure?.reason === 'math_model_request_failed' &&
-      worker.lastFailure.diagnostic?.reason === 'upstream_request_failed')).toBe(true);
-    expect(state().cooperation.tasks[0].status).toBe('integrated');
-    expect(state().cooperation.review).toBeUndefined();
-    expect(host.official).toHaveBeenCalledOnce();
-  });
-
   it('resumes an accepted check saved after restoring the running phase without another model turn', async () => {
     host.open.mockImplementation(async (options: MathAgentOptions) => session(options, async () => {
       fs.writeFileSync(proof(options), completed); return 'completed';
@@ -314,27 +271,6 @@ describe('bounded role session recovery', () => {
     expect(host.open).toHaveBeenCalledTimes(requests);
     expect(result().reason).toBe('math_model_context_capacity_blocked');
     expect(host.official).not.toHaveBeenCalled();
-  });
-
-  it('keeps peers running after a Lead context overflow with a saved valid plan', async () => {
-    const assignments = new Map<string, CooperativeAction>();
-    let leadOverflow = false;
-    host.open.mockImplementation(async (options: MathAgentOptions) => session(options, async () => {
-      const action = assignments.get(options.workspace)!;
-      if (action.kind === 'lead') {
-        research(options, { tasks: [claim] });
-        if (!leadOverflow) { leadOverflow = true; throw new Error('contextWindowExceeded'); }
-      } else if (action.kind === 'task') fs.writeFileSync(proof(options), completed);
-      else if (action.kind === 'review') research(options, { commit: action.seedCommit, verdict: 'accepted' });
-      else throw new Error(`unexpected action: ${action.kind}`);
-      return 'completed';
-    }));
-    expect(await cooperate(assignments)).toBe(0);
-    expect(leadOverflow).toBe(true);
-    expect(events().filter(event => event.event === 'worker_failed')).toHaveLength(0);
-    expect(events().filter(event => event.event === 'worker_context_recovering')).toHaveLength(1);
-    expect(state().cooperation.tasks[0].status).toBe('integrated');
-    expect(host.official).toHaveBeenCalledOnce();
   });
 
   it.each(['tool', 'network'] as const)('recovers a thrown %s failure in the same role with saved notes, proof and exact usage', async kind => {
@@ -521,35 +457,6 @@ describe('bounded role session recovery', () => {
     expect(host.official).not.toHaveBeenCalled();
   });
 
-  it.each(['solver', 'engineer'] as const)('keeps cooperative worker %s available after a sustained startup outage', async workerId => {
-    recoveryClock();
-    const assignments = new Map<string, CooperativeAction>();
-    let failedOpenings = 0;
-    host.open.mockImplementation(async (options: MathAgentOptions) => {
-      if (options.environment.DEEPSCIENTIST_MATH_WORKER_ID === workerId && ++failedOpenings <= 5)
-        throw new Error('math_codex_transport_closed');
-      return session(options, async () => {
-        const action = assignments.get(options.workspace)!;
-        if (action.kind === 'lead') research(options, { tasks: [{ ...claim, ownerId: 'engineer' }] });
-        else if (action.kind === 'task') fs.writeFileSync(proof(options), completed);
-        else throw new Error(`unexpected recovery action: ${action.kind}`);
-        return 'completed';
-      });
-    });
-    expect(await cooperate(assignments)).toBe(0);
-    expect(state().workers.find((worker: { id: string }) => worker.id === workerId)).toMatchObject({
-      recovery: { phase: 'recovered', reason: 'math_codex_transport_closed', cycles: 1, waitedMs: 60_000 },
-    });
-    expect(state().workers.every((worker: { error?: string }) => !worker.error)).toBe(true);
-    expect(state().cooperation.tasks[0].status).toBe('integrated');
-    expect(state().cooperation.review).toBeUndefined();
-    expect(events().filter(event => event.event === 'worker_failed')).toHaveLength(0);
-    expect(events().filter(event => event.event === 'worker_cooling_down')).toEqual([
-      expect.objectContaining({ workerId, cycle: 1, delayMs: 60_000 }),
-    ]);
-    expect(host.official).toHaveBeenCalledOnce();
-  });
-
   it('bounds repeated tool schema failures without setting any solving deadline or discarding the draft', async () => {
     host.open.mockImplementation(async (options: MathAgentOptions) => session(options, async () => {
       fs.writeFileSync(proof(options), partial); options.onUsage({ totalTokens: 3 }); return 'failed';
@@ -596,76 +503,6 @@ describe('bounded role session recovery', () => {
     expect(host.official).not.toHaveBeenCalled();
   });
 
-  it.each(['Invalid authentication', 'unclassified provider failure'])('retains a checked task proof but stops its worker after a hard failure: %s', async error => {
-    const assignments = new Map<string, CooperativeAction>();
-    let proofTurns = 0;
-    host.open.mockImplementation(async (options: MathAgentOptions) => session(options, async () => {
-      const action = assignments.get(options.workspace)!;
-      if (action.kind === 'lead') research(options, { tasks: [claim, finalAudit] });
-      else if (action.kind === 'task') {
-        proofTurns++; fs.writeFileSync(proof(options), completed); options.onUsage({ totalTokens: 11 });
-        return 'failed';
-      } else throw new Error('hard-failed worker must not be dispatched for review');
-      options.onUsage({ totalTokens: 8 }); return 'completed';
-    }, error));
-    expect(await cooperate(assignments)).toBe(1);
-    expect(proofTurns).toBe(1);
-    expect(events().filter(event => event.event === 'task_integrated' && event.taskId === 'claim')).toHaveLength(1);
-    expect(events().filter(event => event.event === 'worker_recovered')).toHaveLength(0);
-    expect(state().workers.some((worker: { error?: string }) => worker.error === researchFailureReason(error))).toBe(true);
-    expect(host.delay).not.toHaveBeenCalled(); expect(host.official).not.toHaveBeenCalled();
-  });
-
-  it('continues distinct typed proof checkpoints beyond the first repair without a solving limit', async () => {
-    const assignments = new Map<string, CooperativeAction>();
-    let proofTurns = 0;
-    host.open.mockImplementation(async (options: MathAgentOptions) => session(options, async () => {
-      const action = assignments.get(options.workspace)!;
-      if (action.kind === 'lead') research(options, { tasks: [claim] });
-      else if (action.kind === 'task') {
-        proofTurns++;
-        const helpers = Array.from({ length: Math.min(proofTurns, 3) }, (_, index) =>
-          `lemma checkpoint_${index + 1} : True := by trivial\n`).join('');
-        const draft = original.replace('theorem claim', helpers + 'theorem claim');
-        fs.writeFileSync(proof(options), proofTurns <= 3 ? draft : draft.replace('by sorry', 'by exact checkpoint_3'));
-        options.onUsage({ totalTokens: 11 });
-        return proofTurns <= 3 ? 'checkpoint' : 'completed';
-      } else throw new Error(`unexpected checkpoint action: ${action.kind}`);
-      options.onUsage({ totalTokens: 8 }); return 'completed';
-    }));
-    expect(await cooperate(assignments)).toBe(0);
-    expect(proofTurns).toBe(4);
-    expect(events().filter(event => event.event === 'turn_checkpoint')).toHaveLength(3);
-    expect(state().cooperation.tasks[0].status).toBe('integrated');
-    expect(state().cooperation.review).toBeUndefined();
-    expect(host.delay).not.toHaveBeenCalled(); expect(host.official).toHaveBeenCalledOnce();
-  });
-
-  it('checks and integrates a saved proof once after a tool failure, then keeps the peer available for an explicit review', async () => {
-    const assignments = new Map<string, CooperativeAction>();
-    let proofTurns = 0;
-    host.open.mockImplementation(async (options: MathAgentOptions) => session(options, async () => {
-      const action = assignments.get(options.workspace)!;
-      if (action.kind === 'lead') research(options, { tasks: [claim, finalAudit] });
-      else if (action.kind === 'task') {
-        proofTurns++; fs.writeFileSync(proof(options), completed);
-        options.onUsage({ totalTokens: 11 });
-        throw new Error('math_model_turn_failed', { cause: new Error('Error parsing function call: invalid JSON arguments') });
-      } else if (action.kind === 'review') research(options, { commit: action.seedCommit, verdict: 'accepted' });
-      else throw new Error(`unexpected offline action: ${action.kind}`);
-      options.onUsage({ totalTokens: 8 }); return 'completed';
-    }));
-    expect(await cooperate(assignments)).toBe(0);
-    expect(proofTurns).toBe(1);
-    expect(events().filter(event => event.event === 'task_integrated' && event.taskId === 'claim')).toHaveLength(1);
-    expect(events().filter(event => event.event === 'worker_recovered')).toEqual([
-      expect.objectContaining({ reason: 'math_model_tool_failed', savedTaskProof: true }),
-    ]);
-    expect(state().cooperation.review.status).toBe('accepted');
-    expect(state().cooperation.tasks[0].status).toBe('integrated');
-    expect(state().workers.every((worker: { error?: string }) => !worker.error)).toBe(true);
-    expect(host.official).toHaveBeenCalledOnce();
-  });
 });
 
 describe('recoverable failure classification', () => {

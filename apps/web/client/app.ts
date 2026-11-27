@@ -7,7 +7,7 @@ import {
   LogOut, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Sun, Trash2, TriangleAlert, Undo2, Upload, X,
 } from 'lucide';
 import type { WebAdminOverview, WebContinuation, WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebRun, WebRunRequest, WebSavedKey, WebSession } from '../shared';
-import { accountLogin, loginHref } from '../shared';
+import { accountLogin, loginHref, retiredResearchCoordinationCode } from '../shared';
 import { webTaskEnvironment } from '../environment';
 import { configurationRefs, ResearchSelection } from './researchSelection';
 import type { ResearchAsset } from '../researchAssetTypes';
@@ -44,9 +44,11 @@ import { RunUpdates } from './runUpdates';
 import { retainLatestRun } from './runSnapshot';
 import type { WebCommandResult, WebObservation } from '../collaboration';
 import { ServerModulePlans } from './serverModulePlans';
+import type { KnowledgeCatalog } from './knowledgeView';
 import { ModulePlanLibrary, modulePlanLibraryStorageKey } from './modulePlanLibrary';
 import { ModulePlanLibraryView } from './modulePlanLibraryView';
 import type { ResearchModuleSlot } from '../../../src/solver/modules/policy';
+import { MIN_TEAM_AGENTS } from '../../../src/solver/teamCapacity';
 import { draftOwnerStorageKey, OwnedDrafts, researchEntryStorageKey, webDraftOwner } from './ownedDrafts';
 import { SubmissionIdentity } from './submissionIdentity';
 import { automaticExplanationSettings } from './automaticExplanation';
@@ -540,6 +542,7 @@ function clearOwnedDrafts() {
   chatWorkspace?.bindOwner('');
   renderProblemDraftPanel(problemDraftHost); problemDraftHost.hidden = true;
   researchSelection.reset();
+  serverModulePlans.setKnowledgeCatalogs();
   collaborationView?.clearPlanDrafts();
   submissionSequence++;
   draftReady = false; draftDirty = false; clearTimeout(draftTimer);
@@ -629,7 +632,7 @@ function renderRunViewsLoading(panel: HTMLElement) {
 const runUpdates = new RunUpdates(version => {
   if (pageActive && state.connected && !document.hidden && version !== state.runsEtag) requestRunsRefresh();
 }, schedulePoll);
-const serverModulePlans = new ServerModulePlans(element('#module-plan'), api, () => modulePlanEditor.value(),
+const serverModulePlans = new ServerModulePlans(element('#module-plan'), element('#draft-knowledge-catalog'), api, () => modulePlanEditor.value(),
   plan => modulePlanEditor.setValue(plan), () => draftChanged());
 const modulePlanLibrary = new ModulePlanLibraryView(element('#module-plan-library'), new ModulePlanLibrary(() => localStorage),
   () => modulePlanEditor.value(), plan => { modulePlanEditor.setValue(plan); draftChanged(); });
@@ -704,7 +707,7 @@ const pause = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, r
 });
 /** `message` is what the reader sees; `reason` keeps the server's own text for checks such as sessionFailure. */
 class ApiError extends Error {
-  constructor(readonly reason: string, readonly status: number, readonly retryAt = 0) { super(localizeMessage(reason)); }
+  constructor(readonly reason: string, readonly status: number, readonly retryAt = 0, readonly code?: string) { super(localizeMessage(reason)); }
 }
 type ApiInit = RequestInit & { timeoutMs?: number; firstResponseTimeoutMs?: number };
 const sameSession = (session: WebSession | undefined) => session?.draftOwner === state.session?.draftOwner && session?.csrfToken === state.session?.csrfToken;
@@ -802,7 +805,7 @@ async function api<T>(url: string, { timeoutMs = 15_000, firstResponseTimeoutMs,
       }
 
       const body = payload && typeof payload === 'object'
-        ? payload as { error?: unknown; cloudflare_error?: unknown; error_code?: unknown; retryable?: unknown; retry_after?: unknown }
+        ? payload as { error?: unknown; code?: unknown; cloudflare_error?: unknown; error_code?: unknown; retryable?: unknown; retry_after?: unknown }
         : undefined;
       const cloudflare = body?.cloudflare_error === true ? body : undefined;
       const limited = response.status === 429 || cloudflare?.error_code === 1015;
@@ -823,7 +826,8 @@ async function api<T>(url: string, { timeoutMs = 15_000, firstResponseTimeoutMs,
       else if (!cloudflare && typeof body?.error === 'string') reason = body.error;
       else if (limited) reason = limitMessage;
       else if (retryable) reason = t('服务暂时不可用，请稍后重试');
-      const error = new ApiError(reason, limited && !challenged ? 429 : response.status, retryAt);
+      const code = !challenged && !cloudflare && typeof body?.code === 'string' ? body.code : undefined;
+      const error = new ApiError(reason, limited && !challenged ? 429 : response.status, retryAt, code);
 
       if (retryAt > now) {
         if (!challenged && !cloudflare && limited && response.headers.get('X-Theoremos-Rate-Limit-Scope') === 'api') {
@@ -960,13 +964,15 @@ function openSettings(focusId?: string) {
     document.body.dataset.draftPreview = 'false';
     element('#open-draft-preview').setAttribute('aria-expanded', 'false');
   }
-  modulePlanLibrary.refresh();
-  void serverModulePlans.refresh();
   if (!dialog.open && (preview || document.body.dataset.mobileView === 'runs')) {
     settingsWorkspaceReturn = { focus: document.activeElement instanceof HTMLElement ? document.activeElement : undefined, preview };
     setMobileView('compose');
   }
   showDialog(dialog);
+  const session = state.session;
+  if (session && state.connected) void api<{ catalogs: KnowledgeCatalog[] }>('/api/knowledge/catalogs')
+    .then(({ catalogs }) => { if (sameSession(session)) serverModulePlans.setKnowledgeCatalogs(catalogs); })
+    .catch(() => { /* Keep the selected digest and the default choices if catalogs are unavailable. */ });
   if (focusId) {
     // The field's section starts at the top of the pane, so the end of the section above does not show over it.
     const control = element(`#${focusId}`), section = control.closest<HTMLElement>('.settings-content .form-section');
@@ -1279,7 +1285,9 @@ function sourceChanged() {
   draftChanged();
 }
 function captureDraft(): TaskDraft {
-  const modulePlan = modulePlanEditor.value();
+  // Retain a legacy draft's exact settings while its last submission is unresolved.
+  const replayUncertain = submissionIdentity.unresolved;
+  const modulePlan = replayUncertain ? modulePlanEditor.value() : undefined;
   const knowledgeDigest = serverModulePlans.knowledgeDigest();
   const nativeTeam = field('research-mode').value === 'native-team';
   const skillMode = nativeTeam || field('research-mode').value === 'skill';
@@ -1288,15 +1296,15 @@ function captureDraft(): TaskDraft {
     ...(draftExplanationLanguage === undefined ? {} : { explanationLanguage: draftExplanationLanguage }),
     effort: field('effort').value as WebEffort, environment: field('environment').value as WebEnvironment,
     source: field('source').value, task: field('task').value, templateId: field('template').value,
-    maxTurns: field('max-turns').value, maxRunSeconds: field('max-seconds').value, workers: nativeTeam ? '1' : field('workers').value,
+    maxTurns: field('max-turns').value, maxRunSeconds: field('max-seconds').value, workers: nativeTeam || !replayUncertain ? '1' : field('workers').value,
     ...(field('max-tokens').value ? { maxTotalTokens: field('max-tokens').value } : {}),
-    coordination: nativeTeam ? 'independent' : element<HTMLInputElement>('input[name="coordination"]:checked').value as WebCoordination,
+    coordination: nativeTeam || !replayUncertain ? 'independent' : element<HTMLInputElement>('input[name="coordination"]:checked').value as WebCoordination,
     ...(nativeTeam ? { nativeTeamCapacity: Number(field('native-team-capacity').value) } : {}),
     ...(nativeTeam && draftTeamProfiles.length ? { nativeTeamPreferredProfiles: [...draftTeamProfiles] } : {}),
     ...(skillMode ? { researchMode: 'skill' as const, skillLoading: field('skill-loading').value as 'native' | 'file' } : {}),
-    ...(!nativeTeam && element<HTMLInputElement>('#plan-approval').checked ? { planApproval: true as const } : {}),
+    ...((nativeTeam || replayUncertain) && element<HTMLInputElement>('#plan-approval').checked ? { planApproval: true as const } : {}),
     ...(knowledgeDigest !== undefined ? { knowledgeDigest } : {}),
-    ...(!nativeTeam && (modulePlan.custom.length || modulePlan.scheduler !== 'plan' || modulePlan.context !== 'full') ? { modulePlan } : {}),
+    ...(!nativeTeam && modulePlan && (modulePlan.custom.length || modulePlan.scheduler !== 'plan' || modulePlan.context !== 'full') ? { modulePlan } : {}),
     ...(draftContinuation ? { continueFrom: draftContinuation } : {}),
     ...(budgetDraftOrigin && budgetDraftOrigin.source === field('source').value && budgetDraftOrigin.environment === field('environment').value
       ? { problemBudget: { runId: budgetDraftOrigin.runId, ...(budgetDraftOrigin.projectId ? { projectId: budgetDraftOrigin.projectId } : {}) } } : {}),
@@ -1413,16 +1421,20 @@ async function recoverDraft() {
     toast(tx('暂时无法恢复固定依赖，两份草稿均已保留，请重新撤销。', 'Could not restore the fixed dependencies. Your drafts are preserved; retry Undo. ') + message(error));
   } finally { restoringDraft = false; renderDraftRecovery(); }
 }
-/** 先审计划 holds the Agents after the Lead's plan, so it needs a Lead and at least one other Agent. */
-const planApprovalAvailable = () => field('research-mode').value !== 'native-team' && element<HTMLInputElement>('input[name="coordination"]:checked').value === 'cooperative' && Number(field('workers').value) >= 2;
+const defaultNativeTeamCapacity = 3;
+const planApprovalAvailable = () => field('research-mode').value === 'native-team' && Boolean(state.session?.runtime.nativeTeam);
+function usesNativeTeam(providerId: string) {
+  const harness = state.session?.providers.find(item => item.id === providerId)?.harness;
+  return !harness || harness === 'codex';
+}
 function syncResearchMode() {
   const provider = state.session?.providers.find(item => item.id === field('provider').value);
-  const portable = Boolean(provider?.harness && provider.harness !== 'codex');
+  const portable = !usesNativeTeam(field('provider').value);
   const mode = field('research-mode') as HTMLSelectElement, loading = field('skill-loading') as HTMLSelectElement;
   const teamAvailable = Boolean(provider && !portable && state.session?.runtime.nativeTeam);
-  for (const option of mode.options) option.disabled = option.value === 'native-team' ? !teamAvailable : portable && option.value === 'legacy';
+  if (!submissionIdentity.unresolved) mode.value = portable ? 'skill' : 'native-team';
   for (const option of loading.options) option.disabled = portable && option.value === 'native';
-  if (portable && mode.value !== 'native-team') { mode.value = 'skill'; loading.value = 'file'; }
+  if (portable && mode.value === 'skill') loading.value = 'file';
   const efforts = field('effort') as HTMLSelectElement;
   for (const option of efforts.options) {
     const supported = provider?.harness === 'cli' ? Boolean(provider.efforts?.includes(option.value as WebEffort)) : option.value !== 'none';
@@ -1431,19 +1443,15 @@ function syncResearchMode() {
   if (Array.from(efforts.options).find(option => option.value === efforts.value)?.disabled)
     efforts.value = provider?.efforts?.[0] ?? 'high';
   const team = mode.value === 'native-team', skill = team || mode.value === 'skill';
-  field('workers').disabled = team;
-  field('workers').parentElement!.hidden = team;
-  element('fieldset.coordination').hidden = team;
-  for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="coordination"]')) radio.disabled = team;
+  field('workers').disabled = true;
+  for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="coordination"]')) radio.disabled = true;
+  patchText(element('#current-research-mode'), team ? t('Codex 原生团队') : t('单 Agent 研究'));
   element('#native-team-field').hidden = !team;
   if (team) refreshPersonalExperts();
   element('#native-team-profiles').hidden = !state.session?.runtime.nativeTeamPreferences && !draftTeamProfiles.length;
   element('#native-team-unavailable').hidden = !team || teamAvailable;
-  element('#research-mode-note').hidden = !skill || team;
-  element('#skill-loading-field').hidden = !skill;
-  element('.plan-approval-option').hidden = team;
-  element('#module-plan').hidden = team;
-  element('[data-settings-section="module-plan"]').hidden = team;
+  element('#skill-loading-field').hidden = !skill || portable;
+  element('.plan-approval-option').hidden = !team;
 }
 function draftChanged(persist = true) {
   syncResearchMode();
@@ -1506,7 +1514,7 @@ function applyTaskDraft(draft: TaskDraft, fixedEnvironment?: WebEnvironment) {
   field('template').value = template?.id ?? '';
   element<HTMLInputElement>(`input[name="coordination"][value="${draft.coordination}"]`).checked = true;
   field('research-mode').value = draft.nativeTeamCapacity ? 'native-team' : draft.researchMode ?? 'legacy';
-  field('native-team-capacity').value = String(draft.nativeTeamCapacity ?? 3);
+  field('native-team-capacity').value = String(draft.nativeTeamCapacity ?? defaultNativeTeamCapacity);
   setDraftTeamProfiles(draft.nativeTeamPreferredProfiles);
   field('skill-loading').value = draft.skillLoading ?? 'native';
   element<HTMLInputElement>('#plan-approval').checked = Boolean(draft.planApproval);
@@ -1549,12 +1557,18 @@ async function importTaskFile(file: File) {
   const sequence = ++taskImportSequence, revision = draftRevision;
   element('#draft-error').hidden = true;
   try {
-    const draft = editableTaskDraft(await readTaskDraftFile(file), submissionIdentity.unresolved);
+    const fileDraft = await readTaskDraftFile(file);
+    const unresolved = submissionIdentity.unresolved;
+    const draft = editableTaskDraft(fileDraft, unresolved);
     if (sequence !== taskImportSequence) return;
     if (revision !== draftRevision || state.submitting) { toast(t('草稿已变化，未导入文件')); return; }
     pendingImport = { draft, revision };
     element('#import-filename').textContent = file.name;
     const provider = state.session?.providers.find(provider => provider.id === draft.providerId);
+    const portable = Boolean(provider?.harness && provider.harness !== 'codex');
+    const nativeTeam = unresolved ? Boolean(draft.nativeTeamCapacity) : !portable;
+    const teamSize = draft.nativeTeamCapacity ?? defaultNativeTeamCapacity;
+    const workers = unresolved ? draft.workers : '1';
     const plan = draft.modulePlan;
     const schedulerLabels = { plan: t('按研究计划'), 'critical-path': t('优先关键路径'), continuation: t('延续证明前沿') };
     const planSummary = [schedulerLabels[plan?.scheduler ?? 'plan'], plan?.context === 'essential' ? t('精简研究上下文') : t('完整研究上下文'),
@@ -1563,12 +1577,12 @@ async function importTaskFile(file: File) {
       [t('服务商'), provider?.name ?? t('{0} · 当前不可用', draft.providerId || t('未选择'))], [t('模型'), draft.model || t('未填写'), true],
       [t('推理强度'), effortLabels[draft.effort] ?? draft.effort], [t('轮次上限'), Number(draft.maxTurns) ? draft.maxTurns : t('不限')],
       [t('解题预算 / 秒'), Number(draft.maxRunSeconds) ? draft.maxRunSeconds : t('不限')],
-      [draft.nativeTeamCapacity ? t('团队人数上限（含 Lead）') : t('Agent 数量'), String(draft.nativeTeamCapacity ?? (draft.workers || t('未填写')))],
-      ...(draft.nativeTeamPreferredProfiles?.length ? [[t('角色偏好（可选）'), draft.nativeTeamPreferredProfiles.join(', ')] as [string, string]] : []),
+      [nativeTeam ? t('团队人数上限（含 Lead）') : t('Agent 数量'), nativeTeam ? String(teamSize) : workers || t('未填写')],
+      ...(nativeTeam && draft.nativeTeamPreferredProfiles?.length ? [[t('角色偏好（可选）'), draft.nativeTeamPreferredProfiles.join(', ')] as [string, string]] : []),
       [t('用量上限 / 万 Token'), Number(draft.maxTotalTokens) ? draft.maxTotalTokens! : t('不限')],
-      ...(!draft.nativeTeamCapacity ? [[t('模块方案'), planSummary] as [string, string]] : []),
-      [t('协作模式'), draft.nativeTeamCapacity ? t('Codex 原生团队') : draft.coordination === 'cooperative' ? t('任务协作') : t('独立并行')],
-      ...(draft.planApproval ? [[t('先审计划'), t('开启')] as [string, string]] : [])]);
+      ...(!nativeTeam && unresolved && plan ? [[t('模块方案'), planSummary] as [string, string]] : []),
+      [t('研究方式'), nativeTeam ? t('Codex 原生团队') : workers === '1' ? t('单 Agent 研究') : draft.coordination === 'cooperative' ? t('任务协作') : t('独立并行')],
+      ...(draft.planApproval && (nativeTeam || unresolved) ? [[t('先审路线再开工'), t('开启')] as [string, string]] : [])]);
     element('#import-task-preview').textContent = draft.task || t('未填写');
     element('#import-source-preview').textContent = draft.source || t('未填写');
     renderImportState();
@@ -2209,14 +2223,14 @@ function renderPanel(force = false) {
 }
 onDetailLevel(() => { if (state.tab === 'result') renderPanel(true); });
 function moduleInput(run?: WebRun): ModuleViewInput {
+  const draft = run ? undefined : captureDraft();
   return { id: run?.id ?? 'draft', run, model: run?.model ?? field('model').value,
-    researchMode: run ? run.researchMode : captureDraft().researchMode,
-    nativeTeamCapacity: run ? run.nativeTeamCapacity : captureDraft().nativeTeamCapacity,
-    workers: run?.workers ?? Number(captureDraft().workers),
-    coordination: run?.coordination ?? element<HTMLInputElement>('input[name="coordination"]:checked').value as WebCoordination,
+    researchMode: run ? run.researchMode : draft?.researchMode,
+    nativeTeamCapacity: run ? run.nativeTeamCapacity : draft?.nativeTeamCapacity,
+    workers: run?.workers ?? Number(draft?.workers),
+    coordination: run?.coordination ?? draft?.coordination ?? 'independent',
     environment: environmentName(run?.environment ?? field('environment').value), connected: state.connected,
-    editable: !run && Boolean(state.session) && !state.submitting,
-    modulePlan: run ? run.modulePlan : captureDraft().modulePlan };
+    editable: false, modulePlan: run ? run.modulePlan : draft?.modulePlan };
 }
 function renderDraftPreview(force = false) {
   if (currentRun() || !state.session || opening()) return;
@@ -2440,14 +2454,15 @@ async function checkWorkbenchApproval(run: WebRun, retry = true) {
 }
 /** The banner also stays available to reconcile an older decision after the current plan changes. */
 function approvalProps(run: WebRun): RunHeaderProps['approval'] {
-  if (webSkillWithoutCooperation(run)) return;
+  if (!run.nativeTeamCapacity && webSkillWithoutCooperation(run)) return;
   const approval = planAwaitingApproval(run), observation = run.observation;
   if (!observation || isSample(run) || !approval && !run.planApproval && !observation.inspection.planApproval?.required) return;
   const identity = personalApprovalOwner(), view = identity?.owner ? personalApprovalView(identity.owner, run) : undefined;
   if (!approval && !view?.pending) return;
   const needsReview = Boolean(view?.reviewRequired || view?.reviewedVersion && view.reviewedVersion !== approval?.planVersion);
   const error = identity?.error ?? view?.error;
-  return { tasks: observation.inspection.tasks.length, revising: approval?.leadRevising ?? false,
+  return { tasks: observation.plan?.tasks.length ?? observation.inspection.tasks.length,
+    nativeTeam: Boolean(run.nativeTeamCapacity), revising: approval?.leadRevising ?? false,
     busy: !identity?.owner || Boolean(view?.pending || view?.storageError || needsReview || view?.busy), checking: identity?.loading || view?.busy,
     reviewable: Boolean(approval && observation.plan && observation.plan.baseVersion === approval.planVersion && observation.plan.baseVersion === observation.inspection.planVersion),
     ...(error ? { error } : {}), ...(view?.pending ? { original: { ...view.pending, ...(view.receipt ? { status: view.receipt.status } : {}) } } : {}),
@@ -2853,7 +2868,7 @@ async function openBudgetAttemptDraft() {
       }
       const configuration = own ? run.researchConfiguration : undefined;
       const refs = configurationRefs(configuration);
-      const selected = refs.length ? await researchSelection.prepare(refs, run.environment, Boolean(run.nativeTeamCapacity)) : undefined;
+      const selected = refs.length ? await researchSelection.prepare(refs, run.environment, usesNativeTeam(isSample(run) ? field('provider').value : run.providerId)) : undefined;
       if (!state.session || ownerOfSession(state.session) !== owner || draftRevision !== revision || state.submitting)
         throw new Error(t('草稿已变化，未载入预算规划。请核对后重新准备。'));
       const issue = submissionIssues({ ...captureDraft(), source: run.source, task: run.task }, '', state.session).find(issue => issue.field === 'source' || issue.field === 'task');
@@ -3496,7 +3511,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
   const epoch = state.connectionEpoch;
   const returnFocus = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : field('task');
   const submission = ++submissionSequence;
-  let sent = false, failed = false;
+  let requestId: string | undefined, sent = false, failed = false;
   const issues = currentSubmissionIssues();
   if (issues.length) {
     for (const issue of issues) validationShown.add(issue.field);
@@ -3521,7 +3536,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
       ...(capturedDraft.nativeTeamCapacity ? { nativeTeamCapacity: capturedDraft.nativeTeamCapacity } : {}),
       ...(capturedDraft.nativeTeamPreferredProfiles?.length ? { nativeTeamPreferredProfiles: capturedDraft.nativeTeamPreferredProfiles } : {}),
       ...(capturedDraft.researchMode ? { researchMode: capturedDraft.researchMode, skillLoading: capturedDraft.skillLoading } : {}),
-      ...(element<HTMLInputElement>('#plan-approval').checked && planApprovalAvailable() ? { planApproval: true } : {}),
+      ...(capturedDraft.planApproval ? { planApproval: true } : {}),
       ...(capturedDraft.modulePlan ? { modulePlan: capturedDraft.modulePlan } : {}),
       ...(capturedDraft.knowledgeDigest !== undefined ? { knowledgeDigest: capturedDraft.knowledgeDigest } : {}),
       ...(draftContinuation ? { continueFrom: draftContinuation } : {}),
@@ -3535,7 +3550,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     syncKeyMemory();
     closeSettings(false);
     state.submitting = true; renderRuntime();
-    input.requestId = await submissionIdentity.prepare(input);
+    requestId = input.requestId = await submissionIdentity.prepare(input);
     if (!currentConnection(epoch)) return;
     saveDraft();
     sent = true;
@@ -3575,7 +3590,15 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     if (submission !== submissionSequence) return;
     const key = field('api-key').value.trim();
     const uncertain = sent && (!(error instanceof ApiError) || error.status >= 500);
-    const text = uncertain ? t('提交结果尚未确认，请先核对运行记录后再决定是否重新提交。') : message(error);
+    const retired = sent && currentConnection(epoch) && error instanceof ApiError && error.status === 400
+      && error.code === retiredResearchCoordinationCode;
+    if (retired) {
+      // The server checked for a replay and refused creation. Save the migrated draft for a new explicit submission.
+      submissionIdentity.clear(requestId);
+      draftChanged(); saveDraft();
+    }
+    const text = retired ? t('旧协作请求没有创建运行。草稿已切换到当前研究方式，可以重新提交。')
+      : uncertain ? t('提交结果尚未确认，请先核对运行记录后再决定是否重新提交。') : message(error);
     errorBox.textContent = key ? text.split(key).join(t('[已隐藏]')) : text;
     errorBox.hidden = false;
     if (sent && currentConnection(epoch) && (uncertain || sessionFailure(error))) {
@@ -3804,7 +3827,7 @@ async function copyText(text: string, success: string) {
   } catch { toast(t('无法访问剪贴板')); }
 }
 const recoveryFields: Record<Exclude<RecoveryAction['id'], 'report'>, string> = {
-  retry: 'api-key', key: 'api-key', budget: 'max-seconds', tokens: 'max-tokens', turns: 'max-turns', workers: 'workers', source: 'source', task: 'task' };
+  retry: 'api-key', key: 'api-key', budget: 'max-seconds', tokens: 'max-tokens', turns: 'max-turns', workers: 'native-team-capacity', source: 'source', task: 'task' };
 /** 提高: twice the run's own limit, up to what a run may ask for. */
 const raised = (value: number, highest: number) => Math.min(highest, Math.max(1, value) * 2);
 async function recoverRun(run: WebRun, action: string, button: HTMLButtonElement) {
@@ -3838,7 +3861,7 @@ async function reuseRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 're
     const configuration = run.researchConfiguration;
     const refs = configurationRefs(configuration);
     // Check the exact versions before replacing another draft. Missing dependencies keep the original run open.
-    const selected = refs.length ? await researchSelection.prepare(refs, run.environment, Boolean(run.nativeTeamCapacity)) : undefined;
+    const selected = refs.length ? await researchSelection.prepare(refs, run.environment, usesNativeTeam(isSample(run) ? field('provider').value : run.providerId)) : undefined;
     if (!state.session || ownerOfSession(state.session) !== owner || state.submitting || revision !== draftRevision || selectedId !== state.selectedId) return;
     applyReusedRun(run, recovery, from);
     if (selected) researchSelection.adopt(selected); else researchSelection.clear();
@@ -3875,7 +3898,8 @@ function applyReusedRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 're
     if (raise) field(raise.id).value = String(raise.to);
     element<HTMLInputElement>(`input[name="coordination"][value="${run.coordination}"]`).checked = true;
     field('research-mode').value = run.nativeTeamCapacity ? 'native-team' : run.researchMode ?? 'legacy';
-    field('native-team-capacity').value = String(run.nativeTeamCapacity ?? 3);
+    const capacity = run.nativeTeamCapacity ?? defaultNativeTeamCapacity;
+    field('native-team-capacity').value = String(recovery === 'workers' ? Math.max(MIN_TEAM_AGENTS, capacity - 1) : capacity);
     setDraftTeamProfiles(run.nativeTeamPreferredProfiles);
     field('skill-loading').value = run.skillLoading ?? 'native';
     element<HTMLInputElement>('#plan-approval').checked = Boolean(run.planApproval);
@@ -3941,7 +3965,6 @@ element('#run-detail').addEventListener('click', event => {
     return;
   }
   const draftAction = (event.target as Element).closest<HTMLElement>('[data-draft-action]');
-  if ((event.target as Element).closest('[data-module-configure]') && !currentRun()) { openSettings('module-plan'); return; }
   if (draftAction?.dataset.draftAction === 'edit') {
     if (currentRun()) return;
     const source = field('source').value, position = sourceReader.editingPosition('draft', source);

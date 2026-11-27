@@ -2,13 +2,15 @@
 
 Version: v1
 Status: Implemented（隔离分支的本地功能验收；未启用真实求解）
-Updated: 2026-11-24
+Updated: 2026-11-27
 
 ## 已确认的目标
 
 核心是多个 Agent 围绕同一冻结原题持续协作、共同产出证明。Lead 自主拆题、派工和调整路线，共享的固定版本 Skill 约定研究方法与交付方式；宿主负责隔离、预算、持久化和独立 Lean 验收。
 
 依据：[决策 0001](decisions/0001-agent-led-skill-multiagent.md)、[决策 0002](decisions/0002-persistent-proof-workers.md)。
+
+新版解题协作使用 Codex 原生团队，默认由 Lead 自主推进。开启人工路线审核时，Lead 发布固定初始路线，获得这一版本的批准后才开工。宿主仍核验全部原始 Lean 目标。旧调度的档案继续可读，续跑和对照实验使用各自固定的历史版本。见[决策 0010](decisions/0010-native-team-runtime-only.md)。
 
 ## 角色与成果语义
 
@@ -100,7 +102,7 @@ Updated: 2026-11-24
 | 范围 | 验证 |
 | --- | --- |
 | 本地数学工具（2026-11-23） | 真实模型在同一构建、扩展工具配置和 Skill 下完成两道新题，均通过本地独立 Lean 验收。整数题用系统 Python 自写计算得到见证，曾因未使用 `math-python` 导入 SymPy 失败；命题题仅用假设。两题均未派工。另一次脚本回放验证原生成员用 Gfan 计算、Lead 收件后用 SymPy 复核，不能据此认定模型会自主协作。[盲测报告](/data/lzh/workspace/outputs/theoremos/20261123-native-tool-blind.Kq7sliPu/report.md) |
-| 持续协作 | [管理层测试](../tests/agentResearchTeam.test.ts)：真实 Git/Lean，受控会话；覆盖异步到达、线程跟进、消息、成员复用、预算、恢复、错误反馈与停写。 |
+| 持续协作 | [管理层测试](https://github.com/HuggingMath/theorem-os/blob/ef08987d6f686856c6fe9ecf86676ebbaa632546/tests/agentResearchTeam.test.ts)：真实 Git/Lean，受控会话；覆盖异步到达、线程跟进、消息、成员复用、预算、恢复、错误反馈与停写。 |
 | 正式交付 | [证明测试](../tests/agentTeamProof.test.ts)：真实 Git/Lean；覆盖精确声明、未授权改动、冲突、过期证据、来源变更及合并前后退出恢复。 |
 | 原生执行 | [协议端到端测试](../tests/agentTeamSolver.test.ts)：实际 Codex adapter、动态工具 RPC、bwrap 和四份冻结 bundle；双子 Agent 提交 helper，Lead 两次恢复并采纳。错误 helper 经真实 Lean 拒绝后，Lead 显式派工，同一 child thread 收到自身错误及新任务并修正，Lead 采纳后完成原题；同时核对身份及角色工具。实际 CLI 入口完成 Lead/子 Agent 依赖准备、环境投影、全部原目标的独立 S3 Lean 验收及结果保存。回复由本地协议 peer 控制，健康检查仅访问临时本机服务。 |
 | 生命周期 | [工具测试](../tests/agentTeamTools.test.ts)：调用绑定、并发、取消、停止与宿主 SIGKILL 后后台写者退出。 |

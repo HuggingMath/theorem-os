@@ -31,7 +31,6 @@ const observe = (callback: (() => void) | undefined) => { try { callback?.(); } 
 
 /** One configured headless command per turn. It never treats output as mathematical acceptance. */
 export async function createCliMathSession(options: MathAgentOptions): Promise<MathAgentSession> {
-  if (options.delegation) throw new Error('math_cli_delegation_unsupported');
   if (options.outputSchema && !options.completedOutput) throw new Error('math_cli_output_schema_unsupported');
   if (options.skills?.some(skill => skill.loading !== 'file')) throw new Error('math_cli_requires_file_skill');
   if (options.signal?.aborted) throw new Error('math_model_request_stopped');

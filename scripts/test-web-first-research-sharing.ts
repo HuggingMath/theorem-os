@@ -15,7 +15,8 @@ import type { WebRunner } from '../apps/web/runner';
 import type { WebExplanation, WebSession } from '../apps/web/shared';
 import { readingCommit, readingEvidence, readingRun } from '../tests/helpers/shareReadingFixture';
 import { audit } from './web-a11y';
-import { freePort, postRun, startBrowser, waitForRun } from './web-scenario';
+import { freePort, startBrowser, waitForRun } from './web-scenario';
+import { seedCooperativeRun } from './web-cooperative-fixture';
 import { openChatBudget, openChatModelSettings, openChatParticipation } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -28,7 +29,7 @@ const credential = 'sk-disposable-first-reading';
 const checks: object[] = [], failures: object[] = [], errors: string[] = [], external: string[] = [];
 const runtimeCalls = { run: 0, formalize: 0, check: 0, explain: 0 };
 const runner: WebRunner = {
-  async readiness() { return { ready: true, message: 'Disposable reader fixture' }; },
+  async readiness() { return { ready: true, nativeTeam: true, message: 'Disposable reader fixture' }; },
   async run(input, send) {
     runtimeCalls.run++;
     assert.equal(input.input.task, readingRun().task);
@@ -166,9 +167,9 @@ try {
   await scenario('share-service-projection', 'zh', 1440, async (page, context) => {
     await page.goto(origin); await page.locator('#formalize-original').waitFor();
     const fixture = readingRun();
-    const created = await postRun({ page }, { providerId: 'fixture-a', apiKey: credential, model: 'fixture-model',
+    const created = await seedCooperativeRun(service, context, origin, { providerId: 'fixture-a', apiKey: credential, model: 'fixture-model',
       effort: 'max', environment: 'standard', source: fixture.source, task: fixture.task,
-      maxTurns: 3, maxRunSeconds: 120, workers: 1, coordination: 'independent' });
+      maxTurns: 3, maxRunSeconds: 120, workers: 2, coordination: 'cooperative' });
     const accepted = await waitForRun({ page }, created.id, run => run.status === 'completed');
     const owner = (await context.cookies(origin)).find(cookie => cookie.name === 'theoremos_session')!.value;
     const now = new Date().toISOString();

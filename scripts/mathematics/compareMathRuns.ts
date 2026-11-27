@@ -450,13 +450,18 @@ export function writeComparisonReport(file: string, report: unknown) {
   writeMathJsonDurable(file, report);
 }
 
-export async function compareMathRuns(argv: string[]): Promise<number> {
+export async function compareMathRuns(argv: string[], historicalReportsOnly = false): Promise<number> {
   const flags = parseFlags(argv, ['phase', 'directory', 'repo', 'problem', 'task-file', 'build-manifest',
     'repetitions', 'model', 'effort', 'method', 'scheduler', 'workers', 'max-turns', 'max-run-seconds', 'max-turn-seconds',
     'max-total-tokens', 'evaluator-timeout-seconds', 'proof-environment-cache-dir', 'module-experiment', 'provider', 'dataset',
     'knowledge-base', 'knowledge-mode', 'skill-baseline', 'common-research-skill', 'source-file',
     'harness', 'harness-profile', 'harness-executable']);
   if (flags.has('help')) {
+    if (historicalReportsOnly) {
+      console.log('Usage: theorem-os compare --phase report|check-report --directory DIR\n' +
+        'Prepare and execute legacy comparisons from their pinned historical TheoremOS revision.');
+      return 0;
+    }
     console.log('Usage: theorem-os compare --phase prepare|run|report|check-report --directory DIR\n'
       + 'prepare also requires --problem ID --task-file FILE --build-manifest FILE\n'
       + '--dataset imo2026|putnambench requires --repo PINNED_REPO (default: imo2026).\n'
@@ -482,6 +487,8 @@ export async function compareMathRuns(argv: string[]): Promise<number> {
   }
   const phase = required(flags, 'phase');
   if (!['prepare', 'run', 'report', 'check-report'].includes(phase)) throw new Error('invalid --phase');
+  if (historicalReportsOnly && (phase === 'prepare' || phase === 'run'))
+    throw new Error('Prepare and execute legacy comparisons from their pinned historical TheoremOS revision.');
   const directory = path.resolve(required(flags, 'directory'));
   const planFile = path.join(directory, 'comparison.json');
   for (const name of ['harness', 'harness-profile', 'harness-executable']) if (phase !== 'prepare' && flags.has(name))
@@ -693,7 +700,7 @@ export async function compareMathRuns(argv: string[]): Promise<number> {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  compareMathRuns(process.argv.slice(2)).then(code => { process.exitCode = code; }, error => {
+  compareMathRuns(process.argv.slice(2), true).then(code => { process.exitCode = code; }, error => {
     console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1;
   });
 }

@@ -41,7 +41,9 @@ jobs:
         timeout-minutes: 5
         run: bun scripts/test-web-proof-thinking.ts --simple-reading
       - name: Verify the browser's login and research flows with local fixtures
-        run: bun run test:web-login && bun run test:web-natural-first && bun run test:web-chat-session && bun run test:web-chat-cancel-recovery && bun run test:web-key-memory && bun run test:web-saved-key && bun run test:web-solve-process && bun run test:web-review-regressions && bun run test:web-plan-recovery && bun run test:web-plan-ownership && bun run test:web-explain && bun run test:web-explain-recovery
+        run: bun run test:web-login && bun run test:web-natural-first && bun run test:web-chat-session && bun run test:web-chat-cancel-recovery && bun run test:web-key-memory && bun run test:web-saved-key && bun run test:web-solve-process && bun run test:web-review-regressions && bun run test:web-explain && bun run test:web-explain-recovery
+      - name: Verify native team creation, approval and library continuation with local fixtures
+        run: bun scripts/test-web-native-team.ts && bun run test:web-plan-approval && bunx vitest run tests/webLibraryResearch.test.ts
       - name: Verify paper drafting and download with local fixtures
         run: bun scripts/test-web-paper.ts
       - name: Verify research account switching and interrupted frontend operations
@@ -136,12 +138,12 @@ jobs:
         run: bun run test:solver-reliability
       - name: Verify dependency snapshots and receipt cache bindings
         run: bunx vitest run --maxWorkers=4 tests/verifierSealedEnvironmentCache.test.ts tests/mathProofEnvironment.test.ts tests/leanProbeSnapshot.test.ts
-      - name: Verify sealed roles, independent audits and native delegation without models
+      - name: Verify sealed roles, native team sessions and historical inspection without models
         if: matrix.lean == '4.33.0'
-        run: bunx vitest run --maxWorkers=1 tests/formalizationSandbox.test.ts tests/formalizationAudit.test.ts tests/agentSessionPlan.test.ts tests/nativeInvestigations.test.ts tests/nativeDelegation.test.ts tests/workflowHarness.test.ts
+        run: bunx vitest run --maxWorkers=1 tests/formalizationSandbox.test.ts tests/formalizationAudit.test.ts tests/agentSessionPlan.test.ts tests/codexSession.test.ts tests/skillRunInspection.test.ts tests/workflowHarness.test.ts tests/agentTeamTransportFallback.test.ts tests/codexSessionAgentControl.test.ts
       - name: Verify projected proof contracts and retained source contexts
-        run: bunx vitest run --maxWorkers=4 tests/taskTypeContract.test.ts tests/projectionNotation.test.ts tests/taskSourceImplicitInstances.test.ts tests/taskSourceMacroProjection.test.ts tests/taskSourceNotationHints.test.ts tests/taskSourceNotationContext.test.ts tests/solverRetainedSourceGoals.test.ts tests/solverConditionalLibraryImports.test.ts tests/solverCanonicalGoalProof.test.ts
+        run: bunx vitest run --maxWorkers=4 tests/taskTypeContract.test.ts tests/projectionNotation.test.ts tests/taskSourceImplicitInstances.test.ts tests/taskSourceMacroProjection.test.ts tests/taskSourceNotationHints.test.ts tests/taskSourceNotationContext.test.ts
       - name: Verify search tools, failure reuse and completed research delivery
-        run: bunx vitest run --maxWorkers=4 tests/declarationSearch.test.ts tests/continuationSearch.test.ts tests/tacticBatteryFailureCache.test.ts tests/solverAssemblyLeadYield.test.ts tests/solverCompletedGuidance.test.ts tests/codexCompletedResponse.test.ts
+        run: bunx vitest run --maxWorkers=4 tests/declarationSearch.test.ts tests/continuationSearch.test.ts tests/tacticBatteryFailureCache.test.ts tests/codexCompletedResponse.test.ts
       - name: Verify definition contracts, conditional publication and research continuation
-        run: bunx vitest run --maxWorkers=4 tests/conditionalProjectionElaborator.test.ts tests/customSolverModules.test.ts tests/definitionContractChecks.test.ts tests/nextCheckNegativeDecisions.test.ts tests/planResearchConnections.test.ts tests/planningEvidence.test.ts tests/researchDurableCheckpoint.test.ts tests/solver.test.ts tests/solverDefinitionContractChecks.test.ts tests/solverKnowledgeConcurrency.test.ts tests/solverNextCheckPlanLifecycle.test.ts tests/solverResearchPublication.test.ts tests/solverResearchTransfer.test.ts tests/taskConditionalUniverses.test.ts tests/taskSourceConditionalContext.test.ts tests/verifiedProofPublication.test.ts tests/webModuleIdentity.test.ts
+        run: bunx vitest run --maxWorkers=4 tests/conditionalProjectionElaborator.test.ts tests/customSolverModules.test.ts tests/definitionContractChecks.test.ts tests/nextCheckNegativeDecisions.test.ts tests/planResearchConnections.test.ts tests/planningEvidence.test.ts tests/solver.test.ts tests/taskConditionalUniverses.test.ts tests/taskSourceConditionalContext.test.ts tests/webModuleIdentity.test.ts

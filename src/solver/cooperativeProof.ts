@@ -94,9 +94,10 @@ const keyedRegions = (source: string) => {
 
 export { committedSource } from './problem';
 
-export function ownedSourceDigest(problem: SolverProblem, worktree: string, commit: string): string {
+export function ownedSourceDigest(problem: SolverProblem, worktree: string, commit: string,
+  readSource = (revision: string, file: string) => committedSource(worktree, revision, `${problem.projectRelative}/${file}`)): string {
   return mathDigest(canonicalMathJson(problem.ownedFiles.map(file =>
-    [file, mathDigest(committedSource(worktree, commit, `${problem.projectRelative}/${file}`))])));
+    [file, mathDigest(readSource(commit, file))])));
 }
 
 /** Omit helper artifacts outside a task's visible scope while preserving every original declaration. */
@@ -113,13 +114,13 @@ export function omitTaskHelpers(problem: SolverProblem, file: string, source: st
 
 /** Freeze edits while preserving original goals, helper statements, and definition bodies. */
 export function taskChanges(problem: SolverProblem, worktree: string, sourceCommit: string,
-  task: CooperativeTask | undefined, assignment: Pick<TaskAssignment, 'seedCommit'>): DeclarationChange[] {
+  task: CooperativeTask | undefined, assignment: Pick<TaskAssignment, 'seedCommit'>,
+  readSource = (commit: string, file: string) => committedSource(worktree, commit, `${problem.projectRelative}/${file}`)): DeclarationChange[] {
   // This only computes edits; callers still validate source availability and the frozen statement.
   if (sourceCommit === assignment.seedCommit && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(sourceCommit)) return [];
   const changes: DeclarationChange[] = [];
   for (const file of problem.ownedFiles) {
-    const read = (commit: string) => committedSource(worktree, commit, `${problem.projectRelative}/${file}`);
-    const before = read(assignment.seedCommit), after = read(sourceCommit);
+    const before = readSource(assignment.seedCommit, file), after = readSource(sourceCommit, file);
     if (before === after) continue;
     if (task && (['research', 'sketch'].includes(task.kind) || !file.endsWith('.lean'))) throw new Error('math_task_source_outside_scope');
     if (Object.hasOwn(problem.frozenFiles ?? {}, file))

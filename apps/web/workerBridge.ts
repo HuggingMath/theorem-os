@@ -7,15 +7,15 @@ import { canonicalMathJson, mathDigest, readMathText, withMathRuntimeLease, writ
 import { assertMathCanonicalPath } from '../../src/math/paths';
 import type { SolverRunState } from '../../src/solver/archive';
 import { buildRunInspection, exportRunPlan, readRunInspection } from '../../src/solver/inspection';
-import { queuePlanApproval, queueRunEdit } from '../../src/solver/humanEdit';
+import { queuePlanApproval } from '../../src/solver/humanEdit';
 import { planApprovalInputSchema } from '../../src/solver/planApproval';
-import { humanGuidanceInputSchema, queueHumanGuidance, readHumanGuidance, withdrawHumanGuidance } from '../../src/solver/humanGuidance';
+import { readHumanGuidance } from '../../src/solver/humanGuidance';
 import { taskVersion, type TaskRecord } from '../../src/solver/tasks';
 import { allowedKnowledgeFile, buildTheoremKnowledge, validateTheoremKnowledge, type TheoremKnowledgeBase } from '../../src/solver/theoremKnowledge';
 import { importKnowledgeRuns } from '../../src/solver/theoremKnowledgeRuns';
 import { proofReceiptsMatch, type ProofCheck } from '../../src/solver/modules/evidence';
-import type { WebCheckReceipt, WebCommand, WebCommandResult, WebLibraryRestart, WebObservation, WebTaskSource } from './collaboration';
-import type { WorkerMessage } from './shared';
+import type { WebCheckReceipt, WebCommandResult, WebLibraryRestart, WebObservation, WebTaskSource } from './collaboration';
+import { retiredResearchCoordinationCode, type WorkerMessage } from './shared';
 import { projectWebDeclarationArtifacts } from './declarationArtifacts';
 import { projectWebNativeTeam } from './nativeTeamObservation';
 import { maxWorkerObservationBytes, standaloneObservationFrame, type WorkerObservationFrame } from './observationSources';
@@ -31,7 +31,8 @@ type ActiveRun = { webRunId: string; directory: string; output: string; libraryR
 const metaSchema = z.object({ schema: z.literal('theorem-os.web-bridge.v1'), webRunId: z.string(), solverRunId: z.string(),
   libraryRound: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   sequence: z.number().int().nonnegative(), contentDigest: z.string(),
-  observations: z.array(z.object({ sequence: z.number().int().nonnegative(), stateDigest: z.string() })),
+  // Older worker metadata may include the observation references once used by guidance writes.
+  observations: z.unknown().optional(),
   catalogKey: z.string().optional(), catalogDigest: z.string().optional(),
 }).strict();
 type BridgeMeta = z.infer<typeof metaSchema>;
@@ -277,8 +278,7 @@ export function createWebWorkerBridge(options: {
       if (Buffer.byteLength(frameJson) > maxWorkerObservationBytes) throw new Error('web_observation_too_large');
       const meta: BridgeMeta = { schema: 'theorem-os.web-bridge.v1', webRunId: options.webRunId, solverRunId: state.runId,
         libraryRound: options.libraryRestart?.round ?? previous?.libraryRound ?? 0,
-        sequence, contentDigest, observations: [...(restarted ? [] : previous?.observations ?? []),
-          ...(changed ? [{ sequence, stateDigest: inspection.snapshot.stateDigest }] : [])].slice(-64),
+        sequence, contentDigest,
         ...(previous?.catalogKey ? { catalogKey: previous.catalogKey } : {}),
         ...(previous?.catalogDigest ? { catalogDigest: previous.catalogDigest } : {}) };
       let catalog: TheoremKnowledgeBase | undefined;
@@ -327,79 +327,26 @@ export function createWebWorkerBridge(options: {
 }
 
 const commandSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('edit-preview'), proposal: z.record(z.unknown()) }).strict(),
-  z.object({ type: z.literal('edit'), proposal: z.record(z.unknown()) }).strict(),
-  z.object({ type: z.literal('guidance'), guidance: humanGuidanceInputSchema }).strict(),
-  z.object({ type: z.literal('guidance-withdraw'), id: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/u),
-    guidanceId: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/u) }).strict(),
   z.object({ type: z.literal('plan-approval'), approval: planApprovalInputSchema }).strict(),
   z.object({ type: z.literal('capture') }).strict(),
 ]);
 
 export async function handleWebWorkerCommand(value: unknown, options: { activeRunFile?: string } = {}): Promise<WebCommandResult> {
-  const command = commandSchema.parse(value) as WebCommand;
+  if (value && typeof value === 'object' && 'type' in value &&
+      ['edit-preview', 'edit', 'guidance', 'guidance-withdraw'].includes(String(value.type)))
+    throw new Error(retiredResearchCoordinationCode);
+  const command = commandSchema.parse(value);
   const active = readActiveRun(options.activeRunFile ?? webActiveRunFile);
-  const bridge = createWebWorkerBridge({ ...active, libraryRestart: command.type === 'capture' ? active.libraryRestart : undefined });
   if (command.type === 'capture') return { id: 'capture', status: 'captured',
-    ...await bridge.capture({ includeCatalog: true, force: true, waitMs: 5_000 }) };
-  if (command.type === 'guidance') {
-    const { state, stateFile } = readRunInspection(active.output);
-    try {
-      const previous = bridgeMeta(path.join(active.directory, 'web-bridge.json'), active.webRunId, state.runId);
-      const alreadyQueued = readHumanGuidance(stateFile, state.runId).some(record => record.id === command.guidance.id);
-      if (!alreadyQueued && !previous?.observations.some(item => item.sequence === command.guidance.observationRef.sequence &&
-          item.stateDigest === command.guidance.observationRef.stateDigest)) throw new Error('web_guidance_observation_unknown');
-      const guidance = await queueHumanGuidance(active.output, command.guidance);
-      return { id: guidance.id, status: guidance.status, guidance };
-    } catch (error) {
-      // These validations finish before the queue write. Transport and persistence failures remain uncertain.
-      const reason = error instanceof Error ? error.message : '';
-      if (['web_guidance_observation_unknown', 'math_guidance_invalid', 'math_guidance_id_conflict',
-        'math_guidance_run_inactive', 'math_guidance_task_superseded', 'math_guidance_worker_missing',
-        'math_guidance_lead_missing', 'math_guidance_limit', 'math_guidance_candidate_environment_changed',
-        'math_guidance_candidate_file_mismatch', 'math_guidance_candidate_base_mismatch'].includes(reason))
-        return { id: command.guidance.id, status: 'rejected', reason };
-      throw error;
-    }
-  }
-  if (command.type === 'guidance-withdraw') {
-    try {
-      const guidance = await withdrawHumanGuidance(active.output, command.guidanceId);
-      // A fresh observation carries the settled note so readers see it at once; the withdrawal itself is already durable.
-      const observation = await bridge.capture({ force: true }).then(result => result.observation, () => undefined);
-      return { id: command.id, status: 'withdrawn', guidance, ...(observation ? { observation } : {}) };
-    } catch (error) {
-      // Decided under the delivery lock before anything is written.
-      const reason = error instanceof Error ? error.message : '';
-      if (['math_guidance_invalid', 'math_guidance_unknown', 'math_guidance_already_delivered', 'math_guidance_already_failed'].includes(reason)) {
-        // A note delivered first should read as delivered now, not after the next periodic capture.
-        const observation = await bridge.capture({ force: true }).then(result => result.observation, () => undefined);
-        return { id: command.id, status: 'rejected', reason, ...(observation ? { observation } : {}) };
-      }
-      throw error;
-    }
-  }
-  if (command.type === 'plan-approval') {
-    try { return { ...await queuePlanApproval(active.output, command.approval) }; }
-    catch (error) {
-      // Each of these is decided from the saved checkpoint before anything is written.
-      const reason = error instanceof Error ? error.message : '';
-      if (['math_plan_approval_invalid', 'math_plan_approval_id_conflict', 'math_plan_approval_not_required',
-        'math_plan_approval_run_inactive', 'math_plan_approval_already_approved', 'math_plan_approval_plan_unavailable',
-        'math_plan_approval_version_conflict', 'math_plan_approval_limit'].includes(reason))
-        return { id: command.approval.id, status: 'rejected', reason, planVersion: command.approval.planVersion };
-      throw error;
-    }
-  }
-  try {
-    const commandDigest = mathDigest(canonicalMathJson(command.proposal));
-    const result = await queueRunEdit(active.output, command.proposal, command.type === 'edit-preview');
-    return { ...result, commandDigest };
-  } catch (error) {
-    // Plan errors are decided before appending. Lease and persistence failures still propagate.
+    ...await createWebWorkerBridge(active).capture({ includeCatalog: true, force: true, waitMs: 5_000 }) };
+  try { return { ...await queuePlanApproval(active.output, command.approval) }; }
+  catch (error) {
+    // Each of these is decided from the saved checkpoint before anything is written.
     const reason = error instanceof Error ? error.message : '';
-    if (/^math_plan_[a-z_]+(?::|$)/u.test(reason))
-      return { id: command.proposal.id, status: 'rejected', reason, baseVersion: command.proposal.baseVersion };
+    if (['math_plan_approval_invalid', 'math_plan_approval_id_conflict', 'math_plan_approval_not_required',
+      'math_plan_approval_run_inactive', 'math_plan_approval_already_approved', 'math_plan_approval_plan_unavailable',
+      'math_plan_approval_version_conflict', 'math_plan_approval_limit'].includes(reason))
+      return { id: command.approval.id, status: 'rejected', reason, planVersion: command.approval.planVersion };
     throw error;
   }
 }

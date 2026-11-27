@@ -17,7 +17,7 @@ await fs.mkdir(output, { recursive: true });
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;
 const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin,
   THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web') }), {
-  async readiness() { return { ready: true, message: 'Browser fixture only' }; },
+  async readiness() { return { ready: true, nativeTeam: true, message: 'Browser fixture only' }; },
   async run() { throw new Error('This UI test must never call a model'); },
   async formalize() { throw new Error('This UI test must never call a model'); },
 });

@@ -9,7 +9,6 @@ import { taskVersion, type CooperativeTask, type TaskAssignment } from '../src/s
 import { localExample } from './helpers/solver';
 import { failedBatch, receiptBatch } from './helpers/verifier';
 import { compactTaskSources } from '../src/solver/taskProjection';
-import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, solverState } from './helpers/solver';
 
 const host = vi.hoisted(() => ({ verify: vi.fn() }));
@@ -99,25 +98,6 @@ describe('compact single-task proof checks', () => {
     expect(proof.passed).toBe(true);
     expect(proof.projectionMode).toBeUndefined();
     expect(host.verify).toHaveBeenCalledTimes(2);
-  });
-
-  it('validates compact evidence through the normal host seam, including a custom checker wrapper', async () => {
-    const commit = write(source()), raw = await check(commit);
-    const worker = leadWorker(problem, workspace), action = assignment(commit);
-    const state = solverState(problem, workspace, { runId: 'compact-host', phase: 'running',
-      cooperation: { canonicalCommit: commit, tasks: [{ task, assignment: action, status: 'delivered', proof: raw, attempts: 1 }] } });
-    const cooperative = cooperativeResearch({ state, workers: [worker], retrievalRoot: workspace,
-      access: new Map([[worker.id, { environment: env, retrievalRoot: workspace }]]), signal: controller.signal,
-      exclusiveCheck: operation => operation() });
-    try {
-      const custom = (...args: Parameters<typeof checkTaskProof>) => checkTaskProof(...args);
-      const modules = (cooperative as any).input.modules;
-      (cooperative as any).input.modules = { ...modules, M2: { ...modules.M2, checkTask: custom } };
-      expect(await (cooperative as any).check(task, action, workspace, commit, [], raw)).toMatchObject({ passed: true });
-      const forged = structuredClone(raw);
-      await expect((cooperative as any).check(task, action, workspace, commit, [], forged))
-        .rejects.toThrow('math_task_check_identity_changed');
-    } finally { await cooperative.stop(); }
   });
 
   it('does not retry infrastructure failures as a full projection', async () => {

@@ -186,30 +186,6 @@ describe('family lemma tasks', () => {
     expect(Math.max(...[...largest.matchAll(/h(\d+) :/gu)].map(match => Number(match[1])))).toBe(Math.log2(MAX_FAMILY_MEMBERS) - 1);
   });
 
-  it('tells the Lead how to write a family and a member worker to prove only its own range', () => {
-    const contextProblem = { ...problem, projectRelative: '.', receiptDigest: 'problem', baseCommit: 'fixed-commit',
-      contract: { formalStatement: 'theorem main : True := by sorry', assumptions: [] } } as unknown as SolverProblem;
-    const accepted = parseCooperationPlan(problem, { tasks: tasks() }).tasks;
-    const build = (planned: readonly CooperativeTask[], assignment: Parameters<typeof buildResearchContext>[2]['assignment']) =>
-      buildResearchContext(contextProblem, { cooperation: { planVersion: 'v1',
-        tasks: planned.map(task => ({ task, status: 'pending', attempts: 0 })) } } as unknown as SolverRunState,
-      { root: '/runtime', worktree: '/proof', environment: {}, taskText: 'Prove it', retrievalRoot: '/library', maxOptionalContextBytes: 0,
-        frozenContexts: { 'Submission.lean': '' }, assignment }).instructions;
-    const task = (id: string) => {
-      const item = accepted.find(entry => entry.id === id)!;
-      return { kind: 'task' as const, task: item, assignment: { taskId: id, taskDigest: taskVersion(item), workerId: 'worker', seedCommit: 'fixed-commit' } };
-    };
-    const initial = build([], { kind: 'lead', seedCommit: 'fixed-commit' });
-    expect(initial).toContain('A finite case table may be one family lemma task');
-    expect(initial).toContain(`(at most ${MAX_FAMILY_MEMBERS})`);
-    expect(initial).not.toContain('Family member tasks are derived');
-    expect(build(accepted, { kind: 'lead', seedCommit: 'fixed-commit', planVersion: 'v1' })).toContain('Family member tasks are derived from their family task');
-    expect(build(accepted, task('cases_c1'))).toContain('This lemma is one member of family task cases. Prove only its own index range');
-    for (const id of ['cases', 'base']) {
-      const text = build(accepted, task(id));
-      expect(text).not.toContain('one member of family task'); expect(text).not.toContain('A finite case table');
-    }
-  });
 });
 
 const lean = newestLeanBinary();

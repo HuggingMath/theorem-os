@@ -2,7 +2,7 @@ import path from 'node:path';
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import { inspectLeanDeclarations, inspectLeanDeclarationRegions } from '../math/leanSource';
 import { maskLeanCommentsAndStrings } from '../math/leanSyntax';
-import type { CooperationState } from './cooperation';
+import type { CooperationState } from './cooperationShared';
 import { deliveryFinding, researchFindingRequestsDecision, type DeliveryRecord } from './deliveries';
 import { originalDeclarationRegions, type SolverProblem } from './problem';
 import { assignmentDeliveryFile, hasTaskAcceptance, leadPlanDeliveryFile, taskGroup, taskReferenceDependencies, taskVersion, type CooperativeAction, type TaskRecord } from './tasks';
@@ -14,8 +14,6 @@ import { goalProgressTaskContext } from './goalProgress';
 import { leadPlanPublicationFeedback, LEAD_PLAN_REPAIR_INSTRUCTION } from './cooperationShared';
 import { contextCheckpointRejectionFeedback } from './contextCheckpoint';
 import { researchDecisionMatches, type ResearchDecision } from './researchDecisions';
-import type { SolverRunState } from './archive';
-import { portfolioPhase2Guidance } from './portfolioExploration';
 
 export const DEFAULT_TASK_CONTEXT_BYTES = 512 * 1024;
 export const DEFAULT_OPTIONAL_TASK_CONTEXT_BYTES = 64 * 1024;
@@ -90,18 +88,6 @@ export function landedHelperSection(cooperation?: CooperationState) {
   return section('landed-helpers', 'sources',
     'Latest verified standalone helper signatures. Look up older entries in COOPERATION.json landedHelpers. ' +
       'Read the exact Lean type at the recorded commit before use.', helpers.slice(-4));
-}
-
-export function portfolioContextSections(state: Pick<SolverRunState, 'portfolioExploration' | 'cooperation'>): ContextSection[] {
-  const sections: ContextSection[] = [];
-  const guidance = portfolioPhase2Guidance(state.portfolioExploration);
-  if (guidance) sections.push({ id: 'portfolio-gate', kind: 'routes', text: guidance });
-  const retired = state.cooperation?.retiredRoutes?.filter(route => route.source === 'lead');
-  if (retired?.length) sections.push(section('retired-routes', 'routes',
-    'Recent route retirements. Read COOPERATION.json retiredRoutes for the full list. Use a distinct route ID and explain any new evidence before revisiting the inference.',
-    retired.slice(-8).map(({ routeId, reason, evidenceRefs }) => ({ routeId,
-      reason: reason.slice(0, 300), evidenceRefs: evidenceRefs?.slice(0, 2) }))));
-  return sections;
 }
 
 /**

@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 // Disposable HTTP/Chromium state and a controlled runner. No models, Lean or mail.
+import { seedCooperativeRun } from './web-cooperative-fixture';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -84,7 +85,7 @@ try {
     const projectPath = `/api/research/theorems/${project.id}`;
     project = (await http<{ item: ResearchProjectDetail }>(reviewer, 'PUT', `${projectPath}/members/${authorSession.researcherId}`, { requestId: crypto.randomUUID(), expectedRevision: project.revision, role: 'collaborator' })).item;
     project = (await http<{ item: ResearchProjectDetail }>(reviewer, 'POST', `${projectPath}/versions`, { requestId: crypto.randomUUID(), expectedRevision: project.revision, source, statement: 'Prove True', environment: 'standard' })).item;
-    const { run } = await http<{ run: { id: string } }>(reviewer, 'POST', '/api/runs', { requestId: crypto.randomUUID(), providerId: 'openai', apiKey: 'sk-disposable-candidate-fixture', model: 'fixture', effort: 'low', environment: 'standard', source, task: 'Prove True', maxTurns: 2, maxRunSeconds: 600, workers: 2, coordination: 'cooperative' });
+    const run = await seedCooperativeRun(service, reviewer.context(), origin, { providerId: 'openai', apiKey: 'sk-disposable-candidate-fixture', model: 'fixture', effort: 'low', environment: 'standard', source, task: 'Prove True', maxTurns: 2, maxRunSeconds: 600, workers: 2, coordination: 'cooperative' });
     await reviewer.waitForFunction(async id => (await (await fetch(`/api/runs/${id}`)).json()).run.observation, run.id);
     project = (await http<{ item: ResearchProjectDetail }>(reviewer, 'POST', `${projectPath}/runs`, { requestId: crypto.randomUUID(), expectedRevision: project.revision, runId: run.id, statementVersionId: project.currentStatementVersionId, grants: { guidance: true, edit: true, approve: true, proof: true } })).item;
     const href = `${origin}/theorems.html?${new URLSearchParams({ id: project.id, version: project.currentStatementVersionId!, run: run.id, task: 'goal', taskVersion: 'goal-v1' })}`;

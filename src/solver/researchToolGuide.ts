@@ -1,5 +1,4 @@
 import path from 'node:path';
-import type { AgentTeamTransport } from './agentTeamTool';
 import { DECLARATION_INDEX_FILE } from './declarationIndex';
 import type { ContextAccess } from './modules/context';
 import type { SolverProblem } from './problem';
@@ -8,9 +7,6 @@ import { ResearchToolHelpBuilder } from './researchToolHelp';
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
 export const researchToolCommand = (root: string, tools?: string) => `bun ${quote(tools ?? path.join(root, 'bin/math.ts'))}`;
-
-export const checkpointCommand = (command: string, worktree: string, file: string, requestId: string) =>
-  `${command} checkpoint --worktree ${quote(worktree)} --log ${quote(file)} --request-id ${quote(requestId)}`;
 
 export const longCommandGuidance =
   'For a long calculation, record the inputs, print progress and save completed batches in .scratch/tmp. Use unbuffered output for Python (python3 -u). ' +
@@ -22,7 +18,7 @@ export const longCommandGuidance =
 export function buildResearchToolGuide(problem: Pick<SolverProblem, 'receiptDigest' | 'projectRelative' | 'targets' | 'ownedFiles' | 'frozenFiles'>,
   access: Pick<ContextAccess, 'root' | 'tools' | 'worktree' | 'retrievalRoot' | 'corpusFile' |
     'knowledgeFile' | 'knowledgeDigest' | 'libraryCatalog' | 'teamRole' | 'assignment'>, environmentDigest: string,
-  teamTransport?: AgentTeamTransport) {
+  team = false) {
   const command = researchToolCommand(access.root, access.tools);
   const help = new ResearchToolHelpBuilder();
   if (access.assignment?.kind === 'lead') help.section('Lead plan submission',
@@ -33,8 +29,7 @@ export function buildResearchToolGuide(problem: Pick<SolverProblem, 'receiptDige
   const editable = new Set(problem.ownedFiles.filter(file => file.endsWith('.lean') && !Object.hasOwn(problem.frozenFiles ?? {}, file)));
   const file = problem.targets.find(target => editable.has(target.proofPath))?.proofPath ?? editable.values().next().value;
   const leanCheckCommand = file && `${command} check-lean --worktree ${quote(access.worktree)} --file ${quote(file)} --timeout-seconds 0`;
-  const report = teamTransport === 'native-agent-control' ? 'native send_message' :
-    teamTransport === 'host-tools' ? 'theoremos_team ' + (access.teamRole?.role === 'worker' ? 'progress' : 'message') : undefined;
+  const report = team ? 'native send_message' : undefined;
   const longCommandSummary = help.section('long-commands', longCommandGuidance + '\n\n' +
     'Start a foreground calculation and get control back while it runs.\n' +
     'exec_command ' + JSON.stringify({ cmd: 'python3 -u .scratch/tmp/experiment.py', workdir: access.worktree,
@@ -47,7 +42,7 @@ export function buildResearchToolGuide(problem: Pick<SolverProblem, 'receiptDige
     'Use a pollable session and saved progress for a long calculation.');
   help.section('lean', (file && leanCheckCommand ? `${leanCheckCommand}\n` +
     `Edit ${quote(path.join(problem.projectRelative, file))} from the worktree root; pass ${quote(file)} to --file. ` +
-    (teamTransport ? 'To test a peer result, append --candidate followed by its actual message:, research: or delivery: reference to this single-file check. ' : '') : '') +
+    (team ? 'To test a peer result, append --candidate followed by its actual message:, research: or delivery: reference to this single-file check. ' : '') : '') +
     'Repeat --file for all relevant saved source files. Paths are relative to the Lean project, without its prefix. ' +
     'For a concrete claim or library application, save a focused probe and check it before expanding the surrounding proof. ' +
     'Read classification, firstBlocking and diagnosticArtifacts; stdout is JSON and stderr is progress. Poll unfinished processes. ' +
@@ -65,10 +60,6 @@ export function buildResearchToolGuide(problem: Pick<SolverProblem, 'receiptDige
     'do not infer that a declaration is absent from one search miss. ' +
     (report ? `Share a useful probe result or blocker through ${report}, with its saved source path and exact diagnostic; private tool output is not a team report.` :
       'Save useful probe results and exact diagnostics with source references in RESEARCH.md for continuation.'), '');
-  if (!teamTransport) help.section('cooperation', `${command} research-observe --worktree ${quote(access.worktree)} --finding '.scratch/finding.json' ` +
-    '[--probe LEAN_FILE] [--snapshot-sources]\n' +
-    'For cooperative task assignments only. The finding file contains the finding object, not the outer delivery event. ' +
-    'This validates and appends to the current assignment log; it never supplies proof acceptance. Read the result for correction feedback.', '');
   if (access.corpusFile) help.section('lean-search', `${command} search-lean --workspace ${quote(access.retrievalRoot)} ` +
     `--corpus ${quote(access.corpusFile)} --query 'SHORT_LIBRARY_KEYWORDS' --goal 'EXACT_LEAN_GOAL_AND_CONTEXT'\n` +
     'Up to eight --query arguments share one scan. Hits are lexical hints; inspect source and test applicability.', '');
@@ -84,14 +75,16 @@ export function buildResearchToolGuide(problem: Pick<SolverProblem, 'receiptDige
   if (access.libraryCatalog) help.section('library', `${command} library search --worktree ${quote(access.worktree)} --query 'KEYWORDS' --goal 'EXACT_LEAN_CONTEXT'\n` +
     `${command} library get --worktree ${quote(access.worktree)} --name 'QUALIFIED_NAME' --max-bytes 16000\n` +
     'Follow nextOffset until the source is complete. Import installed-frozen names; do not copy library sources. ' +
-    `${command} library request --worktree ${quote(access.worktree)} --name 'QUALIFIED_NAME' --reason 'EXACT_USE_AND_PREMISES'\n` +
-    'A request saves the current run for host-controlled continuation; it does not mutate frozen dependencies or accept a proof.', '');
+    (access.teamRole?.role === 'worker'
+      ? 'If a needed declaration is not installed, send Lead its qualified name, intended application and required premises with native send_message. Lead requests installation for the team.'
+      : `${command} library request --worktree ${quote(access.worktree)} --name 'QUALIFIED_NAME' --reason 'EXACT_USE_AND_PREMISES'\n` +
+        'A request saves the current run for host-controlled continuation; it does not mutate frozen dependencies or accept a proof.'), '');
   help.section('huggingmath', `${command} hub --help\n` +
     'Optional transfer of completed frozen results uses hub export, then an operator session profile with preview/apply/record. ' +
     'Keep the profile and import journal outside this research worktree. No upload is part of normal research; ' +
     'historical evidence cannot grant Hub verification, canonical status or publication.', '');
   help.section('other-tools', `${command} --help lists available commands. Read COMMAND --help before using an unfamiliar interface. ` +
-    'Use native web search when actually exposed. Finite checks, proof-search and kernel-certificate do not call a model or accept the original problem. ' +
+    'Use native web search when actually exposed. Finite checks and kernel-certificate do not call a model or accept the original problem. ' +
     'Their exact input formats are available from their existing --help commands.', '');
   return { command, help, leanCheckCommand, longCommandSummary };
 }

@@ -30,11 +30,6 @@ describe('common mathematical guidance across research strategies', () => {
     { mode: 'native default Lead', transport: 'native-agent-control', role: undefined, channel: 'native send_message' },
     { mode: 'native Lead', transport: 'native-agent-control', role: 'lead', channel: 'native send_message' },
     { mode: 'native member', transport: 'native-agent-control', role: 'worker', channel: 'native send_message' },
-    { mode: 'historical default Lead', transport: 'host-tools', role: undefined, channel: 'theoremos_team message' },
-    { mode: 'historical Lead', transport: 'host-tools', role: 'lead', channel: 'theoremos_team message' },
-    { mode: 'historical member', transport: 'host-tools', role: 'worker', channel: 'theoremos_team progress' },
-    { mode: 'saved Lead without transport', transport: undefined, role: undefined, channel: 'theoremos_team message' },
-    { mode: 'saved member without transport', transport: undefined, role: 'worker', channel: 'theoremos_team progress' },
   ] as const)('materializes a permitted result-sharing channel for $mode', ({ transport, role, channel }) => {
     const f = fixture(), objective = 'Profiles: prover\nInspect one saved Lean probe.';
     f.state.researchMode = 'skill'; f.state.researchSkill = researchSkillIdentity(f.skill);
@@ -50,16 +45,9 @@ describe('common mathematical guidance across research strategies', () => {
     const help = fs.readFileSync(path.join(f.workspace, '.scratch/theoremos-help.md'), 'utf8');
     expect(help).toContain(`Share a useful probe result or blocker through ${channel}, with its saved source path and exact diagnostic`);
     expect(help).not.toContain('research-observe');
-    if (transport === 'native-agent-control') {
-      expect(help).not.toContain('theoremos_team progress');
-      expect(help).not.toContain('theoremos_team message');
-      expect(agentTeamOperationAllowed(role === 'worker' ? 'member' : 'lead', false, transport, 'progress')).toBe(false);
-    } else {
-      const operation = role === 'worker' ? 'progress' : 'message';
-      expect(agentTeamOperationAllowed(role === 'worker' ? 'member' : 'lead', false, transport ?? 'host-tools', operation)).toBe(true);
-      expect(help).not.toContain('native send_message');
-      if (role !== 'worker') expect(help).not.toContain('theoremos_team progress');
-    }
+    expect(help).not.toContain('theoremos_team progress');
+    expect(help).not.toContain('theoremos_team message');
+    expect(agentTeamOperationAllowed(role === 'worker' ? 'member' : 'lead', 'progress')).toBe(false);
   });
 
   it('keeps standalone result retention independent of team-only tools', () => {

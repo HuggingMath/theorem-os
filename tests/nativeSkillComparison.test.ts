@@ -88,7 +88,7 @@ describe('isolated native single-task and Skill runtime comparison', () => {
     expect(options).toMatchObject({ proofProjectRoot: path.join(options.workspace, 'generated/problem'),
       hiddenRoots: [DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT], environment: { DEEPSCIENTIST_MATH_WORKER_ID: 'solver',
         DEEPSCIENTIST_MATH_WORKER_WORKTREE: options.workspace } });
-    expect(options.turnTimeoutMs).toBeUndefined(); expect(options.delegation).toBeUndefined();
+    expect(options.turnTimeoutMs).toBeUndefined();
     expect(result).toMatchObject({ accepted: true, status: 'evaluated_passed', writerStopped: true, turns: 1, totalTokens: 7,
       requestUsageAccounting: { startedRequests: 1, reportedRequests: 1, pendingRequests: 0, incomplete: false },
       evaluator: { status: 'passed', method: 'host-lean-kernel-all-targets', official: false } });

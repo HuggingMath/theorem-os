@@ -34,9 +34,14 @@ const prepareOptions = ['repo', 'count', 'seed', 'build-manifest', 'module-exper
   'evaluator-timeout-seconds', 'proof-environment-cache-dir', 'knowledge-base', 'knowledge-mode'];
 type ComparisonPlan = Parameters<typeof comparisonReport>[1];
 
-export async function samplePutnamRuns(argv: string[]): Promise<number> {
+export async function samplePutnamRuns(argv: string[], historicalReportsOnly = false): Promise<number> {
   const flags = parseFlags(argv, ['phase', 'directory', ...prepareOptions]);
   if (flags.has('help')) {
+    if (historicalReportsOnly) {
+      console.log('Usage: theorem-os sample-putnam --phase report|check-report --directory DIR\n' +
+        'Prepare legacy samples from their pinned historical TheoremOS revision.');
+      return 0;
+    }
     console.log('Usage: theorem-os sample-putnam --phase prepare|report|check-report --directory DIR\n'
       + 'prepare requires --repo PUTNAM_REPO --build-manifest FILE; defaults to 3 proof-only problems, a fixed sampling seed, '
       + 'sub2api deepseek-flash/max and the four module plans.\n'
@@ -47,6 +52,8 @@ export async function samplePutnamRuns(argv: string[]): Promise<number> {
   }
   const phase = required(flags, 'phase');
   if (!['prepare', 'report', 'check-report'].includes(phase)) throw new Error('sample-putnam supports only --phase prepare, report or check-report');
+  if (historicalReportsOnly && phase === 'prepare')
+    throw new Error('Prepare legacy PutnamBench comparisons from their pinned historical TheoremOS revision.');
   const directory = path.resolve(required(flags, 'directory'));
   assertMathCanonicalPath(directory);
   if (isMathPathWithin(root, directory)) throw new Error('Keep PutnamBench experiments outside the source checkout.');
@@ -177,7 +184,7 @@ export async function samplePutnamRuns(argv: string[]): Promise<number> {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  samplePutnamRuns(process.argv.slice(2)).then(code => { process.exitCode = code; }).catch(error => {
+  samplePutnamRuns(process.argv.slice(2), true).then(code => { process.exitCode = code; }).catch(error => {
     console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1;
   });
 }

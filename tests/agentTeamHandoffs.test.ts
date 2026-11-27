@@ -19,7 +19,7 @@ afterEach(async () => {
   }
 });
 
-function fixture(transport: 'host-tools' | 'native-agent-control') {
+function fixture() {
   const directory = temporaryDirectory('agent-team-handoffs-');
   const receipt = bootstrapLeanTask(path.join(directory, 'lead'), {
     task: 'Disposable proof handoff fixture.', source: 'theorem original : True := by sorry\n',
@@ -27,7 +27,7 @@ function fixture(transport: 'host-tools' | 'native-agent-control') {
   const problem = readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath);
   const state = solverState(problem, receipt.workspaceRoot, { runId: 'proof-handoffs', phase: 'running',
     threadId: 'saved-lead-thread', researchMode: 'skill', researchDelegation: { mode: 'team', maxAgents: 3 },
-    agentTeam: { schema: 'theorem-os.agent-team.v1', transport, workers: [], events: [], deliveries: [], adoptions: [], operations: [],
+    agentTeam: { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control', workers: [], events: [], deliveries: [], adoptions: [], operations: [],
       coordination: { revision: 1, at: 1, decision: 'defer', reason: 'Historical optional note.',
         nextStep: 'Inspect one definition.', startedRequests: 0, eventSequence: 0 },
       coordinationPresentation: { at: 2, reason: 'opening', decisionRevision: 1, eventSequence: 0 },
@@ -46,9 +46,9 @@ function fixture(transport: 'host-tools' | 'native-agent-control') {
   fixtures.push(f); return f;
 }
 
-describe.each(['host-tools', 'native-agent-control'] as const)('%s minimal proof handoff adapter', transport => {
+describe('native proof handoff adapter', () => {
   it('reads historical coordination fields without turning them or incoming messages into a research gate', () => {
-    const f = fixture(transport), notes = structuredClone(f.state.agentTeam);
+    const f = fixture(), notes = structuredClone(f.state.agentTeam);
     const source = fs.readFileSync(f.sourceFile, 'utf8'), head = git(f.state.worktree, ['rev-parse', 'HEAD']);
     const base: ModelRequestGate = identity => ({ allowed: true, settle: beginRequestUsage(f.state, identity) });
     const gate = f.team.leadRequestGate(base); f.team.beginLeadTurn();
@@ -69,7 +69,7 @@ describe.each(['host-tools', 'native-agent-control'] as const)('%s minimal proof
   });
 
   it.each(['adopt', 'finish', 'base'] as const)('retains the %s checkpoint and waits for paid response settlement', async kind => {
-    const f = fixture(transport); let baseCheckpoint = false;
+    const f = fixture(); let baseCheckpoint = false;
     const beforeRequest = vi.fn(async () => {});
     const base: ModelRequestGate = identity => ({ allowed: true, settle: beginRequestUsage(f.state, identity) });
     base.checkpoint = () => baseCheckpoint; base.beforeRequest = beforeRequest;
@@ -91,7 +91,7 @@ describe.each(['host-tools', 'native-agent-control'] as const)('%s minimal proof
   });
 
   it('honors a recovered adoption before admitting another paid response', () => {
-    const f = fixture(transport), base = vi.fn(() => ({ allowed: true as const, settle: () => {} }));
+    const f = fixture(), base = vi.fn(() => ({ allowed: true as const, settle: () => {} }));
     f.team.archive.adoptions.push({ id: 'recovered', deliveryId: 'b'.repeat(64), targetId: 'lead', status: 'queued' });
     const gate = f.team.leadRequestGate(base); f.team.beginLeadTurn();
     expect(gate.checkpoint!()).toBe(true); expect(base).not.toHaveBeenCalled(); expect(f.open).not.toHaveBeenCalled();

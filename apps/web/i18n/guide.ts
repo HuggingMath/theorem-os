@@ -31,8 +31,8 @@ export const guide: Record<string, string> = {
   "填写所选服务商的 API Key。OpenAI 提供创建 Key 的链接；网关账号与 Key 请向该网关管理员获取。可以先点「检查 Key 与模型」，确认账号能访问哪些模型；不支持模型列表的服务需在发送时确认。":
     "Enter the selected provider’s API key. OpenAI has a link to create one; ask the gateway administrator for a gateway account and key. “Check key and model” confirms which models your account can reach. Providers without that endpoint are checked when you send.",
   "设定预算并发送": "Set a budget and send",
-  "形式化与证明各有时间和 Token 预算，发送前可在「配置模型」或「研究配置」调整。默认「共同推进」由你确认题意，再由 2 个 Agent 拟定初始计划，等你批准后展开证明；「自动推进」由 1 个 Agent 在模型核对后直接开始。费用由模型服务商收取，进行中的请求可能超过设定用量。":
-    "Set separate time and token budgets for formalization and proof in Configure model or Research settings before sending. Work together is the default: you confirm the statement, then 2 Agents draft an initial plan and wait for your approval before proving. Run automatically uses 1 Agent and starts after model review. Your model provider bills usage; requests already in progress can exceed the limit.",
+  "形式化与证明各有时间和 Token 预算，发送前可在「配置模型」或「研究配置」调整。使用 Codex 时，原生团队默认自动推进。其他支持的执行器使用单 Agent 项目技能。费用由模型服务商收取，进行中的请求可能超过设定用量。":
+    "Set separate time and token budgets for formalization and proof in Configure model or Research settings before sending. On Codex, the native team proceeds automatically by default. Other supported runtimes use the project skill with a single agent. Your model provider bills usage, and in-flight requests can exceed the limit.",
   "顶栏「历史」可展开研究记录。打开一次运行后，对话主栏直接展示题意确认、研究计划、实时进展与验收结果；展开右侧「研究与证明」分栏可进一步查看结果、路线图、协作、源码和活动五个视图。运行中随时可点「取消运行」停下。":
     "Open History in the top bar to see your research runs. Once you open a run, the main conversation shows statement confirmation, the research plan, live progress and acceptance results. Expand the Research and proof pane on the right for five views: Result, Roadmap, Collaboration, Source and Activity. Stop a run at any time with Cancel run.",
   "谁在做哪个子任务、在等什么。从分区导航查看任务、原意与 Lean、Agent、指导和知识；详细视图还包含任务合同、交付、变更和归档记录。":
@@ -50,15 +50,15 @@ export const guide: Record<string, string> = {
   "验收通过且原题含义审核完成后，系统会自动生成讲解，并在对话中显示进度与详细解答。也可点「结果」或「源码」中的「Lean → 自然语言」打开讲解页，切换目标与中英文，逐步对照 Lean 行、引理和自然语言，下载已通过审核的 Markdown。自动生成未完成时，可在讲解页查看原因并重新生成。":
     "Once the proof is accepted and the problem statement review has passed, the system automatically generates explanations and shows progress and the detailed solution in the conversation. You can also open Lean → Natural language from Result or Source to switch targets and languages, compare steps with Lean lines and lemmas, and download approved Markdown. If automatic generation did not finish, open the explanation page to see why and generate it again.",
   "自然语言 → Lean": "Natural language → Lean",
-  "首页发送原题后，系统生成 Lean 陈述，并独立回译、审核。在「共同推进」中，你会先看到回译的题意，可核对原题与 Lean、修改题目，或确认后拟定研究计划。「完整审核」保留每次模型审核的结论。":
-    "Send a problem from the home page to generate a Lean statement with independent back-translation and review. In Work together, read the translated meaning first. Compare the problem and Lean, edit the problem, or confirm it to draft a research plan. Full review preserves each model’s verdict.",
+  "首页发送原题后，系统生成 Lean 陈述，并独立回译、审核。选择「先审路线再开工」后，你可以先核对原题与 Lean，修改题目或确认题意。确认后，原生团队会拟定路线并等你批准。「完整审核」保留每次模型审核的结论。":
+    "Send a problem from the home page to generate a Lean statement with independent back-translation and review. Choose Review the route before starting to compare the problem with Lean first, then edit or confirm the statement. After you confirm, the native team drafts the route and waits for your approval. Full review preserves each model’s verdict.",
   "证明讲解目前仅支持使用 Sub2API 与 deepseek-flash 的已验收运行，服务也需提供讲解运行环境；不支持时页面会说明原因。示例运行可以打开对照页，但没有预生成讲解，也不能生成。":
     "Proof explanations currently require an accepted run using Sub2API and deepseek-flash, with an explanation runtime provided by the service. The page explains why generation is unavailable when these conditions are not met. Sample runs can open the comparison page, but have no pre-generated explanations and cannot generate them.",
   "审阅研究计划": "Review the research plan",
-  "「共同推进」使用 2 个 Agent，初始计划直接显示在对话中。你可以查看全部任务、修改任务与依赖，再批准开始证明。拟定和修改计划计入证明预算；等待你审阅或批准时证明计时暂停，批准后继续同一次运行，关闭再打开页面也无需重建。后续修改计划会继续生效，不会每次重新等待批准。Lean 入口也可在执行配置中勾选「先审计划再开始」。":
-    "Work together uses 2 Agents and shows the initial plan in the conversation. Review tasks and dependencies, request changes, then approve the plan to start proving. Drafting and revisions consume the proof budget. While the plan waits for your review or approval the proof timer is paused. Approval continues the same run, even after closing and reopening the page. Later edits update the plan without another approval gate. The Lean entry also offers Review plan before starting under Execution.",
-  "运行中在对话输入框选择「指导 Agent」，给负责人或具体任务发送方法建议，并查看送达回执。指导供 Agent 参考；「讨论思路」用于交流想法，不会改动运行计划。协作区还可向具体 Agent 留言、引用代码与检查记录。":
-    "During a run, choose Guide the Agents in the chat composer to suggest methods to the lead or a task, then check delivery receipts. Agents consider this guidance. Discuss ideas is for exploring the problem and does not change the running plan. In Collaboration, you can also address an Agent and reference code and checks.",
+  "使用 Codex 时，可在自然语言研究设置或 Lean 的执行配置中开启「先审路线再开工」。初始路线显示在对话中，核对后点击批准即可开始证明。拟定路线计入证明预算，等待批准期间暂停证明计时。关闭页面后，可以从历史记录返回同一次运行并批准。":
+    "On Codex, enable Review the route before starting in the natural-language research settings or the Lean execution settings. The initial route appears in the conversation. Review it and approve it to start proving. Drafting uses the proof budget, and the proof timer pauses while waiting for approval. If you close the page, you can return to the same run from History and approve it there.",
+  "用「讨论思路」交流想法，讨论与当前运行分开。采用旧调度器的历史运行会按原配置显示「指导 Agent」、任务编辑和相应记录。":
+    "Use Discuss ideas to explore the problem separately from the active run. Historical runs using the previous scheduler show Guide the Agents, task editing, and the associated records according to their saved configuration.",
   "归档与知识": "Archives and knowledge",
   "协作区可归档研究证据、下载归档包，并在「知识」中搜索历史定理、引理与路线发现。引用知识时会带上来源和记录环境；历史检查通过不代表当前题目通过，使用前仍需重新检查。":
     "In Collaboration, archive research evidence, download an archive and search historical theorems, lemmas and route findings under Knowledge. References include their source and recorded environment. A historical check does not establish the current problem; reused work must be checked again.",
@@ -67,8 +67,8 @@ export const guide: Record<string, string> = {
   "Agent 交出了候选证明，但独立验收没有通过。报告会写明是哪项检查失败。": "The Agents submitted a candidate proof, but independent acceptance rejected it. The report says which check failed.",
   "到达轮次、时间或用量上限时还没有完成证明，标签会写明原因，例如「解题时间用完」。已检查的成果保留在报告里，可以提高预算后重新运行。":
     "The turn, time or usage limit was reached before the proof was complete, and the badge names it, such as \"Solve time used up\". Checked work stays in the report, and you can rerun with a larger budget.",
-  "Key 无效、服务商限流或环境故障等原因让运行无法继续。对话里会给出对应的处理按钮，例如「更换 API Key」或「减少 Agent 数量」。":
-    "Something such as an invalid key, provider rate limits or an environment fault stopped the run. The chat offers a matching action, such as \"Change API key\" or \"Use fewer Agents\".",
+  "Key 无效、服务商限流或环境故障等原因让运行无法继续。对话里会给出对应的处理按钮，例如「更换 API Key」或「减少团队人数」。":
+    "Something such as an invalid key, provider rate limits or an environment fault stopped the run. The chat offers a matching action, such as \"Change API key\" or \"Use a smaller team\".",
   "你主动停止了这次运行。": "You stopped this run.",
   "「候选证明」和「有条件结果」都不算完成：前者还没经过验收，后者依赖一条尚未证明的引理。":
     "Neither a candidate proof nor a conditional result counts as done: the first has not been accepted yet, and the second depends on a lemma that is still unproved.",

@@ -6,7 +6,7 @@ import { readMathAgentSkill } from '../src/runtime/agentSkills';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/agentSession';
 import { directSolverModules } from '../src/solver/modules';
 import { committedSource, git, readSolverProblem } from '../src/solver/problem';
-import { runResearchWorkers } from '../src/solver/research';
+import { runResearchLead } from '../src/solver/research';
 import { prepareResearchSkill, researchSkillIdentity } from '../src/solver/researchSkill';
 import { solverState } from './helpers/solver';
 import { temporaryDirectory } from './helpers/files';
@@ -70,10 +70,9 @@ describe('Lead correction after a deterministic saved-source rejection', () => {
         return 'completed';
       },
     }));
-    const pending = runResearchWorkers({ state, root: process.cwd(), buildFile: path.join(root, 'unused-build.json'),
+    const pending = runResearchLead({ state, root: process.cwd(), buildFile: path.join(root, 'unused-build.json'),
       taskText: 'Prove the fixed original target.', executable: 'offline-fixture', profile: path.join(root, 'profile'),
-      workers: [{ id: 'solver', role: 'lead', worktree, ownedFiles: problem.ownedFiles }],
-      access: new Map([['solver', { environment: {}, retrievalRoot: worktree, researchSkill: skill }]]),
+      access: { environment: {}, retrievalRoot: worktree, researchSkill: skill },
       modules: { ...directSolverModules, M1: { ...directSolverModules.M1, open } },
       signal: new AbortController().signal, deadline: Infinity, maxTurns: 3, maxTurnMs: Infinity, maxTotalTokens: 0,
       save: () => {}, emit: (event, details) => { events.push({ event, details }); },
