@@ -53,6 +53,22 @@ describe('atomic cooperative plan commands', () => {
     }
   });
 
+  it('identifies an oversized progress review reason in command validation', () => {
+    const { workspace, plan, file } = fixture();
+    const progressReview = { id: 'review', reason: 'x'.repeat(2001), nextChecks: [{
+      action: 'construction-check', targetTaskId: plan.tasks[0].id, objective: 'Perform the base case check.',
+      expectedEvidence: 'A checked base case or the exact failed goal.',
+    }] };
+    const input = { workspace, text: JSON.stringify({ ...plan, progressReview }) };
+    const rejected = validateCooperationPlanFile(input);
+    expect(rejected).toEqual({ ok: false, error: 'math_plan_progress_review_invalid',
+      issues: [{ path: 'progressReview.reason', message: 'Shorten the reason to at most 2000 characters (received 2001).' }] });
+    expect(applyCooperationPlanFile(input)).toEqual(rejected);
+    expect(fs.readFileSync(file, 'utf8')).toBe(notes + '\n' + malformed);
+    progressReview.reason = 'x'.repeat(2000);
+    expect(validateCooperationPlanFile({ workspace, text: JSON.stringify({ ...plan, progressReview }) })).toMatchObject({ ok: true });
+  });
+
   it('accepts full JSON through the CLI from stdin and replaces only old plan fences', () => {
     const { workspace, plan, file, problem } = fixture();
     const extraPlan = '```math\n' + JSON.stringify(plan) + '\n```\n';

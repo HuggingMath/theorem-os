@@ -6,6 +6,7 @@ import type { ProofRoute } from './proofRoutes';
 import { reviewGoalPaths } from './goalPathReview';
 import type { GoalPathReview } from './goalPathReview';
 import { originalGoalTaskFocus } from './modules/search';
+import { GOAL_PROGRESS_REASON_MAX_LENGTH } from './goalProgress';
 
 const summaryLimit = 8, referenceLimit = 4;
 const reference = (task: CooperativeTask) => ({ taskId: task.id, taskDigest: taskVersion(task) });
@@ -167,6 +168,7 @@ export function leadPlanningEvidenceText(evidence: ReturnType<typeof leadPlannin
       'with its group active. A new target may be created in upsert in this same revision; connect it to the reviewed ' +
       'goal in the resulting graph through the consumer\'s dependsOn or proofRoutes, or use consumerGoalIds only for ' +
       'an untyped research/sketch target. An unchanged completed or integrated target is unavailable. ' +
+      'Keep progressReview.reason to at most ' + GOAL_PROGRESS_REASON_MAX_LENGTH + ' characters. ' +
       'nextChecks must cover every reviewed goal. One check may cover multiple goals through recorded dependencies, ' +
       'proof routes or advisory consumerGoalIds; do not invent connections merely to satisfy coverage. ' +
       'The host delivers these directions to that task; existing host next checks keep their checkOutcome protocol. ' +

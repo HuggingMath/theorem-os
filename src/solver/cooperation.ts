@@ -28,7 +28,7 @@ import { leadResearchInputs } from './contextCompiler';
 import { deliverHumanGuidance, readHumanGuidance } from './humanGuidance';
 import { mathematicalGaps, mathematicalGapVisible } from './mathematicalGaps';
 import { currentNextCheck, visibleNextChecks } from './nextChecks';
-import { goalProgressForTask } from './goalProgress';
+import { GOAL_PROGRESS_REASON_MAX_LENGTH, goalProgressForTask } from './goalProgress';
 import { automaticTaskConnection, createTaskConnectionCheck, taskConnectionNeedsRefresh } from './taskConnections';
 import { TACTIC_BATTERY_TIMEOUT_MS } from './tacticBattery';
 import { LIBRARY_APPLICATION_TIMEOUT_MS } from './libraryApplication';
@@ -608,7 +608,8 @@ export class CooperativeResearch extends CooperationInputs {
     if (obligations.research) required.push('Answer each still-unanswered presented delivery in researchDecisions: ' +
       JSON.stringify(obligations.researchInputs.map(record => record.id)) + '.');
     if (obligations.progressReview) required.push('Include progressReview with id ' + JSON.stringify(obligations.progressReview.id) +
-      ', a reason and nextChecks covering every reviewed goal: ' + JSON.stringify(obligations.progressReview.goalIds) + '.');
+      ', a reason of at most ' + GOAL_PROGRESS_REASON_MAX_LENGTH + ' characters and nextChecks covering every reviewed goal: ' +
+      JSON.stringify(obligations.progressReview.goalIds) + '.');
     if (obligations.nextCheck) required.push('Include nextCheckDecisions for each still-unanswered presented outcome: ' +
       JSON.stringify(obligations.nextCheckOutcomes.map(record => ({ checkId: record.id,
         outcomeDeliveryId: record.outcome?.deliveryId }))) + '.');
@@ -685,7 +686,7 @@ export class CooperativeResearch extends CooperationInputs {
         node.status === 'conditional' && taskDependenciesReady(node.task, this.archive.tasks))) ||
       Boolean(this.archive.statementReviews?.some(review => route.has(review.taskId) && ['translating', 'reviewing'].includes(review.status)));
   }
-  private taskDispatchBlock(node: TaskRecord): 'preparing-type' | 'synchronizing' | 'capacity-expired' | 'awaiting-lead' | undefined {
+  private taskDispatchBlock(node: TaskRecord, ranked?: readonly TaskRecord[]): 'preparing-type' | 'synchronizing' | 'capacity-expired' | 'awaiting-lead' | 'dependency' | undefined {
     if (this.preparingTaskTypes.has(node)) return 'preparing-type';
     if (this.transferringResearch.has(node) || this.synchronizationBlocked(node.task)) return 'synchronizing';
     if (node.capacityExploration && !currentCapacityExploration(node, this.archive.tasks, this.explorationIdentity))
@@ -704,6 +705,19 @@ export class CooperativeResearch extends CooperationInputs {
     }
     // Older checkpoints recorded only the Lead turn's wake sequence.
     if (checkpoint.leadWake !== undefined && this.archive.leadWakes!.settled < checkpoint.leadWake) return 'awaiting-lead';
+    if (!ranked) return;
+    // An unchanged speculative application can wait while a worker proves its missing input.
+    const peers = this.allocationPeers;
+    const progressingInput = this.dependencies(node.task).some(input => {
+      if (advisory(input.task)) return false;
+      if (input.status === 'delivered') return true;
+      if (input.status === 'running') return input.assignment !== undefined && this.liveWorkers.has(input.assignment.workerId);
+      // Only an unconditional, dispatchable input can make progress without this application.
+      return input.status === 'pending' && ranked.includes(input) && taskDependenciesReady(input.task, this.archive.tasks) &&
+        !this.taskDispatchBlock(input) && this.nextCheckDispatchable(input) && peers.some(peer => assessTaskResponsibility(input, peer, this.responsibility).kind === 'matches' &&
+          this.assignPeerTask([input], peer, this.archive.tasks, this.archive.groups, peers) === input);
+    });
+    if (progressingInput) return 'dependency';
   }
   private transferringResearch = new Set<TaskRecord>();
   private transferableResearch(node: TaskRecord, worker: ResearchWorker): boolean {
@@ -756,7 +770,7 @@ export class CooperativeResearch extends CooperationInputs {
       return;
     }
     const candidates: DispatchWaitObservation['candidates'] = ranked.slice(0, 16).map(node => {
-      const hostBlock = this.taskDispatchBlock(node);
+      const hostBlock = this.taskDispatchBlock(node, ranked);
       const assessment = assessTaskResponsibility(node, worker, this.responsibility);
       return { taskId: node.task.id, taskDigest: digest(node.task),
         reason: hostBlock ?? (assessment.kind === 'blocked' ? assessment.reason : 'policy-no-selection') };
@@ -768,7 +782,7 @@ export class CooperativeResearch extends CooperationInputs {
     const finalReview = this.finalReviewCommit();
     const ranked = this.input.modules.M3.ready(tasks, groups).filter(node => !isFinalCandidateReview(node.task));
     const ready = ranked.filter(node => (!finalReview || !ordinaryAdvisoryTask(node.task)) &&
-      this.nextCheckDispatchable(node) && !this.taskDispatchBlock(node));
+      this.nextCheckDispatchable(node) && !this.taskDispatchBlock(node, ranked));
     return { ranked, ready };
   }
   private finalReviewCommit(): string | undefined {

@@ -1760,6 +1760,66 @@ describe('cooperative advisory scheduling checkpoints', () => {
     return run;
   }
 
+  it.each(['available', 'cooling-down', 'blocked'] as const)(
+    'respects upstream availability after an unchanged connection checkpoint (%s)', async availability => {
+      const { state, workers, problem, check, controller } = connectionChain();
+      const producer = peerWorker({ directory, problem, workspace: workers[0].worktree }, 'producer', { role: 'prover' });
+      workers.push(producer);
+      state.workers!.push({ ...producer, phase: 'prepared', turns: 0 });
+      const bridge = state.cooperation!.tasks.find(node => node.task.id === 'connection_bridge')!;
+      bridge.task = { ...bridge.task, ownerId: producer.id, dependsOn: [] };
+      state.cooperation!.tasks = state.cooperation!.tasks.filter(node => node.task.id !== 'connection_leaf');
+      const [lead, worker] = workers;
+      const budget = { maxTurns: Infinity, remainingMs: Infinity };
+      const cooperation = cooperativeResearch({ state, workers, retrievalRoot: directory, signal: controller.signal,
+        modules: { ...directSolverModules, M2: { ...directSolverModules.M2, check, checkTask: check, closeTask: undefined } } });
+      try {
+        const action = await cooperation.next(worker, budget);
+        if (action?.kind !== 'task') throw new Error('fixture_expected_task');
+        expect(action.task.id).toBe('connection_consumer');
+        expect(cooperation.started(worker, action)).toBe(true);
+        await cooperation.retainContextDraft(worker, action, commitSolverSources(problem, worker.worktree), 'connection');
+        cooperation.interrupted(worker, action);
+        const consumer = state.cooperation!.tasks.find(node => node.task.id === action.task.id)!;
+        expect(consumer.connectionCheckpoint).toBeDefined();
+        expect(consumer.connectionCheckpoint?.leadDeliveryId).toBeUndefined();
+        if (availability === 'blocked') bridge.status = 'blocked';
+        if (availability === 'cooling-down') state.workers!.find(item => item.id === producer.id)!.recovery = {
+          phase: 'cooling-down', reason: 'fixture', cycles: 1, startedAt: Date.now(), nextRetryAt: Date.now() + 1000, waitedMs: 0,
+        };
+        const dispatched = vi.fn();
+        const resumed = cooperation.next(worker, budget).then(dispatched); void resumed.catch(() => {});
+        if (availability !== 'available') {
+          await resumed;
+          expect(dispatched).toHaveBeenCalledWith(expect.objectContaining({ kind: 'task', assignment: action.assignment }));
+          expect(check).not.toHaveBeenCalled();
+          return;
+        }
+        await vi.advanceTimersByTimeAsync(0);
+        expect(dispatched).not.toHaveBeenCalled();
+
+        const input = await cooperation.next(producer, budget);
+        if (input?.kind !== 'task') throw new Error('fixture_expected_input_task');
+        expect(input.task.id).toBe(bridge.task.id);
+        expect(cooperation.started(producer, input)).toBe(true);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(dispatched).not.toHaveBeenCalled();
+        expect(consumer.attempts).toBe(1);
+
+        const source = path.join(lead.worktree, problem.projectRelative, problem.targets[0].proofPath);
+        fs.appendFileSync(source, '\n-- Updated canonical input.\n');
+        state.cooperation!.canonicalCommit = commitSolverSources(problem, lead.worktree);
+        cooperation.modelBudgetChanged();
+        await resumed;
+        expect(dispatched).toHaveBeenCalledWith(expect.objectContaining({ kind: 'task', assignment: action.assignment }));
+        expect(consumer.connectionCheckpoint).toBeUndefined();
+        expect(check).not.toHaveBeenCalled();
+      } finally {
+        controller.abort(new Error('fixture_complete'));
+        await cooperation.stop();
+      }
+    });
+
   it.each(['refuted', 'prose', 'jsonl', 'jsonl-context', 'restart', 'legacy-restart'] as const)(
     'waits for Lead to decide the proof checkpoint (%s)', async report => {
     const { state: initialState, workers, problem, check, controller } = connectionChain();
