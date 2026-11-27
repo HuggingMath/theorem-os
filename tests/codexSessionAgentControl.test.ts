@@ -13,22 +13,26 @@ const fixture = String.raw`
 const fs = require('node:fs'), path = require('node:path'), readline = require('node:readline');
 const directory = process.env.CODEX_HOME;
 const send = value => process.stdout.write(JSON.stringify(value) + '\n');
-let start, settings, threadId, counter = 0, planningTurn;
+let start, settings, threadId, counter = 0, handoffTurn;
+const handoffOperation = process.env.TEAM_HANDOFF_FIXTURE;
+const handoffCall = id => send({id,method:'item/tool/call',params:{threadId,turnId:handoffTurn.id,
+  tool:'theoremos_team',callId:id,arguments:{operation:handoffOperation}}});
+const handoffComplete = (id, result, turnId = handoffTurn.id) =>
+  send({method:'item/completed',params:{threadId,turnId,item:{id,type:'dynamicToolCall',
+    tool:'theoremos_team',arguments:{operation:handoffOperation},success:result.success,contentItems:result.contentItems}}});
 const host = (operation, id, extra = {}) => send({id,method:'theoremos/agentControl/request',params:{version:1,
   sessionId:'root-id',threadId,operationId:'operation-'+id,operation,payload:{threadId,sessionId:'root-id',...extra}}});
 readline.createInterface({input:process.stdin}).on('line', line => {
   const call = JSON.parse(line);
   fs.appendFileSync(path.join(directory,'calls.jsonl'), JSON.stringify(call)+'\n');
   const reply = result => send({id:call.id,result});
-  if (call.id === 'invalid-plan-tool') {
-    send({method:'item/completed',params:{threadId,turnId:planningTurn.id,item:{id:'invalid',type:'dynamicToolCall',
-      tool:'theoremos_team',arguments:null,success:call.result.success}}});
-    return send({id:'plan-tool',method:'item/tool/call',params:{threadId,turnId:planningTurn.id,
-      tool:'theoremos_team',callId:'publish',arguments:{operation:'publish_plan'}}});
+  if (call.id === 'invalid-team-tool') {
+    handoffComplete(call.id, call.result);
+    return handoffCall('team-tool');
   }
-  if (call.id === 'plan-tool') {
-    send({method:'item/completed',params:{threadId,turnId:planningTurn.id,item:{id:'publish',type:'dynamicToolCall',
-      tool:'theoremos_team',arguments:{operation:'publish_plan'},success:call.result.success}}});
+  if (call.id === 'team-tool') {
+    handoffComplete('stale-tool', call.result, 'previous-turn');
+    handoffComplete(call.id, call.result);
     return;
   }
   if (call.id === 'attach') {
@@ -68,11 +72,10 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     const turn = {id:'native-turn-'+ ++counter,status:'inProgress'};
     const native = process.env.THEOREMOS_HOST_AGENT_CONTROL === '1';
     if (native) host('admitTurn','admit-'+counter,{turnId:turn.id});
-    if (process.env.PLAN_TOOL_FIXTURE) {
-      planningTurn = turn;
+    if (handoffOperation) {
+      handoffTurn = turn;
       reply({threadId,submissionId:turn.id,turn,accepted:true});
-      return send({id:'invalid-plan-tool',method:'item/tool/call',params:{threadId,turnId:turn.id,
-        tool:'theoremos_team',callId:'invalid',arguments:null}});
+      return handoffCall('invalid-team-tool');
     }
     if (process.env.HOLD_HOST_CALLBACK) host('recordUsage','usage');
     send({method:'item/completed',params:{threadId,turnId:turn.id,item:{id:'answer',type:'agentMessage',text:'Research saved.'}}});
@@ -83,10 +86,10 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     });
     return reply({threadId,submissionId:turn.id,turn,accepted:true});
   }
-  if (call.method === 'turn/interrupt' && planningTurn) {
+  if (call.method === 'turn/interrupt' && handoffTurn) {
     reply({});
-    send({method:'turn/completed',params:{threadId,turn:{...planningTurn,status:'interrupted'}}});
-    return host('releaseTurn','release-plan',{turnId:planningTurn.id});
+    send({method:'turn/completed',params:{threadId,turn:{...handoffTurn,status:'interrupted'}}});
+    return host('releaseTurn','release-handoff',{turnId:handoffTurn.id});
   }
   if (call.method === 'theoremos/agentControl/update') return reply({acceptedSequence:call.params.sequence});
 });
@@ -112,27 +115,35 @@ describe('native AgentControl stdio integration without model calls', () => {
     fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  it('allows a direct provider to correct invalid plan arguments before the successful checkpoint', async () => {
+  it.each([
+    ['publish_plan', { status: 'pending' }],
+    ['submit', { status: 'pending-writer-stop' }],
+    ['submit_helpers', { status: 'pending-writer-stop' }],
+    ['yield', { status: 'pending-writer-stop' }],
+    ['finish', { status: 'pending-writer-stop' }],
+    ['adopt', { adoption: { targetId: 'lead', status: 'queued' } }],
+  ])('stops a direct provider after the current %s is accepted and acknowledged', async (operation, accepted) => {
     const workspace = path.join(directory, 'workspace'), profile = path.join(directory, 'profile');
     fs.mkdirSync(workspace); fs.mkdirSync(profile);
-    let published = false;
+    let latestCompletedItem: unknown;
+    const checkpointedAfter: unknown[] = [];
     const requestGate: NonNullable<MathAgentOptions['requestGate']> = () => ({ allowed: true, settle: () => {} });
-    requestGate.checkpoint = () => published;
-    session = await createCodexMathSession({ ...options, workspace, profile, isolateProcess: true, readOnlyWorkspace: true,
-      nativeAgentControl: host, requestGate, turnTimeoutMs: 5000, tools: {
-        definitions: [{ name: 'theoremos_team', description: 'Publish initial route', inputSchema: { type: 'object' } }],
-        call: async (_tool, args) => {
-          if (args === null) return { ok: false, error: 'Expected a plan object' };
-          published = true; return { ok: true };
-        },
-      }, environment: { ...options.environment, PLAN_TOOL_FIXTURE: '1' } });
+    requestGate.checkpoint = () => { checkpointedAfter.push(latestCompletedItem); return true; };
+    session = await createCodexMathSession({ ...options, workspace, profile, isolateProcess: true,
+      readOnlyWorkspace: operation === 'publish_plan', nativeAgentControl: host, requestGate, turnTimeoutMs: 1000,
+      onItem: (event, item) => { if (event === 'completed') latestCompletedItem = item.id; },
+      tools: {
+        definitions: [{ name: 'theoremos_team', description: 'Schedule a handoff', inputSchema: { type: 'object' } }],
+        call: async (_tool, _args, { callId }) => callId === 'invalid-team-tool'
+          ? { ok: false, error: 'Reject the invalid handoff.' } : { ok: true, ...accepted },
+      }, environment: { ...options.environment, TEAM_HANDOFF_FIXTURE: operation } });
     expect(session.usageSource).toBe('native-thread-totals');
-    expect(await session.run('Publish a plan.', 'task', workspace, () => {})).toBe('checkpoint');
-    expect(published).toBe(true);
+    expect(await session.run('Schedule a handoff.', 'task', workspace, () => {})).toBe('checkpoint');
+    expect(checkpointedAfter).toEqual(['stale-tool']);
     expect(await session.stopForFreeze!()).toMatchObject({ status: 'stopped' });
     const rpc = fs.readFileSync(path.join(profile, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
-    expect(rpc.find(call => call.id === 'invalid-plan-tool')?.result.success).toBe(true);
-    expect(rpc.findIndex(call => call.id === 'plan-tool')).toBeLessThan(rpc.findIndex(call => call.method === 'turn/interrupt'));
+    expect(rpc.find(call => call.id === 'invalid-team-tool')?.result.success).toBe(true);
+    expect(rpc.findIndex(call => call.id === 'team-tool')).toBeLessThan(rpc.findIndex(call => call.method === 'turn/interrupt'));
   });
 
   it('dispatches factory attach before thread startup returns and enables actual native tools explicitly', async () => {

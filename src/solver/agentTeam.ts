@@ -68,6 +68,11 @@ export function assertAgentTeamProcessesStopped(state: SolverRunState) {
   }
 }
 
+function followupObjective(task: AgentTeamTask, message: string): string {
+  const inherited = agentTeamProfileSelection(task.message);
+  return !inherited.length || agentTeamProfileSelection(message).length ? message : 'Profiles: ' + inherited.join(', ') + '\n' + message;
+}
+
 function correctableSourceFailure(error: unknown) {
   return error instanceof SolverSourceError || error instanceof Error && error.message === 'math_source_outside_ownership';
 }
@@ -425,6 +430,8 @@ export class AgentResearchTeam {
       this.assertRouteAvailable(task.routeId);
       if (task.declarations || task.helperSubmission) throw new NativeAgentControlInputError(
         'math_team_submission_pending: this member has already submitted. Send new work after its writer stops and the nomination is checked.');
+      if (task.pauseRequested) throw new NativeAgentControlInputError(
+        'math_team_native_member_busy: this member is handing off its draft. Give it a new assignment after the handoff settles.');
       const changedProfiles = profiles && canonicalMathJson(profiles.evidence.selected) !== canonicalMathJson(task.profileEvidence?.selected);
       // Preserve the attributed native message and codec. The receiver's frozen
       // profile and its local reading paths accompany the very same turn input.
@@ -438,7 +445,10 @@ export class AgentResearchTeam {
       const accepted = this.nativeControl.accepted(worker, active.session, worker.native!.turnId!);
       return { ...accepted, submissionId: result.submissionId };
     }
-    if (active) await active.task;
+    // Keep the native operation queue available while the previous writer or Lean check settles.
+    if (active) throw new NativeAgentControlInputError(
+      'math_team_native_member_busy: ' + worker.id + ' is ' + (worker.activity ?? worker.status) +
+      '. Continue other work or send an advisory message. Follow up after this member finishes.');
     await this.closeNativeIdle(worker);
     this.assertNativeDispatchOpen(signal);
     if (worker.writerStopUnconfirmed) throw new Error('math_writer_stop_unconfirmed:' + worker.id);
@@ -452,7 +462,15 @@ export class AgentResearchTeam {
       throw new NativeAgentControlInputError('math_team_native_assignment_queued: Continue the queued route before assigning different work to this member.');
     if (saved) {
       this.assertRouteAvailable(saved.routeId);
-      this.updateNativeFollowup(saved, message, profiles?.evidence);
+      const followup = followupObjective(saved, message);
+      if (saved.status === 'paused' && saved.pauseRequested?.kind === 'handoff' && saved.sourceCommit &&
+          followup.trim() === saved.message.trim() &&
+          saved.lastStartedSourceCommit === saved.sourceCommit &&
+          git(worker.worktree, ['rev-parse', 'HEAD']) === saved.sourceCommit)
+        throw new NativeAgentControlInputError(
+          'math_team_native_followup_unchanged: This member paused without a new draft. Adopt a needed result into their workspace, ' +
+          'or give them a concrete next step with the new evidence or a different approach.');
+      this.updateNativeFollowup(saved, followup, profiles?.evidence);
       saved.pauseRequested = undefined; saved.status = 'queued'; saved.error = undefined;
     } else worker.tasks.push(this.newTask(message, profiles?.evidence, routeId));
     worker.native!.initialInput = initialInput;
@@ -464,8 +482,7 @@ export class AgentResearchTeam {
 
   /** Native input is the instruction source; retain it for isolated-workspace resume. */
   private updateNativeFollowup(task: AgentTeamTask, message: string, evidence?: AgentTeamTask['profileEvidence']) {
-    const selected = agentTeamProfileSelection(message), inherited = agentTeamProfileSelection(task.message);
-    const nextMessage = selected.length || !inherited.length ? message : 'Profiles: ' + inherited.join(', ') + '\n' + message;
+    const nextMessage = followupObjective(task, message);
     const nextEvidence = evidence ?? resolveAgentTeamProfiles(this.input.leadAccess.researchSkill!, nextMessage, this.expertCards).evidence;
     (task.objectiveHistory ??= []).push({ revision: task.objectiveRevision ?? 1, message: task.message,
       workKind: task.workKind, at: Date.now(), reason: 'Native followup.', profileEvidence: task.profileEvidence });
@@ -814,6 +831,7 @@ export class AgentResearchTeam {
     // A corrected or deferred delivery still includes the draft written in earlier assignments.
     worker.pendingSourceBase ??= sourceCommit;
     task.seedCommit = worker.pendingSourceBase;
+    task.lastStartedSourceCommit = sourceCommit;
     task.status = 'running'; task.startedAt ??= Date.now(); task.lastStartedAt = Date.now(); task.finishedAt = undefined;
     task.summary = undefined; task.error = undefined; task.declarations = undefined; task.nomination = undefined;
     worker.status = 'running'; worker.activity = 'running'; worker.phase = 'running'; worker.error = undefined;

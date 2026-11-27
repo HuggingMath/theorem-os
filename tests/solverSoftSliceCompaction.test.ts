@@ -33,11 +33,7 @@ describe('soft research milestones', () => {
     })();
     const state = solverState(problem, workspace, { runId: 'soft-slice-fixture', phase: 'prepared',
       ...(trigger === 'team' ? { researchDelegation: { mode: 'team', maxAgents: 3 }, agentTeam: { schema: 'theorem-os.agent-team.v1',
-        transport: 'native-agent-control', workers: [], events: [], deliveries: [], adoptions: [], operations: [] },
-        portfolioExploration: {
-        phase: 'completed', durationMs: 1000, scouts: [{ profile: 'structural-symmetry', status: 'timed-out', turns: 1 }],
-        gate: { retiredRoutes: [], foundationLemmas: [] },
-      } } : {}),
+        transport: 'native-agent-control', workers: [], events: [], deliveries: [], adoptions: [], operations: [] } } : {}),
       ...(skill ? { researchMode: 'skill', researchSkill: { name: skill.name, digest: skill.digest, loading: skill.loading } } : {}) });
     const modules: typeof directSolverModules = { ...directSolverModules,
       M2: { ...directSolverModules.M2, check: async () => {
@@ -49,8 +45,7 @@ describe('soft research milestones', () => {
       M1: { ...directSolverModules.M1, open: async (options: MathAgentOptions): Promise<MathAgentSession> => ({
         threadId: 'offline-soft-slice', usageSource: 'upstream-requests', advisoryNotifications: 'native-history',
         notify, interrupt, close: vi.fn(async () => {}), stopForFreeze: stop,
-        run: async (message, _id, _workspace, begin) => {
-          if (trigger === 'team') expect(message).toContain('Phase 1 ended without a usable report');
+        run: async (_message, _id, _workspace, begin) => {
           begin('held-turn');
           started.resolve(options);
           return done.promise;

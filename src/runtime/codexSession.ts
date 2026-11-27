@@ -40,6 +40,37 @@ const completedAssistantText = (value: unknown): string | undefined => {
   if (item.type === 'agentMessage' && typeof item.text === 'string' && item.text.trim() &&
       (item.phase === undefined || item.phase === null || item.phase === 'final_answer')) return item.text;
 };
+
+function acceptedTeamHandoff(item: Json, readOnlyWorkspace: boolean | undefined): boolean {
+  if (item.type !== 'dynamicToolCall' || item.tool !== 'theoremos_team' || item.namespace != null ||
+      item.success !== true || !Array.isArray(item.contentItems)) return false;
+  const args = item.arguments;
+  if (!args || typeof args !== 'object' || !('operation' in args)) return false;
+  const output = item.contentItems[0];
+  if (output?.type !== 'inputText' || typeof output.text !== 'string') return false;
+  let result: Json;
+  try { result = object(JSON.parse(output.text)); }
+  catch { return false; }
+  if (result.ok !== true) return false;
+  switch (args.operation) {
+    case 'publish_plan':
+      return Boolean(readOnlyWorkspace) && result.status === 'pending';
+    case 'finish':
+    case 'submit':
+    case 'submit_helpers':
+    case 'yield':
+      return result.status === 'pending-writer-stop';
+    case 'adopt': {
+      const adoption = result.adoption;
+      if (!adoption || typeof adoption !== 'object') return false;
+      const { targetId, status } = adoption as Json;
+      return targetId === 'lead' && (status === 'queued' || status === 'integrating');
+    }
+    default:
+      return false;
+  }
+}
+
 const RELAY_CAPABILITY_ENV = 'THEOREM_OS_MODEL_RELAY_CAPABILITY';
 // Responses may remain silent between completed reasoning and their next tool/output event.
 // Restore Codex's default idle tolerance per session, preserving frozen provider profiles.
@@ -721,12 +752,10 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     }
     if (method === 'item/started' || method === 'item/completed') {
       const item = object(params.item);
-      // Direct providers have no request relay. The completed host-tool item
-      // confirms the read-only planner received the result before we stop it.
-      const args = item.arguments;
-      if (options.readOnlyWorkspace && !usesRequestReceipts && method === 'item/completed' &&
-          params.turnId === activeTurn && item.type === 'dynamicToolCall' && item.tool === 'theoremos_team' &&
-          item.success === true && args && typeof args === 'object' && 'operation' in args && args.operation === 'publish_plan')
+      // Direct providers have no request relay. The completed tool item confirms
+      // that Codex received the accepted handoff before we check whether to stop.
+      if (!usesRequestReceipts && method === 'item/completed' && activeTurn &&
+          params.threadId === threadId && params.turnId === activeTurn && acceptedTeamHandoff(item, options.readOnlyWorkspace))
         checkTurnCheckpoint?.(false);
       if (compacting?.turnId && method === 'item/completed' && params.turnId === compacting.turnId
         && item.type === 'contextCompaction') compacting.installed = true;

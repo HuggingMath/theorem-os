@@ -23,6 +23,8 @@ export function agentTeamInstructions(role: AgentTeamRole, maxAgents: number): s
     'If several goals share a mathematical foundation, assign and check its small Lean interfaces before dispatching the consuming goals. ' +
     'For a native spawn or followup, put an optional Route: ROUTE_ID line first, then an optional Profiles: line of comma-separated IDs or slugs, then the assignment. Use theoremos_team retire_route with the obstruction and evidence refs to stop a refuted route. ' +
     'Idle members still occupy their places. Use native followup_task to reuse a member for another gap or specialty; interrupt_agent stops its turn and preserves its place and work. ' +
+    'If a member is handing off sources or waiting for a host check, continue other work until it finishes. ' +
+    'When resuming a paused draft, adopt the missing result or give a concrete next step based on new evidence. ' +
     'Only Lead dispatches, interrupts and adopts; members can exchange findings directly. ' +
     'Adopt a checked delivery when its interface fits. Use inspect for exact declarations and evidence when needed. For adoption into your own workspace, save sources and notes, request adoption and return. ' +
     'Save all original proofs and return for independent host checking. Use finish to request early handoff.\n' + shared;

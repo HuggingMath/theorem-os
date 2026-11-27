@@ -160,7 +160,14 @@ try {
     project=service.research.projects.setMember(owner,project.id,peerId,{requestId:crypto.randomUUID(),expectedRevision:project.revision,role:'collaborator'});
     const next=controls.get(run.id)!.observation; next.history=[structuredClone(next.inspection.tasks[0])]; next.inspection.tasks[0].version='goal-v2'; next.sources[0].taskVersion='goal-v2'; next.sequence++; controls.get(run.id)!.emit();
     await waitForRun({page},run.id,item=>item.observation?.inspection.tasks[0].version==='goal-v2');
-    await page.reload(); await workspace.waitFor(); await workspace.getByRole('combobox').first().selectOption(JSON.stringify(['goal','goal-v2']));
+    const reloadAndSelectCurrentTask = async () => {
+      await page.reload();
+      // Let the deep link restore the old version before choosing the new one.
+      await page.locator('[data-inspected-task-version]').filter({ hasText: /^goal-v1$/u }).waitFor();
+      await workspace.getByRole('combobox').first().selectOption(JSON.stringify(['goal','goal-v2']));
+      await page.locator('[data-inspected-task-version]').filter({ hasText: /^goal-v2$/u }).waitFor();
+    };
+    await reloadAndSelectCurrentTask();
     await workspace.locator('[data-handoff-review]').waitFor(); assert.equal(await workspace.getByLabel(noteLabel,{exact:true}).inputValue(),handoffNote);
     assert.equal(await workspace.locator('[data-handoff-submit]').isDisabled(),true);
     await workspace.locator('[data-handoff-confirm-context]').click(); assert.equal(await workspace.locator('[data-handoff-submit]').isEnabled(),true);
@@ -175,12 +182,12 @@ try {
     const laterNote=handoffNote+' ANOTHER HANDOFF DRAFT';await workspace.getByLabel(noteLabel,{exact:true}).fill(laterNote);
     completeHandoff!();await settled(page);
     assert.equal(await workspace.getByLabel(noteLabel,{exact:true}).inputValue(),laterNote);
-    await page.reload();await workspace.waitFor();await workspace.getByRole('combobox').first().selectOption(JSON.stringify(['goal','goal-v2']));
+    await reloadAndSelectCurrentTask();
     await workspace.locator('[data-handoff-restored]').waitFor();assert.equal(await workspace.getByLabel(noteLabel,{exact:true}).inputValue(),laterNote);
     await page.unroute(`**${projectPath}/handoffs`);
     const handoff=service.research.projects.collaboration(owner,project.id).handoffs.find(item=>item.status==='pending'&&item.target.taskRef?.version==='goal-v2')!;
     assert.ok(handoff); service.research.projects.respondHandoff(peerOwner,project.id,handoff.id,{requestId:crypto.randomUUID(),expectedRevision:handoff.revision,action:'decline'});
-    await page.reload();await workspace.waitFor();await workspace.getByRole('combobox').first().selectOption(JSON.stringify(['goal','goal-v2']));
+    await reloadAndSelectCurrentTask();
     await workspace.locator('[data-handoff-submit]').click();await page.waitForFunction(()=>document.querySelector<HTMLTextAreaElement>('[data-handoff-composer] textarea')?.value==='');
     assert.equal(await page.evaluate(text=>Object.values(localStorage).some(value=>value.includes(text)),laterNote),false);
     checks.push({id:'handoff-reload-role-version-review-exact-cleanup',language,width,restoredNote,restoredRecipient,laterDraftPreserved:true});
