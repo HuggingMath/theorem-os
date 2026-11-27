@@ -128,7 +128,7 @@ describe('configured solver strategy rules without inference or Lean calls', () 
     }
   });
 
-  it('keeps exact role output protocols when every optional strategy slot is replaced', () => {
+  it('keeps Lead plan submission and acceptance rules when every optional strategy slot is replaced', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const configuration = plan((['M1', 'M3', 'M4', 'M5'] as const).map(slot => custom(slot, { mode: 'replace' })));
     const modules = configurableSolverModules(configuration, 'cooperative', 4);
@@ -136,7 +136,9 @@ describe('configured solver strategy rules without inference or Lean calls', () 
       access({ assignment: { kind: 'lead', seedCommit: 'fixed-source-commit' } }));
     for (const slot of ['M1', 'M3', 'M4', 'M5']) expect(context.instructions).toContain(`CUSTOM_${slot}_INSTRUCTIONS`);
     expect(context.instructions).toContain('You are the Lead.');
-    expect(context.instructions).toContain('Use this plan schema for the delivery-log event, or for a math-plan JSON fence in RESEARCH.md when returning without publication: {"tasks":');
+    expect(context.instructions).toContain('plan-apply --publish');
+    expect(context.instructions).toContain('.scratch/plan.json');
+    expect(context.instructions).toContain('{"tasks":[{"id":"helper","kind":"lemma"');
     expect(context.instructions).toContain('Include every original target once.');
     expect(context.instructions).toContain('Exact mathematical interfaces and original assumptions are mandatory');
     expect(context.instructions).toContain('Unproved dependencies and reviews remain advisory.');
