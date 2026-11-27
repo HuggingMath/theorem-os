@@ -3,7 +3,7 @@ import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import { inspectLeanDeclarations, inspectLeanDeclarationRegions } from '../math/leanSource';
 import { maskLeanCommentsAndStrings } from '../math/leanSyntax';
 import type { CooperationState } from './cooperation';
-import { deliveryFinding, type DeliveryRecord } from './deliveries';
+import { deliveryFinding, researchFindingRequestsDecision, type DeliveryRecord } from './deliveries';
 import { originalDeclarationRegions, type SolverProblem } from './problem';
 import { assignmentDeliveryFile, hasTaskAcceptance, leadPlanDeliveryFile, taskGroup, taskReferenceDependencies, taskVersion, type CooperativeAction, type TaskRecord } from './tasks';
 import { buildProofContinuation } from './progress';
@@ -421,12 +421,7 @@ export function leadResearchInputs(deliveries: readonly DeliveryRecord[], byId: 
     if (record.lemmaRequests?.some(task => !byId.has(task.id))) return true;
     // Host-bound check outcomes have their own per-publication nextCheckDecisions contract.
     if (source.nextCheckId && record.checkOutcome?.checkId === source.nextCheckId && record.checkOutcomeScope) return false;
-    const text = deliveryFinding(record, source.finding);
-    if (text === undefined) return false;
-    try {
-      const finding = JSON.parse(text);
-      return finding?.conclusion === 'refuted' || finding?.needsDecision === true;
-    } catch { return false; }
+    return researchFindingRequestsDecision(record, source.finding);
   });
 }
 

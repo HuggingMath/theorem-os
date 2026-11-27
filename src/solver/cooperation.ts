@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { VerificationCheckpointError } from './verificationCheckpoint';
 import { canonicalMathJson, mathDigest, writeMathJsonDurable } from '../math/mathRuntimeIo';
 import { inspectLeanDeclarationRegions, inspectLeanSource, inspectScopedLeanDeclarations } from '../math/leanSource';
-import { committedSource, git, originalDeclarationRegions, solverSourceConstraints } from './problem';
+import { committedSource, commitSolverSources, git, originalDeclarationRegions, solverSourceConstraints } from './problem';
 import { solverProofFeedback, solverSourceFeedback } from './feedback';
 import { assessTaskResponsibility, assignSharedResearchTask, independentFeasibilityWorker, researchWorkerCanNode, type ResearchWorker } from './modules/organization';
 import type { DispatchWaitObservation } from './archive';
@@ -28,7 +28,7 @@ import { deliverHumanGuidance, readHumanGuidance } from './humanGuidance';
 import { mathematicalGaps, mathematicalGapVisible } from './mathematicalGaps';
 import { currentNextCheck, visibleNextChecks } from './nextChecks';
 import { goalProgressForTask } from './goalProgress';
-import { automaticTaskConnection, createTaskConnectionCheck } from './taskConnections';
+import { automaticTaskConnection, createTaskConnectionCheck, taskConnectionNeedsRefresh } from './taskConnections';
 import { TACTIC_BATTERY_TIMEOUT_MS } from './tacticBattery';
 import { LIBRARY_APPLICATION_TIMEOUT_MS } from './libraryApplication';
 import { knowledgeReferenceCoverage } from './knowledgeUsage';
@@ -379,7 +379,10 @@ export class CooperativeResearch extends CooperationInputs {
       }
       this.wakeLead('canonical-source-invalid');
     }
-    for (const node of this.archive.tasks) if (node.status === 'running') this.moveTask(node, 'pending', 'interrupted');
+    for (const node of this.archive.tasks) if (node.status === 'running') {
+      this.restoreConnectionHandoff(node);
+      this.moveTask(node, 'pending', 'interrupted');
+    }
     for (const node of this.archive.tasks.filter(node => node.status === 'delivered')) await this.integrate(node);
     await this.integrateReady();
     const statements = this.prepareStatementContexts(); if (statements) await statements;
@@ -679,11 +682,25 @@ export class CooperativeResearch extends CooperationInputs {
         node.status === 'conditional' && taskDependenciesReady(node.task, this.archive.tasks))) ||
       Boolean(this.archive.statementReviews?.some(review => route.has(review.taskId) && ['translating', 'reviewing'].includes(review.status)));
   }
-  private taskDispatchBlock(node: TaskRecord): 'preparing-type' | 'synchronizing' | 'capacity-expired' | undefined {
+  private taskDispatchBlock(node: TaskRecord): 'preparing-type' | 'synchronizing' | 'capacity-expired' | 'awaiting-lead' | undefined {
     if (this.preparingTaskTypes.has(node)) return 'preparing-type';
     if (this.transferringResearch.has(node) || this.synchronizationBlocked(node.task)) return 'synchronizing';
     if (node.capacityExploration && !currentCapacityExploration(node, this.archive.tasks, this.explorationIdentity))
       return 'capacity-expired';
+    const checkpoint = node.connectionCheckpoint;
+    if (!checkpoint || !this.liveWorkers.has(this.lead.id) || this.workerCoolingDown(this.lead.id)) return;
+    if (checkpoint.leadDeliveryId) {
+      const delivery = this.archive.deliveries?.find(record => record.id === checkpoint.leadDeliveryId);
+      if (!delivery || !leadResearchInputs([delivery], new Map(this.archive.tasks.map(task => [task.task.id, task])),
+        this.archive.researchDecisions).length) return;
+      // Match the planner's existing fallback when it cannot repair a rejected plan.
+      const rejection = this.archive.planRejection;
+      if (rejection?.stalled && rejection.inputDigest === this.planningInputDigest('rejection') &&
+          rejection.proposalDigest === this.proposedPlanDigest()) return;
+      return 'awaiting-lead';
+    }
+    // Older checkpoints recorded only the Lead turn's wake sequence.
+    if (checkpoint.leadWake !== undefined && this.archive.leadWakes!.settled < checkpoint.leadWake) return 'awaiting-lead';
   }
   private transferringResearch = new Set<TaskRecord>();
   private transferableResearch(node: TaskRecord, worker: ResearchWorker): boolean {
@@ -857,10 +874,29 @@ export class CooperativeResearch extends CooperationInputs {
       node.assignment = undefined;
     const resumedAssignment = node.assignment;
     let resuming = resumedAssignment?.workerId === worker.id;
-    if (resuming &&
-        (this.archive.researchDrafts?.[node.task.id]?.suspended || this.researchWorkspaceChanged(worker, node))) {
+    const connectionIdentity = { environmentDigest: this.input.state.environmentDigest,
+      problemReceiptDigest: this.input.state.problem.receiptDigest };
+    const readSource = (worktree: string, commit: string) => (dependency: CooperativeTask) =>
+      committedSource(worktree, commit, `${this.input.state.problem.projectRelative}/${dependency.proofPath}`);
+    const refreshDependencies = resuming && taskConnectionNeedsRefresh(node.task, resumedAssignment!, this.archive.tasks,
+      connectionIdentity, readSource(worker.worktree, resumedAssignment!.seedCommit),
+      readSource(this.lead.worktree, this.archive.canonicalCommit!));
+    const restoreWorkspace = resuming &&
+      (this.archive.researchDrafts?.[node.task.id]?.suspended || this.researchWorkspaceChanged(worker, node));
+    if (refreshDependencies) {
+      // Wait for the previous reader/writer before changing its seed or the checkout.
+      if (this.active.get(worker.id)?.action.kind === 'task' ||
+          [...this.proofPublications.values()].some(publication => publication.action.assignment === resumedAssignment))
+        return this.waitForDispatch();
+      if (!restoreWorkspace) {
+        const commit = commitSolverSources(this.input.state.problem, worker.worktree);
+        this.preserveResearchDraft(worker, { kind: 'task', task: node.task, assignment: resumedAssignment! }, commit,
+          captureDeliveryArtifacts({ problem: this.input.state.problem, worktree: worker.worktree, commit, assignment: resumedAssignment! }));
+      }
+    }
+    if (restoreWorkspace || refreshDependencies) {
       const previousAssignment = node.assignment;
-      const restored = await this.restoreResearchDraft(worker, node);
+      const restored = await this.restoreResearchDraft(worker, node, refreshDependencies);
       if (this.synchronizationBlocked(node.task) || !this.archive.tasks.includes(node) || node.status !== 'pending' ||
           this.finalReviewCommit() && ordinaryAdvisoryTask(node.task) ||
           !restored && node.assignment !== previousAssignment ||
@@ -873,13 +909,14 @@ export class CooperativeResearch extends CooperationInputs {
         node.feedback = 'math_research_draft_unavailable: No matching saved draft is available; continue from the current canonical sources and save findings for this assignment.';
         this.input.emit('research_draft_unavailable', { taskId: node.task.id, workerId: worker.id });
       }
+      if (refreshDependencies) node.connectionCheckpoint = undefined;
     }
     this.suspendResearchDrafts(worker, node.task.id);
     const seed = this.archive.canonicalCommit!;
     // Another reviewer's notes or notes for changed inputs cannot seed a fresh independent verdict.
     // Their pinned draft remains available as archived advisory evidence.
     if (!resuming && isFeasibilityReview(node.task)) fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), '');
-    const scopedSeed = resuming ? seed : this.seed(worker, seed, node.task);
+    const scopedSeed = resuming ? node.assignment!.seedCommit : this.seed(worker, seed, node.task);
     const dispatchAssignment: TaskAssignment = resuming ? node.assignment! : { taskId: node.task.id, taskDigest: digest(node.task), workerId: worker.id,
       seedCommit: scopedSeed, assignmentId: crypto.randomUUID(), canonicalCommit: seed, groupId: taskGroup(node.task),
       routeId: selectedRoute?.id,
@@ -1130,18 +1167,18 @@ export class CooperativeResearch extends CooperationInputs {
       }
     }
     let assignment = claimAssignment();
-    if (!assignment.connectionCheck && automaticTaskConnection(node.task, this.archive.tasks, this.archive.groups)) {
+    if (!assignment.connectionCheck && (resuming && resumedAssignment?.connectionCheck && assignment !== resumedAssignment ||
+        automaticTaskConnection(node.task, this.archive.tasks, this.archive.groups))) {
+      const candidate = resuming && assignment === resumedAssignment ? { ...assignment, assignmentId: crypto.randomUUID() } : assignment;
+      const check = createTaskConnectionCheck(node.task, candidate, this.archive.tasks,
+        connectionIdentity, readSource(worker.worktree, candidate.seedCommit));
       // Upgrading an idle historical assignment keeps its saved draft but supersedes late publications.
-      if (resuming && assignment === resumedAssignment) {
-        assignment = { ...assignment, assignmentId: crypto.randomUUID() };
+      if (check.assumedInputs?.length) {
+        assignment = candidate;
+        assignment.connectionCheck = check;
         node.assignment = assignment;
+        this.input.emit('task_connection_check_assigned', { taskId: node.task.id, workerId: worker.id, connectionCheck: check });
       }
-      assignment.connectionCheck = createTaskConnectionCheck(node.task, assignment, this.archive.tasks,
-        { environmentDigest: this.input.state.environmentDigest, problemReceiptDigest: this.input.state.problem.receiptDigest },
-        dependency => committedSource(worker.worktree, assignment.seedCommit,
-          `${this.input.state.problem.projectRelative}/${dependency.proofPath}`));
-      this.input.emit('task_connection_check_assigned', { taskId: node.task.id, workerId: worker.id,
-        connectionCheck: assignment.connectionCheck });
     }
     if (!advisory(node.task) &&
         fs.existsSync(path.join(worker.worktree, this.input.state.problem.projectRelative, '.lake/source-constraints.json'))) {

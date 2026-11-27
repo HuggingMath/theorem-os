@@ -414,6 +414,9 @@ export async function runResearchWorkers(input: {
           'Add needsDecision:true inside finding only when Lead must choose a route or resolve a blocker; ordinary progress does not need a decision. ' +
           'Do not invent a finding to satisfy this reminder. Publication remains advisory and does not accept a proof. ';
       };
+      const proofFindingInstruction = 'If a precise mathematical finding needs a Lead decision, publish it through the current assignment log, ' +
+        'or save a JSON math-result code block in RESEARCH.md with summary, conclusion ("refuted" for an actual counterexample), ' +
+        'needsDecision:true and the exact argument and assumptions. A saved finding is advisory and does not submit a proof. ';
       const contextCheckpointInstruction = (assignment?: CooperativeAction) => {
         const file = assignment?.kind === 'task' ? assignmentDeliveryFile(assignment.assignment) :
           assignment && leadPlanDeliveryFile(assignment);
@@ -423,7 +426,7 @@ export async function runResearchWorkers(input: {
         return 'Before further searches or experiments, save the exact current argument, ' +
         'attempted methods and negative search scope, useful declaration/file references, and any precise unresolved inference in RESEARCH.md. ' +
         (lead ? 'Save or publish any planning decision as the math-plan revision your instructions describe; a Lead publishes no findings. '
-          : proof ? 'If blocked on a mathematical inference, use the current assignment protocol to publish a source-bound finding and the exact gap; request a Lead decision only when one is needed. '
+          : proof ? proofFindingInstruction
           : researchFindingInstruction(assignment)) +
         'Propose independently checkable, strictly smaller typed obligations when possible; do not rename the original hard theorem or ' +
         'assume it in a wrapper. Scratch experiments and an activity report alone are not a durable handoff or an accepted proof. ' +
@@ -809,7 +812,8 @@ export async function runResearchWorkers(input: {
                   'running it in this turn. This turn yields a scheduling checkpoint at ' + Math.round(checkpointAfterMs / 60_000) +
                   ' minutes; the same thread and saved work remain available.'
                 : 'Save the current mathematical argument, exact unresolved step and useful references in RESEARCH.md now. ' +
-                  researchFindingInstruction(assignment) +
+                  (assignment?.kind === 'task' && hasTaskConnectionCheck(assignment.task, assignment.assignment)
+                    ? proofFindingInstruction : researchFindingInstruction(assignment)) +
                   'This advisory turn will yield a scheduling checkpoint shortly, including when no new notes are saved. ' +
                   'The same thread and saved work will remain available for continuation; this does not end the solving budget.');
             }).then(() => {
@@ -1831,7 +1835,7 @@ export async function runResearchWorkers(input: {
             const commit = commitSolverSources(state.problem, worker.worktree);
             const reason = softSliceCheckpoint || contextSchedulingCheckpoint ? 'context' : 'connection';
             recordAdvisoryOutput(true);
-            cooperation.retainContextDraft(worker, assignment, commit, reason);
+            await cooperation.retainContextDraft(worker, assignment, commit, reason);
             cooperation.interrupted(worker, assignment);
             emit(reason === 'context' ? 'context_checkpoint_saved' : 'connection_checkpoint_saved',
               { threadId: turnSession.threadId, taskId: assignment.task.id, commit });

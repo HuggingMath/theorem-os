@@ -9,10 +9,10 @@ import { projectMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnviron
 import { hashMathFormalSourceDeclaration, inspectLeanDeclarationRegions } from '../math/leanSource';
 import { commitSolverSources, committedSource, git, withSolverWorktree } from './problem';
 import { solverProofFeedback, solverSourceFeedback } from './feedback';
-import { independentFeasibilityWorker, type ResearchWorker } from './modules/organization';
+import { assessTaskResponsibility, independentFeasibilityWorker, type ResearchWorker } from './modules/organization';
 import { proofReceiptsMatch, type ProofCheck } from './modules/evidence';
-import { routeAllowsTask, taskCanStart, selectedTaskRoute } from './modules/search';
-import { deliveryDetails, deliveryFinding, MAX_RESEARCH_NOTES_BYTES, parseMathResponse, type DeliveryRecord } from './deliveries';
+import { routeAllowsTask, taskCanStart, selectedTaskRoute, taskDependenciesReady } from './modules/search';
+import { deliveryDetails, deliveryFinding, MAX_RESEARCH_NOTES_BYTES, parseMathResponse, researchFindingRequestsDecision, type DeliveryRecord } from './deliveries';
 import { checkTaskProof, createTaskSourceProjector, isAttributedTaskProof, ownedSourceDigest, projectedGoalInputs, taskChanges, trustedTaskProjectionReuse, type TaskProof } from './cooperativeProof';
 import { proofReferencesUnchanged, type ProofReferences } from './proofReferences';
 import { captureDeliveryArtifacts, diagnoseUnbackedLeanClaims, validateDeliveryArtifactClaims, type DeliveryArtifactManifest } from './deliveryArtifacts';
@@ -32,10 +32,12 @@ import { taskConnectionCheckCurrent, taskInputsMissingFromSeed } from './taskCon
 import { hasLeanResourceLimitFailure, hasLeanSourceDiagnostic } from './proofReuse';
 import { assumableLemma, taskGroup, taskReferenceDependencies, assignmentDeliveryFile, markTaskReferences, markTaskAcceptance, hasTaskAcceptance, type CooperativeTask,
   type TaskAssignment, type TaskRecord, type CooperativeAction } from './tasks';
-import { digest, FailedTaskInput, bounded } from './cooperationShared';
+import { digest, FailedTaskInput, bounded, directDeliveryRejections, rejectionCode } from './cooperationShared';
 import { CooperationStatements } from './cooperationStatements';
 import { prepareResearchDelivery, ResearchAdmissionError, type ResearchSubmission } from './researchAdmission';
 import { settleResearch } from './researchRecords';
+import { researchDecisionMatches } from './researchDecisions';
+import { leadResearchInputs } from './contextCompiler';
 
 type ProofDeliveryRequest = {
   worker: ResearchWorker; action: Extract<CooperativeAction, { kind: 'task' }>;
@@ -67,10 +69,10 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
   protected feasibilityInputDigest(task: CooperativeTask, workerId: string) {
     return feasibilityReviewInputDigest(this.feasibilityInput(task, workerId));
   }
-  private checkpointInputDigest(task: CooperativeTask, workerId: string) {
+  private checkpointInputDigest(task: CooperativeTask, workerId: string, includeDeliveries = true) {
     return researchCheckpointInputDigest({ task, workerId, tasks: this.archive.tasks, deliveries: this.archive.deliveries ?? [],
       environmentDigest: this.input.state.environmentDigest, problemReceiptDigest: this.input.state.problem.receiptDigest,
-      problem: this.input.state.problem, worktree: this.lead.worktree, canonicalCommit: this.archive.canonicalCommit! });
+      problem: this.input.state.problem, worktree: this.lead.worktree, canonicalCommit: this.archive.canonicalCommit!, includeDeliveries });
   }
   private checkpointLocalInputDigest(task: CooperativeTask, workerId: string, legacyProgress = false) {
     return researchCheckpointLocalInputDigest({ task, workerId, tasks: this.archive.tasks, deliveries: this.archive.deliveries ?? [],
@@ -273,7 +275,8 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       const finding = deliveryFinding(delivery);
       if (!finding || this.leanSourceDigest(this.lead.worktree, delivery.commit) !== candidate.sourceDigest) return false;
       const report = JSON.parse(finding);
-      return report.needsDecision === true && ['inconclusive', 'refuted'].includes(report.conclusion);
+      return (report.needsDecision === true || delivery.leadDecisionRequested) &&
+        ['inconclusive', 'refuted'].includes(report.conclusion);
     });
   }
   private repeatedTaskFeedback(record: FailedTaskInput) {
@@ -376,8 +379,38 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       ...(isFeasibilityReview(action.task) ? { feasibilityInputDigest: assignment.feasibilityInputDigest } : {}) };
     this.pin(commit);
   }
+  private pendingConnectionFinding(assignment: TaskAssignment, checkpointCommit: string) {
+    const key = assignmentDeliveryFile(assignment);
+    const candidates = (this.archive.deliveries ?? []).filter(record => record.kind === 'research' &&
+      record.assignmentKey === key && record.producer === assignment.workerId &&
+      record.taskId === assignment.taskId && record.taskDigest === assignment.taskDigest &&
+      (record.submissionId !== undefined || record.commit === checkpointCommit));
+    if (!candidates.length) return;
+    return leadResearchInputs(candidates, new Map(this.archive.tasks.map(node => [node.task.id, node])),
+      this.archive.researchDecisions)[0];
+  }
+  private bindConnectionFinding(node: TaskRecord, assignment: TaskAssignment, outputDigest: string, deliveryId: string) {
+    const connection = assignment.connectionCheck;
+    if (!connection) return false;
+    const inputDigest = this.checkpointInputDigest(node.task, assignment.workerId, false);
+    const previous = node.connectionCheckpoint;
+    if (previous?.basisDigest === connection.basisDigest && previous.inputDigest === inputDigest &&
+        previous.outputDigest === outputDigest && previous.leadDeliveryId === deliveryId) return false;
+    node.connectionCheckpoint = { basisDigest: connection.basisDigest, inputDigest, outputDigest, leadDeliveryId: deliveryId };
+    return true;
+  }
+  protected restoreConnectionHandoff(node: TaskRecord) {
+    const assignment = node.assignment, draft = this.archive.researchDrafts?.[node.task.id];
+    if (!assignment?.connectionCheck || node.connectionCheckpoint?.leadDeliveryId || !draft || draft.suspended ||
+        draft.taskDigest !== assignment.taskDigest || draft.workerId !== assignment.workerId ||
+        draft.assignmentId !== assignment.assignmentId || draft.seedCommit !== assignment.seedCommit ||
+        draft.canonicalCommit !== assignment.canonicalCommit) return;
+    // Older saves could capture the accepted finding and draft before binding the wait.
+    const pending = this.pendingConnectionFinding(assignment, draft.commit);
+    if (pending) this.bindConnectionFinding(node, assignment, draft.outputDigest, pending.id);
+  }
   /** A scheduling handoff retains code without submitting an unfinished assigned declaration. */
-  retainContextDraft(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>, commit: string,
+  async retainContextDraft(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>, commit: string,
     reason: 'context' | 'connection' = 'context') {
     if (!this.current(action)) return;
     const previous = this.archive.researchDrafts?.[action.task.id], assignment = action.assignment;
@@ -388,10 +421,46 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     const artifacts = captureDeliveryArtifacts({ problem: this.input.state.problem,
       worktree: worker.worktree, commit, assignment: action.assignment });
     this.preserveResearchDraft(worker, action, commit, artifacts);
-    const node = this.node(action.task.id), outputDigest = this.archive.researchDrafts![action.task.id].outputDigest;
-    node.connectionCheckpoint = reason === 'connection' && assignment.connectionCheck && previousOutput === outputDigest
-      ? { basisDigest: assignment.connectionCheck.basisDigest,
-        inputDigest: this.checkpointInputDigest(action.task, worker.id), outputDigest } : undefined;
+    const node = this.node(action.task.id), draft = this.archive.researchDrafts![action.task.id];
+    const connection = reason === 'connection' ? assignment.connectionCheck : undefined;
+    const unchanged = previousOutput === draft.outputDigest;
+    const waiting = node.connectionCheckpoint;
+    const pending = assignment.connectionCheck && this.pendingConnectionFinding(assignment, commit);
+    const leadDeliveryId = pending?.id ?? (unchanged && waiting?.basisDigest === assignment.connectionCheck?.basisDigest
+      ? waiting?.leadDeliveryId : undefined);
+    if (leadDeliveryId) this.bindConnectionFinding(node, assignment, draft.outputDigest, leadDeliveryId);
+    else node.connectionCheckpoint = connection && unchanged
+      ? { basisDigest: connection.basisDigest, inputDigest: this.checkpointInputDigest(action.task, worker.id),
+        outputDigest: draft.outputDigest } : undefined;
+    if (draft.handoffNotesDigest) {
+      const notes = committedSource(worker.worktree, commit, 'RESEARCH.md');
+      const finding = this.checkpointFinding(notes);
+      let report = finding?.checkOutcome === undefined && (finding?.conclusion === 'refuted' || finding?.needsDecision === true)
+        ? finding : undefined;
+      // Alert the Lead about stalled prose without interpreting it as a mathematical claim.
+      if (!finding && connection && unchanged && previous &&
+          !this.dependencies(node.task).some(input => input.status === 'pending' && !advisory(input.task) &&
+            assessTaskResponsibility(input, worker, this.responsibility).kind === 'matches' &&
+            taskDependenciesReady(input.task, this.archive.tasks) && routeAllowsTask(input.task, this.archive.tasks, this.archive.groups)) &&
+          !this.archive.deliveries?.some(record => record.kind === 'research' && record.status !== 'superseded' &&
+            record.assignmentKey === assignmentDeliveryFile(assignment) &&
+            record.sourceDigest === ownedSourceDigest(this.input.state.problem, worker.worktree, commit))) {
+        report = { conclusion: 'inconclusive',
+          summary: 'This proof checkpoint repeated with an unchanged draft. Inspect the saved RESEARCH.md and decide how to proceed.' };
+      }
+      if (report) {
+        try {
+          taskChanges(this.input.state.problem, worker.worktree, commit, node.task, assignment);
+          await this.publishResearchFinding(worker, action, commit, { kind: 'event', value: { ...report, needsDecision: true } },
+            { artifacts, checkpoint: true, connectionOutputDigest: assignment.connectionCheck && draft.outputDigest });
+        } catch (error) {
+          if (!this.current(action)) return;
+          if (!(error instanceof Error) || !directDeliveryRejections.has(rejectionCode(error))) throw error;
+          this.rejectWorkerDelivery(worker, action, notes, error);
+        }
+        if (!this.current(action)) return;
+      }
+    }
     if (!artifacts.artifacts.length || this.archive.deliveries?.some(record => record.producer === worker.id &&
         record.taskId === action.task.id && record.taskDigest === action.assignment.taskDigest && record.commit === commit)) return;
     this.record(worker, action.task, 'progress', 'advisory',
@@ -407,7 +476,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       if (!worker || !assignment || checkpoint.basisDigest !== assignment.connectionCheck?.basisDigest ||
           !taskConnectionCheckCurrent(node.task, assignment, this.archive.tasks,
             { environmentDigest: this.input.state.environmentDigest, problemReceiptDigest: this.input.state.problem.receiptDigest }) ||
-          checkpoint.inputDigest !== this.checkpointInputDigest(node.task, worker.id) ||
+          checkpoint.inputDigest !== this.checkpointInputDigest(node.task, worker.id, !checkpoint.leadDeliveryId) ||
           this.checkpointOutputAdvanced(worker, node, { taskDigest: assignment.taskDigest, outputDigest: checkpoint.outputDigest }))
         node.connectionCheckpoint = undefined;
     }
@@ -527,7 +596,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     this.input.save();
     return true;
   }
-  protected async restoreResearchDraft(worker: ResearchWorker, node: TaskRecord): Promise<boolean> {
+  protected async restoreResearchDraft(worker: ResearchWorker, node: TaskRecord, refreshDependencies = false): Promise<boolean> {
     const draft = this.archive.researchDrafts?.[node.task.id], assignment = node.assignment!;
     if (!draft || assignment.workerId !== worker.id) return false;
     const problem = this.input.state.problem;
@@ -544,7 +613,8 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
         return false;
       }
       const saved = await this.inspectResearchDraft(node, assignment, draft);
-      if (!saved || !this.archive.tasks.includes(node) || node.assignment !== assignment || digest(node.task) !== draft.taskDigest ||
+      if (!saved || !this.archive.tasks.includes(node) || node.assignment !== assignment ||
+          this.archive.researchDrafts?.[node.task.id] !== draft || digest(node.task) !== draft.taskDigest ||
           node.status !== 'pending' || assignment.workerId !== worker.id || node.task.ownerId && node.task.ownerId !== worker.id ||
           !independentFeasibilityWorker(node, worker, this.archive.tasks, this.archive.groups) ||
           !taskCanStart(node.task, this.archive.tasks, this.archive.groups) || !routeAllowsTask(node.task, this.archive.tasks, this.archive.groups)) return false;
@@ -555,18 +625,18 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
         return false;
       }
       const canonicalChanged = ownedSourceDigest(problem, this.lead.worktree, this.archive.canonicalCommit!) !== saved.canonicalSourceDigest;
+      const reseed = canonicalChanged || refreshDependencies;
+      const hasDraftSources = draft.artifacts.artifacts.some(artifact => artifact.kind === 'owned-source');
+      let restoredAssignment = assignment;
       this.suspendResearchDrafts(worker, node.task.id);
-      if (canonicalChanged) {
-        if (draft.artifacts.artifacts.some(artifact => artifact.kind === 'owned-source'))
-          this.record(worker, node.task, 'progress', 'advisory',
-            'Saved research source draft retained separately while the canonical proof advanced; it requires independent checking.',
-            { commit: draft.commit, artifacts: draft.artifacts, remainingObligations: [node.task.id] });
+      if (reseed) {
         fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), '');
         const seedCommit = this.seed(worker, this.archive.canonicalCommit!, node.task);
         // A connection permission binds the old seed and dispatch, so the normal
         // dispatcher must rebuild it for the restored sources and new identity.
-        node.assignment = { ...assignment, assignmentId: crypto.randomUUID(), seedCommit,
+        restoredAssignment = { ...assignment, assignmentId: crypto.randomUUID(), seedCommit,
           canonicalCommit: this.archive.canonicalCommit, connectionCheck: undefined,
+          ...(refreshDependencies ? { researchBasis: undefined, canonicalProbe: undefined } : {}),
           ...(feasibility ? { feasibilityInputDigest } : {}) };
       } else {
         // Restore the validated snapshot so its frozen seed remains an ancestor.
@@ -576,13 +646,22 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       const notesFile = path.join(worker.worktree, 'RESEARCH.md');
       if (saved.notes === undefined) fs.rmSync(notesFile, { force: true });
       else fs.writeFileSync(notesFile, saved.notes);
-      const commit = commitSolverSources(problem, worker.worktree);
+      const seed = commitSolverSources(problem, worker.worktree);
       // A rebased assignment starts with the restored notes too. Otherwise the host's restoration
       // looks like a fresh notes write relative to an empty seed and can attribute inherited text.
-      if (canonicalChanged) node.assignment = { ...node.assignment!, seedCommit: commit };
-      this.preserveResearchDraft(worker, { kind: 'task', task: node.task, assignment: node.assignment! }, commit,
-        captureDeliveryArtifacts({ problem, worktree: worker.worktree, commit, assignment: node.assignment! }),
-        { handoffNotesDigest: saved.handoffNotesDigest });
+      if (reseed) restoredAssignment.seedCommit = seed;
+      const replay = reseed && !advisory(node.task)
+        ? this.replayDraftSources(worker, node.task, restoredAssignment, draft.seedCommit, draft.commit) : undefined;
+      const commit = replay?.commit ?? seed;
+      const artifacts = replay?.artifacts ?? captureDeliveryArtifacts({ problem, worktree: worker.worktree, commit, assignment: restoredAssignment });
+      node.assignment = restoredAssignment;
+      this.preserveResearchDraft(worker, { kind: 'task', task: node.task, assignment: restoredAssignment },
+        commit, artifacts, { handoffNotesDigest: saved.handoffNotesDigest });
+      if (reseed && !replay && hasDraftSources) {
+        this.record(worker, node.task, 'progress', 'advisory',
+          'Saved research source draft retained separately while the canonical proof advanced. Inspect the retained commit to recover useful edits.',
+          { commit: draft.commit, artifacts: draft.artifacts, remainingObligations: [node.task.id] });
+      }
       this.input.emit('research_draft_restored', { taskId: node.task.id, commit, canonicalChanged });
       this.input.save();
       return true;
@@ -592,6 +671,26 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
         reason: error instanceof Error ? error.message : 'math_research_draft_restore_failed' });
       return false;
     }
+  }
+  private replayDraftSources(worker: ResearchWorker, task: CooperativeTask, assignment: TaskAssignment, oldSeed: string, draft: string) {
+    const problem = this.input.state.problem;
+    const files = problem.ownedFiles.filter(file => file.endsWith('.lean') && !Object.hasOwn(problem.frozenFiles ?? {}, file))
+      .map(file => path.join(problem.projectRelative, file));
+    if (oldSeed === draft || !files.length) return;
+    const options = { maxBuffer: 16 * 1024 * 1024 };
+    const patch = mathGitResult(worker.worktree, ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--binary',
+      '--no-renames', '--src-prefix=a/', '--dst-prefix=b/', oldSeed, draft, '--', ...files], options);
+    if (patch.error || patch.status !== 0 || !patch.stdout.length) return;
+    const applied = mathGitResult(worker.worktree, ['apply', '--3way', '--whitespace=nowarn', '-'],
+      { ...options, input: patch.stdout });
+    if (!applied.error && applied.status === 0) {
+      try {
+        const commit = commitSolverSources(problem, worker.worktree);
+        taskChanges(problem, worker.worktree, commit, task, assignment);
+        return { commit, artifacts: captureDeliveryArtifacts({ problem, worktree: worker.worktree, commit, assignment }) };
+      } catch { /* An invalid draft can still be inspected at its original commit. */ }
+    }
+    git(worker.worktree, ['reset', '--hard', assignment.seedCommit]);
   }
   protected async researchCheckpoint(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>, commit: string, countStagnation: boolean) {
     if (isFeasibilityReview(action.task) && !this.node(action.task.id).nextCheckId) {
@@ -632,12 +731,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     }
     // A checkpoint is a partial publication, not a completed investigation. Only
     // explicit control JSON is eligible; ordinary prose and unfinished JSON remain drafts.
-    let finding: any;
-    try { finding = parseMathResponse(notes, 'math-result'); }
-    catch (error) {
-      if (!(error instanceof SyntaxError) && !(error instanceof Error &&
-          ['math_math-result_requires_one_block', 'math_response_invalid'].includes(error.message))) throw error;
-    }
+    const finding = this.checkpointFinding(notes);
     const inherited = git(worker.worktree, ['ls-tree', '--format=%(objectname)', action.assignment.seedCommit, '--', 'RESEARCH.md']);
     // Scoped checkOutcome has a separate completion protocol; never settle it merely
     // because the scheduler yielded its writer.
@@ -654,9 +748,18 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       this.rejected(action, UNCHANGED_RESEARCH_CHECKPOINT, commit);
     } else this.interrupted(worker, action);
   }
+  private checkpointFinding(notes: string): Record<string, unknown> | undefined {
+    try { return parseMathResponse(notes, 'math-result') as Record<string, unknown>; }
+    catch (error) {
+      if (!(error instanceof SyntaxError) && !(error instanceof Error &&
+          ['math_math-result_requires_one_block', 'math_response_invalid'].includes(error.message))) throw error;
+    }
+  }
+
   protected async publishResearchFinding(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>, commit: string,
-    submission: ResearchSubmission, options: Partial<DeliveryRecord> & { checkpoint?: boolean } = {}, sources?: unknown, probes?: unknown) {
-    const { checkpoint = false, ...deliveryOptions } = options;
+    submission: ResearchSubmission, options: Partial<DeliveryRecord> & { checkpoint?: boolean; connectionOutputDigest?: string } = {},
+    sources?: unknown, probes?: unknown) {
+    const { checkpoint = false, connectionOutputDigest, ...deliveryOptions } = options;
     // A publication belongs to the inputs dispatched to this writer, even if its live
     // assignment gains a newer context while the asynchronous checks are running.
     const assignment = structuredClone(action.assignment), basis = assignment.researchBasis;
@@ -702,29 +805,89 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
         worktree: fixedWorker.worktree, commit: fixedCommit, assignment });
       artifacts = { ...artifacts, reportedChecks: validateDeliveryArtifactClaims(finding, artifacts) };
       const sourceDigest = ownedSourceDigest(this.input.state.problem, fixedWorker.worktree, fixedCommit);
-      const findingKey = checkpoint ? canonicalMathJson(finding) : '';
-      const artifactKey = checkpoint ? checkpointCandidate('', artifacts).digest : '';
-      const basisKey = checkpoint ? canonicalMathJson(basis ?? assignmentKey) : '';
+      const findingKey = canonicalMathJson(finding);
+      const checkpointFindingKey = canonicalMathJson({ ...finding, needsDecision: undefined });
+      const evidenceKey = (manifest: DeliveryArtifactManifest) => canonicalMathJson([...new Set(manifest.artifacts
+        .map(artifact => canonicalMathJson([artifact.kind, artifact.file, artifact.sha256])))].sort());
+      const artifactKey = evidenceKey(artifacts);
+      const basisKey = canonicalMathJson(basis ?? assignmentKey);
       // Compare immutable content and dispatch inputs, not Git metadata or note offsets.
       // The existing deliveries persist this identity across task switches and restarts.
-      const alreadyPublished = () => checkpoint && (this.archive.deliveries ?? []).some(record => {
+      const matchingPublication = () => (this.archive.deliveries ?? []).find(record => {
         if (record.kind !== 'research' || record.status === 'superseded' || record.producer !== worker.id ||
             record.taskId !== action.task.id || record.taskDigest !== assignment.taskDigest || record.sourceDigest !== sourceDigest ||
+            !checkpoint && record.assignmentKey !== assignmentKey ||
             record.artifacts?.problemReceiptDigest !== problemReceiptDigest ||
             canonicalMathJson(record.researchRecord?.basis ?? record.assignmentKey ?? null) !== basisKey ||
-            checkpointCandidate('', record.artifacts).digest !== artifactKey) return false;
+            evidenceKey(record.artifacts) !== artifactKey) return false;
         const previous = deliveryFinding(record);
-        try { return previous !== undefined && canonicalMathJson(JSON.parse(previous)) === findingKey; }
+        try {
+          if (previous === undefined) return false;
+          const parsed = JSON.parse(previous);
+          if (canonicalMathJson(parsed) === findingKey) return true;
+          // Checkpoint intake can promote an identical finding to a decision request.
+          // Preserve the original bytes and any answer attached to them.
+          const addedByCheckpoint = checkpoint && finding.needsDecision === true &&
+            (parsed.needsDecision === undefined || parsed.needsDecision === false);
+          const alreadyRequested = parsed.needsDecision === true &&
+            (finding.needsDecision === undefined || finding.needsDecision === false);
+          return (addedByCheckpoint || alreadyRequested) &&
+            canonicalMathJson({ ...parsed, needsDecision: undefined }) === checkpointFindingKey;
+        }
         catch { return false; }
       });
-      if (alreadyPublished()) return;
+      const completeResearch = (record: DeliveryRecord) => {
+        node.finding = record.finding; this.moveTask(node, 'completed', 'research-completed'); node.feedback = undefined;
+        node.researchCompletion = record.researchRecord;
+        if (this.archive.unchangedResearch) delete this.archive.unchangedResearch[node.task.id];
+        if (this.archive.researchCheckpoints) delete this.archive.researchCheckpoints[node.task.id];
+      };
+      const reusePublication = () => {
+        const record = matchingPublication();
+        if (!record) return;
+        if (checkpoint) {
+          let changed = connectionOutputDigest !== undefined &&
+            this.bindConnectionFinding(node, assignment, connectionOutputDigest, record.id);
+          if (finding.needsDecision === true && !researchFindingRequestsDecision(record) &&
+              !this.archive.researchDecisions?.some(decision => researchDecisionMatches(record, decision))) {
+            const alreadyPending = record.lemmaRequests?.some(task => !this.node(task.id));
+            record.leadDecisionRequested = true;
+            if (!alreadyPending) this.wakeLead('research-finding');
+            changed = true;
+          }
+          if (changed) this.changed();
+        } else {
+          const { submissionId } = deliveryOptions;
+          if (submissionId !== undefined) {
+            if (record.submissionId === undefined) record.submissionId = submissionId;
+            else if (record.submissionId !== submissionId && !record.submissionAliases?.includes(submissionId))
+              record.submissionAliases = [...(record.submissionAliases ?? []), submissionId];
+          }
+          if (complete) {
+            record.researchRecord = settleResearch({ id: record.id, assignment, basis,
+              commit: record.commit!, finding: deliveryFinding(record)!, complete });
+            // An advisory challenge does not count as a final refutation until completion.
+            if (!finding.blockers && finding.conclusion === 'refuted')
+              this.reportBlockers(node.task, [{ mechanism: 'reported-local-refutation',
+                scope: 'assigned-local-inference', evidenceRefs: details.evidenceRefs }]);
+            completeResearch(record);
+            this.input.emit('research_delivered', { taskId: node.task.id, conclusion: finding.conclusion, complete });
+          }
+          this.resolveDeliveryReceipts(worker, action, finding.replacesReceipt, complete);
+          this.changed();
+        }
+        return record;
+      };
+      const previous = reusePublication();
+      if (previous) return previous;
       const artifactWarning = diagnoseUnbackedLeanClaims(finding, artifacts);
       const knowledge = this.captureKnowledgeUseCheck(fixedWorker, node.task, fixedCommit);
       const knowledgeUses = await checkKnowledgeApplications(knowledge.uses, knowledge.input);
       if (!this.current(action) || this.node(action.task.id) !== node || worker.id !== assignment.workerId ||
           assignmentDeliveryFile(action.assignment) !== assignmentKey || environmentDigest !== this.input.state.environmentDigest ||
           problemReceiptDigest !== this.input.state.problem.receiptDigest) return;
-      if (alreadyPublished()) return;
+      const concurrent = reusePublication();
+      if (concurrent) return concurrent;
       if (details.mathematicalGap) bindMathematicalGap(details.mathematicalGap, node.task, this.archive,
         { problemReceiptDigest, environmentDigest });
       const checkOutcomeScope = details.checkOutcome && bindCheckOutcome(details.checkOutcome, node.task, assignment,
@@ -746,26 +909,26 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
         mechanism: 'reported-local-refutation', scope: 'assigned-local-inference', evidenceRefs: details.evidenceRefs,
       }] : undefined));
       (this.archive.deliveries ??= []).push(record);
-      if (complete) {
-        node.finding = text; this.moveTask(node, 'completed', 'research-completed'); node.feedback = undefined;
-        node.researchCompletion = record.researchRecord;
-        if (this.archive.unchangedResearch) delete this.archive.unchangedResearch[node.task.id];
-        if (this.archive.researchCheckpoints) delete this.archive.researchCheckpoints[node.task.id];
+      if (connectionOutputDigest !== undefined)
+        this.bindConnectionFinding(node, assignment, connectionOutputDigest, record.id);
+      if (complete) completeResearch(record);
+      if (finding.needsDecision === true || finding.conclusion === 'refuted' || lemmaRequests.length || artifactWarning) {
+        this.wakeLead('research-finding');
       }
-      if (finding.needsDecision === true || finding.conclusion === 'refuted' || lemmaRequests.length || artifactWarning) this.wakeLead('research-finding');
       this.resolveDeliveryReceipts(worker, action, finding.replacesReceipt, complete);
       this.publishDeliveryRecord(record);
       this.observeKnowledgeUses(node.task, fixedCommit, knowledgeUses, knowledge.rejected);
       this.input.emit('research_delivered', { taskId: node.task.id, conclusion: finding.conclusion, complete });
+      return record;
     };
-    if (submission.kind === 'notes') await publish(worker, commit);
+    if (checkpoint || submission.kind === 'notes') return publish(worker, commit);
     else {
       // Explicit events leave the writer's live files and Git index untouched.
-      await withSolverWorktree(worker.worktree, commit, async checkout => {
+      return withSolverWorktree(worker.worktree, commit, async checkout => {
         for (const [file, source] of sourceSnapshot ?? [])
           fs.writeFileSync(path.join(checkout, this.input.state.problem.projectRelative, file), source);
         fs.writeFileSync(path.join(checkout, 'RESEARCH.md'), researchPublicationNotes(finding, probes));
-        await publish({ ...worker, worktree: checkout }, commitSolverSources(this.input.state.problem, checkout));
+        return publish({ ...worker, worktree: checkout }, commitSolverSources(this.input.state.problem, checkout));
       });
     }
   }
@@ -804,23 +967,31 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
   protected assignmentConditions(task: CooperativeTask, assignment?: TaskAssignment,
     tasks: readonly TaskRecord[] = this.archive.tasks, worktree = this.lead.worktree): readonly CooperativeTask[] {
     const dependencies = this.dependencies(task, tasks);
+    const readInput = (commit: string) => (dependency: CooperativeTask) =>
+      committedSource(worktree, commit, `${this.input.state.problem.projectRelative}/${dependency.proofPath}`);
     if (!assignment?.connectionCheck) {
       if (!task.conditional) return [];
       if (!assignment) return dependencies.filter(node => assumableLemma(node.task) && node.status !== 'integrated').map(node => node.task);
       if (assignment.taskId !== task.id || assignment.taskDigest !== digest(task)) throw new Error('math_task_condition_version_invalid');
       // Explicit conditional contracts also authorize only their frozen, exact dispatch inputs.
-      return (assignment.dependencies ?? []).map(reference => {
+      const inputs = (assignment.dependencies ?? []).filter(reference => {
         const input = tasks.find(node => node.task.id === reference.taskId);
         if (!input || digest(input.task) !== reference.taskDigest) throw new Error('math_task_condition_version_invalid');
-        return input.task;
-      }).filter(input => assumableLemma(input));
+        return assumableLemma(input.task);
+      });
+      // Read the frozen canonical base as well as the scoped seed so an unaccepted draft
+      // declaration alone does not remove an assumption. Older records may lack that base.
+      const canonical = assignment.canonicalCommit;
+      const unresolved = canonical ? inputs.filter(reference =>
+        taskInputsMissingFromSeed([reference], tasks, readInput(canonical)).length ||
+        taskInputsMissingFromSeed([reference], tasks, readInput(assignment.seedCommit)).length) : inputs;
+      return unresolved.map(reference => tasks.find(node => node.task.id === reference.taskId)!.task);
     }
     if (!taskConnectionCheckCurrent(task, assignment, tasks)) throw new Error('math_task_condition_version_invalid');
     const check = assignment.connectionCheck;
     // Historical dispatches predate assumedInputs. Reconstruct only from their immutable seed,
     // never from a dependency's integration status at the time this delivery is checked.
-    const assumed = check.assumedInputs ?? taskInputsMissingFromSeed(check.inputs, tasks, dependency =>
-      committedSource(worktree, assignment.seedCommit, `${this.input.state.problem.projectRelative}/${dependency.proofPath}`));
+    const assumed = check.assumedInputs ?? taskInputsMissingFromSeed(check.inputs, tasks, readInput(assignment.seedCommit));
     return assumed.map(reference => tasks.find(node => node.task.id === reference.taskId)!.task);
   }
   protected async check(task: CooperativeTask, assignment: TaskAssignment, worktree: string, commit: string,

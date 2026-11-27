@@ -117,6 +117,20 @@ export function taskConnectionCheckCurrent(task: CooperativeTask, assignment: Ta
     });
 }
 
+/** An integrated exact input earns a new seed on redispatch, without revoking the live receipt. */
+export function taskConnectionNeedsRefresh(task: CooperativeTask, assignment: TaskAssignment, tasks: readonly TaskRecord[],
+  identity: ConnectionIdentity, readSeedSource: (task: CooperativeTask) => string,
+  readCanonicalSource: (task: CooperativeTask) => string): boolean {
+  const check = assignment.connectionCheck;
+  if (check ? !taskConnectionCheckCurrent(task, assignment, tasks, identity) :
+      !task.conditional || assignment.taskId !== task.id || assignment.taskDigest !== taskVersion(task)) return false;
+  const inputs = check ? check.assumedInputs ?? check.inputs : assignment.dependencies ?? [];
+  const candidates = inputs.filter(reference => tasks.some(node => node.task.id === reference.taskId &&
+    node.status === 'integrated' && !node.pendingValidation && assumableLemma(node.task) && taskVersion(node.task) === reference.taskDigest));
+  const assumed = check?.assumedInputs ? candidates : taskInputsMissingFromSeed(candidates, tasks, readSeedSource);
+  return assumed.length > taskInputsMissingFromSeed(assumed, tasks, readCanonicalSource).length;
+}
+
 /** Lifetime attempt counts include obsolete contracts and must not suppress their first application check. */
 export function freshTaskConnection(node: TaskRecord, tasks: readonly TaskRecord[], groups?: readonly RouteRecord[]): boolean {
   return !node.proof && !node.assignment && (Boolean(node.task.conditional) || automaticTaskConnection(node.task, tasks, groups));

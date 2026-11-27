@@ -112,6 +112,8 @@ export function reviewVerdict(value: unknown, errorCode: string): 'accepted' | '
 /** One versioned record for hints, conditional sketches, proofs, reviews and failures. */
 export type DeliveryRecord = {
   id: string; submissionId?: string; assignmentKey?: string; statementReviewId?: string; producer: string; taskId?: string; taskDigest?: string; groupId?: string;
+  /** Additional submission IDs coalesced into this record within the same assignment. */
+  submissionAliases?: readonly string[];
   kind: 'progress' | 'research' | 'proof' | 'review' | 'backtranslation' | 'statement-review' | 'failure';
   status: 'advisory' | 'conditional' | 'verified' | 'failed' | 'superseded' | 'accepted' | 'changes_requested';
   statement: string; premises: readonly string[];
@@ -123,6 +125,8 @@ export type DeliveryRecord = {
   findingDigest?: string;
   /** Each publication retains its own complete finding, including during an active proof. */
   finding?: string;
+  /** A later handoff requested a Lead decision on this same immutable finding. */
+  leadDecisionRequested?: true;
   researchRecord?: ResearchRecord;
   knowledgeUses?: readonly KnowledgeUse[];
   mathematicalGap?: MathematicalGap;
@@ -143,6 +147,14 @@ export function deliveryFinding(record: DeliveryRecord, nodeFinding?: string): s
   const finding = record.finding ?? nodeFinding;
   return record.kind === 'research' && typeof finding === 'string' && record.findingDigest === mathDigest(finding)
     ? finding : undefined;
+}
+
+export function researchFindingRequestsDecision(record: DeliveryRecord, nodeFinding?: string): boolean {
+  if (record.leadDecisionRequested) return true;
+  try {
+    const finding = JSON.parse(deliveryFinding(record, nodeFinding) ?? 'null');
+    return finding?.needsDecision === true || finding?.conclusion === 'refuted';
+  } catch { return false; }
 }
 
 export function deliveryDetails(value: any): Pick<DeliveryRecord, 'summary' | 'evidenceRefs'> &

@@ -521,7 +521,8 @@ export abstract class CooperationInputs extends CooperationPlanning {
       return;
     }
     // Legacy automatic ids already bind the assignment; unscoped old ids cannot identify a new seed.
-    const duplicate = this.archive.deliveries?.find(record => record.producer === worker.id && record.submissionId === value.id &&
+    const duplicate = this.archive.deliveries?.find(record => record.producer === worker.id &&
+      (record.submissionId === value.id || record.submissionAliases?.includes(value.id)) &&
       record.taskId === action.task.id && record.taskDigest === action.assignment.taskDigest &&
       (record.assignmentKey === assignmentKey || record.assignmentKey === undefined && scoped && value.id === automaticId));
     if (duplicate) {
