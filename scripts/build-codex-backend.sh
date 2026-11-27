@@ -108,14 +108,33 @@ if ! git -C "$source_dir" apply --reverse --check "$patch_file" 2>/dev/null; the
 fi
 # Build precisely the reviewable patch. Extra edits are preserved and rejected,
 # so re-running this script never resets a developer's source worktree.
-git -C "$source_dir" diff --binary --no-ext-diff HEAD -- . ':(exclude)codex-rs/Cargo.lock' > "$output_dir/agent-control-source.patch"
-git -C "$source_dir" diff --binary --no-ext-diff HEAD -- codex-rs/Cargo.lock > "$output_dir/derived-lock-source.patch"
+# Match the checked-in patch's Git index abbreviation width so shallow clones
+# (--depth 1 in CI/Docker) do not differ from fuller clones under core.abbrev=auto.
+patch_abbrev() {
+  python3 - "$1" <<'PY'
+import re, sys
+lengths = set()
+with open(sys.argv[1], encoding="utf-8", errors="surrogateescape") as stream:
+    for line in stream:
+        match = re.match(r"^index ([0-9a-f]+)\.\.([0-9a-f]+)(?: [0-7]+)?\r?$", line)
+        if match:
+            lengths.add(len(match.group(1)))
+            lengths.add(len(match.group(2)))
+if not lengths:
+    raise SystemExit("Checked-in patch is missing a Git index header.")
+print(min(lengths))
+PY
+}
+agent_patch_abbrev=$(patch_abbrev "$patch_file")
+lock_patch_abbrev=$(patch_abbrev "$lock_patch_file")
+git -C "$source_dir" diff --binary --no-ext-diff --abbrev="$agent_patch_abbrev" HEAD -- . ':(exclude)codex-rs/Cargo.lock' > "$output_dir/agent-control-source.patch"
+git -C "$source_dir" diff --binary --no-ext-diff --abbrev="$lock_patch_abbrev" HEAD -- codex-rs/Cargo.lock > "$output_dir/derived-lock-source.patch"
 if ! cmp -s "$patch_file" "$output_dir/agent-control-source.patch" ||
    ! cmp -s "$lock_patch_file" "$output_dir/derived-lock-source.patch" ||
    [[ -n $(git -C "$source_dir" ls-files --others --exclude-standard) ]]; then
   echo 'Source worktree differs from the checked-in build patches.' >&2; exit 1
 fi
-git -C "$source_dir" diff --binary --no-ext-diff HEAD > "$output_dir/source.patch"
+git -C "$source_dir" diff --binary --no-ext-diff --abbrev="$agent_patch_abbrev" HEAD > "$output_dir/source.patch"
 
 export CARGO_TARGET_DIR=$output_dir/target
 export CARGO_PROFILE_DEV_DEBUG=$(pin devDebug)
