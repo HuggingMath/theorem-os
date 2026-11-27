@@ -417,7 +417,7 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       if (zoom === 'fit') { state.fitted = true; fit(true); }
       else {
         state.fitted = false;
-        state.zoom = Math.max(.2, Math.min(2.5, Math.round((zoom === 'reset' ? 1 : state.zoom * (zoom === 'in' ? 1.2 : 1 / 1.2)) * 100) / 100));
+        state.zoom = Math.max(.2, Math.min(2.5, Math.round((zoom === 'reset' ? 1 : state.zoom + (zoom === 'in' ? .1 : -.1)) * 100) / 100));
         state.left = Math.max(0, center.x * state.zoom - viewport.clientWidth / 2);
         state.top = Math.max(0, center.y * state.zoom - viewport.clientHeight / 2);
         draw();
@@ -479,7 +479,7 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
         const center = { x: (viewport.scrollLeft + viewport.clientWidth / 2) / state.zoom, y: (viewport.scrollTop + viewport.clientHeight / 2) / state.zoom };
         if (event.key === '+' || event.key === '=' || event.key === '-' || event.key === '0') {
           event.preventDefault(); state.fitted = false;
-          state.zoom = event.key === '0' ? 1 : Math.max(.2, Math.min(2.5, Math.round(state.zoom * (event.key === '-' ? 1 / 1.2 : 1.2) * 100) / 100));
+          state.zoom = event.key === '0' ? 1 : Math.max(.2, Math.min(2.5, Math.round((state.zoom + (event.key === '-' ? -.1 : .1)) * 100) / 100));
           state.left = Math.max(0, center.x * state.zoom - viewport.clientWidth / 2);
           state.top = Math.max(0, center.y * state.zoom - viewport.clientHeight / 2);
           draw();
