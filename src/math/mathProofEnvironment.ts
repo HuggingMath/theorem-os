@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { closeMathProcess } from './mathProcess';
+import { closeMathProcess, trackMathProcessSession } from './mathProcess';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import net from 'node:net';
@@ -465,6 +465,7 @@ async function prepareEnvironment(
         stdio: ['pipe', 'pipe', 'pipe'],
       }
     );
+    trackMathProcessSession(child);
     // Heartbeats keep long image builds visible; stdout keeps draining shutdown diagnostics without retaining them.
     const heartbeat = setInterval(() => report(imagePhase, { cacheHit: Boolean(cached) }), 5000);
     child.stderr.resume();

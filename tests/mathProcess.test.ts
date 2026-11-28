@@ -122,6 +122,19 @@ describe('process lifecycle and bounded output', () => {
     } finally { try { process.kill(pid, 'SIGKILL'); } catch { /* reaped */ } }
   });
 
+  it.skipIf(process.platform !== 'linux')('does not sweep a session first tracked after its leader exited', async () => {
+    // Without an observed exit time, a live member may belong to a later session that reused the sid.
+    const child = spawn('/bin/bash', ['-c', 'set -m; sleep 30 >/dev/null 2>&1 & echo $!; exit 0'],
+      { detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    const pid = await new Promise<number>(resolve => child.stdout!.once('data', chunk => resolve(Number(String(chunk).trim()))));
+    try {
+      await new Promise(resolve => child.once('close', resolve));
+      expect(alive(pid)).toBe(true);
+      expect(await confirmMathProcessStopped(child, 0)).toEqual({ status: 'stopped' });
+      expect(alive(pid)).toBe(true);
+    } finally { try { process.kill(pid, 'SIGKILL'); } catch { /* reaped */ } }
+  });
+
   it('does not report a missing executable as started', async () => {
     const result = await runMathProcess('/nonexistent/math-command', [], { cwd: os.tmpdir(), timeoutMs: 1000 });
     expect(result).toMatchObject({ started: false, errorCode: 'ENOENT', timedOut: false });

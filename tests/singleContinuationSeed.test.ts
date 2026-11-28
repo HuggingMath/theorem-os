@@ -12,6 +12,7 @@ import { freezeContinuationInput, readContinuationContents, readContinuationPage
 import { readDeclarationArtifacts } from '../src/solver/declarationArtifacts';
 import { committedSource, commitSolverSources, git } from '../src/solver/problem';
 import { taskVersion, type CooperativeTask } from '../src/solver/tasks';
+import { withVerificationCheckpoints } from '../src/solver/verificationCheckpoint';
 import { localExample, solverState } from './helpers/solver';
 import { failedBatch, receiptBatch } from './helpers/verifier';
 import { readMathAgentSkill } from '../src/runtime/codexSkills';
@@ -148,6 +149,45 @@ describe('single researcher continuation', () => {
     expect(host.verify.mock.calls.map(([request]) => request.items.map(item => item.theoremName)))
       .toEqual([['Tutorial.rejected_helper', 'Tutorial.saved_helper'], ['Tutorial.rejected_helper'], ['Tutorial.saved_helper']]);
     expect(fs.readFileSync(path.join(f.worktree, f.problem.projectRelative, 'Submission.lean'), 'utf8')).toBe(source);
+  });
+
+  it('retries helpers one at a time when their shared batch exceeds the verification deadline', async () => {
+    const f = fixture(); addHistoricalHelper(f, 'other_helper');
+    host.verify.mockImplementationOnce((request: MathematicsVerifierBatchRequest) => {
+      const batch = receiptBatch(request, { sessionId: 'slow-check', receiptId: index => `slow-${index}` });
+      return { ...batch, status: 'blocked', results: batch.results.map(result =>
+        ({ ...result, status: 'blocked', error: 'Formal verification batch deadline exceeded.' })) };
+    });
+    expect(await f.seed()).toMatchObject({ stage: 'complete', checked: ['other_helper', 'saved'], failed: [] });
+    expect(host.verify.mock.calls.map(([request]) => request.items.map(item => item.theoremName)))
+      .toEqual([['Tutorial.other_helper', 'Tutorial.saved_helper'], ['Tutorial.other_helper'], ['Tutorial.saved_helper']]);
+  });
+
+  it('retries helpers one at a time when their shared batch reaches a verification checkpoint', async () => {
+    const f = fixture(); addHistoricalHelper(f, 'other_helper');
+    host.verify.mockImplementationOnce((request: MathematicsVerifierBatchRequest) => {
+      const batch = receiptBatch(request, { sessionId: 'slow-check', receiptId: index => `slow-${index}` });
+      return { ...batch, status: 'blocked', results: batch.results.map(result =>
+        ({ ...result, status: 'blocked', error: 'Lean verification timed out.' })) };
+    });
+    const events: string[] = [];
+    const report = await withVerificationCheckpoints({ environmentDigest: mathDigest('env'), problemReceiptDigest: mathDigest('problem'),
+      checkpoints: [], save: () => {}, emit: event => { events.push(event); } },
+    () => seedSingleSolverContinuation({ ...f.options, timeoutMs: 60_000 }));
+    expect(report).toMatchObject({ stage: 'complete', checked: ['other_helper', 'saved'], failed: [] });
+    expect(events.filter(event => event === 'verification_checkpoint')).toHaveLength(1);
+    expect(host.verify).toHaveBeenCalledTimes(3);
+  });
+
+  it('records each helper failure when an operational batch failure repeats in isolation', async () => {
+    const f = fixture(); addHistoricalHelper(f, 'other_helper');
+    host.verify.mockImplementation((request: MathematicsVerifierBatchRequest) => {
+      const batch = receiptBatch(request, { sessionId: 'down', receiptId: index => `down-${index}` });
+      return { ...batch, status: 'blocked', results: batch.results.map(result =>
+        ({ ...result, status: 'blocked', error: 'Lean worker crashed.' })) };
+    });
+    expect(await f.seed()).toMatchObject({ stage: 'complete', checked: [], failed: ['other_helper', 'saved'] });
+    expect(host.verify).toHaveBeenCalledTimes(3);
   });
 
   it('does not reinterpret a historical conditional helper as an unconditional candidate', async () => {
