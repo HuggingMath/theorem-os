@@ -5,7 +5,8 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { closeMathProcess, confirmMathProcessStopped, limitMathOutput, MATH_PROCESS_OUTPUT_LIMIT, runMathProcess, runLeanProcess } from '../src/math/mathProcess';
+import { closeMathProcess, confirmMathProcessStopped, limitMathOutput, MATH_PROCESS_OUTPUT_LIMIT, runMathProcess, runLeanProcess,
+  trackMathProcessSession } from '../src/math/mathProcess';
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -83,6 +84,44 @@ describe('process lifecycle and bounded output', () => {
       expect(await confirmMathProcessStopped(child, 0)).toEqual({ status: 'stopped' });
     } finally { kill.mockRestore(); }
   });
+  // Codex starts sandbox helpers in their own process groups inside its session.
+  // `set -m` gives the background sleep its own group, so a group signal misses it.
+  const spawnSessionWithStrayGroup = (keepLeader: boolean) => {
+    const child = spawn('/bin/bash', ['-c', `set -m; sleep 30 >/dev/null 2>&1 & echo $!; ${keepLeader ? 'sleep 30' : 'exit 0'}`],
+      { detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    trackMathProcessSession(child);
+    const stray = new Promise<number>(resolve => child.stdout!.once('data', chunk => resolve(Number(String(chunk).trim()))));
+    return { child, stray };
+  };
+  const alive = (pid: number) => {
+    try { return !['Z', 'X'].includes(fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1][0]); } catch { return false; }
+  };
+  const pgid = (pid: number) => Number(fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1].split(' ')[2]);
+
+  it.skipIf(process.platform !== 'linux')('reaps session members in other process groups before confirming stop', async () => {
+    const { child, stray } = spawnSessionWithStrayGroup(false);
+    const pid = await stray;
+    try {
+      await new Promise(resolve => child.once('close', resolve));
+      expect(alive(pid)).toBe(true);
+      expect(pgid(pid)).not.toBe(child.pid);
+      expect(() => process.kill(-child.pid!, 0)).toThrow();
+      expect(await confirmMathProcessStopped(child)).toEqual({ status: 'stopped' });
+      expect(alive(pid)).toBe(false);
+    } finally { try { process.kill(pid, 'SIGKILL'); } catch { /* reaped */ } }
+  });
+
+  it.skipIf(process.platform !== 'linux')('kills session members left behind when closing a live writer', async () => {
+    const { child, stray } = spawnSessionWithStrayGroup(true);
+    const pid = await stray;
+    try {
+      await closeMathProcess(child, false, 100);
+      for (let i = 0; i < 40 && alive(pid); i++) await new Promise(resolve => setTimeout(resolve, 25));
+      expect(alive(pid)).toBe(false);
+      expect(await confirmMathProcessStopped(child, 0)).toEqual({ status: 'stopped' });
+    } finally { try { process.kill(pid, 'SIGKILL'); } catch { /* reaped */ } }
+  });
+
   it('does not report a missing executable as started', async () => {
     const result = await runMathProcess('/nonexistent/math-command', [], { cwd: os.tmpdir(), timeoutMs: 1000 });
     expect(result).toMatchObject({ started: false, errorCode: 'ENOENT', timedOut: false });

@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { closeMathProcess, confirmMathProcessStopped } from '../math/mathProcess';
+import { closeMathProcess, confirmMathProcessStopped, trackMathProcessSession } from '../math/mathProcess';
 import { readMathText, writeMathFrozen } from '../math/mathRuntimeIo';
 import { scheduleMathTimeout } from '../math/mathTimers';
 import { assertMathCanonicalPath } from '../math/paths';
@@ -107,7 +107,7 @@ export async function createCliMathSession(options: MathAgentOptions): Promise<M
         let owned: ChildProcess;
         try { owned = child = spawn(invocation.command, invocation.args, { cwd: workspace, env: invocation.env,
           detached: process.platform !== 'win32',
-          stdio: ['pipe', 'pipe', 'pipe', ...('inheritedFds' in invocation ? invocation.inheritedFds ?? [] : [])] }); }
+          stdio: ['pipe', 'pipe', 'pipe', ...('inheritedFds' in invocation ? invocation.inheritedFds ?? [] : [])] }); trackMathProcessSession(owned); }
         catch {
           lastError = 'math_cli_process_start_failed'; diagnostic = { code: 'other' };
           observe(() => options.onUsageIncomplete?.()); return 'failed';

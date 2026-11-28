@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { Readable } from 'node:stream';
@@ -70,13 +71,77 @@ export const stopMathProcess = (child: ChildProcess, signal: NodeJS.Signals): vo
 
 export type MathProcessStopReceipt = Readonly<{ status: 'stopped' } | { status: 'unconfirmed';
   reason: 'process-exit-unconfirmed' | 'process-identity-unavailable' | 'unsupported-platform' |
-    'process-group-active' | 'process-group-unavailable' }>;
+    'process-group-active' | 'process-group-unavailable' | 'process-session-active' }>;
+
+const sessionExitTicks = new WeakMap<ChildProcess, number>();
+const childExited = (child: ChildProcess) => typeof child.exitCode === 'number' || typeof child.signalCode === 'string';
+const noteSessionExit = (child: ChildProcess): void => {
+  if (sessionExitTicks.has(child)) return;
+  // /proc/uptime and /proc/<pid>/stat starttime share the boot clock; Linux USER_HZ is 100.
+  // Parse centiseconds as digits: 329484.29 * 100 is 32948428.99... in floating point.
+  let uptime: RegExpExecArray | null = null;
+  try { uptime = /^(\d+)\.(\d\d)\s/u.exec(fs.readFileSync('/proc/uptime', 'utf8')); }
+  catch { /* Without a clock reading no member can prove session continuity. */ }
+  if (uptime) sessionExitTicks.set(child, Number(uptime[1]) * 100 + Number(uptime[2]));
+};
+
+/** Record when an owned detached child exits so a later session sweep can prove its session id was not reused. */
+export function trackMathProcessSession(child: ChildProcess): void {
+  if (process.platform !== 'linux' || sessionExitTicks.has(child)) return;
+  if (childExited(child)) noteSessionExit(child);
+  else if (typeof child.once === 'function') child.once('exit', () => noteSessionExit(child));
+}
+
+type SessionMember = { pid: number; start: string };
+const readSessionMember = (pid: string, sid: number) => {
+  let stat: string;
+  try { stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); } catch { return undefined; }
+  const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+  return Number(fields[3]) === sid ? { state: fields[0], ppid: Number(fields[1]), start: fields[19] } : undefined;
+};
+
+/** Live members of a detached child's session that outlived it.
+ * Codex starts sandbox helpers in their own process groups, so a group signal
+ * misses them; a bwrap child stranded before PR_SET_PDEATHSIG then waits forever.
+ * Linux keeps a session id reserved while any member lives, so a member started
+ * no later than the observed leader exit proves the session was never reused. */
+function leakedSessionMembers(child: ChildProcess): SessionMember[] {
+  const sid = child.pid;
+  if (process.platform !== 'linux' || !sid || !childExited(child)) return [];
+  // A live /proc entry is a recycled pid, except our own leader before the runtime reaps it.
+  const leader = readSessionMember(String(sid), sid);
+  if (leader ? leader.state !== 'Z' || leader.ppid !== process.pid : fs.existsSync(`/proc/${sid}`)) return [];
+  noteSessionExit(child);
+  const exitTicks = sessionExitTicks.get(child);
+  if (exitTicks === undefined) return [];
+  let entries: string[];
+  try { entries = fs.readdirSync('/proc'); } catch { return []; }
+  const members: SessionMember[] = [];
+  let continuous = false;
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    const member = readSessionMember(entry, sid);
+    if (!member) continue;
+    if (Number(member.start) <= exitTicks) continuous = true;
+    if (member.state !== 'Z' && member.state !== 'X') members.push({ pid: Number(entry), start: member.start });
+  }
+  return continuous ? members : [];
+}
+
+const killSessionMembers = (child: ChildProcess, members: readonly SessionMember[]): void => {
+  for (const member of members) {
+    // Re-read identity right before the signal so a recycled pid is never hit.
+    if (readSessionMember(String(member.pid), child.pid!)?.start !== member.start) continue;
+    try { process.kill(member.pid, 'SIGKILL'); } catch { /* Already exited. */ }
+  }
+};
 
 /** A bounded close is cleanup, not proof that the owned writer process group has exited. */
 export async function confirmMathProcessStopped(child: ChildProcess, timeoutMs = 1000): Promise<MathProcessStopReceipt> {
   if (process.platform === 'win32') return { status: 'unconfirmed', reason: 'unsupported-platform' };
   if (!Number.isSafeInteger(child.pid) || child.pid! <= 0)
     return { status: 'unconfirmed', reason: 'process-identity-unavailable' };
+  trackMathProcessSession(child);
   const deadline = Date.now() + Math.max(0, timeoutMs);
   for (;;) {
     const exited = typeof child.exitCode === 'number' || typeof child.signalCode === 'string';
@@ -87,22 +152,26 @@ export async function confirmMathProcessStopped(child: ChildProcess, timeoutMs =
         return { status: 'unconfirmed', reason: 'process-group-unavailable' };
       group = 'absent';
     }
-    if (exited && group === 'absent') return { status: 'stopped' };
+    const members = exited && group === 'absent' ? leakedSessionMembers(child) : [];
+    if (exited && group === 'absent' && !members.length) return { status: 'stopped' };
+    killSessionMembers(child, members);
     const remaining = deadline - Date.now();
     if (remaining <= 0) return { status: 'unconfirmed',
-      reason: !exited ? 'process-exit-unconfirmed' : 'process-group-active' };
+      reason: !exited ? 'process-exit-unconfirmed' : group === 'active' ? 'process-group-active' : 'process-session-active' };
     await delay(Math.min(25, remaining));
   }
 }
 
 /** Cleanup has a finite deadline even when solving has none. Launch owned children detached on POSIX. */
 export function closeMathProcess(child: ChildProcess, gracefulInput = false, graceMs = 3_000): Promise<void> {
+  trackMathProcessSession(child);
   return new Promise(resolve => {
     let force: NodeJS.Timeout | undefined, fallback: NodeJS.Timeout | undefined;
     const finish = () => {
       clearTimeout(force); clearTimeout(fallback);
       child.off('close', finish);
       stopMathProcess(child, 'SIGKILL');
+      killSessionMembers(child, leakedSessionMembers(child));
       resolve();
     };
     if ((child.exitCode !== null || child.signalCode !== null) && child.stdout?.closed && child.stderr?.closed) return finish();
@@ -170,7 +239,7 @@ export const runMathProcess = (
     const finish = (exitCode: number | null, signal: NodeJS.Signals | null): void => {
       if (settled) return;
       settled = true;
-      if (stopping) stopMathProcess(child, 'SIGKILL');
+      if (stopping) { stopMathProcess(child, 'SIGKILL'); killSessionMembers(child, leakedSessionMembers(child)); }
       if (timeout) clearTimeout(timeout);
       if (forceStopTimeout) clearTimeout(forceStopTimeout);
       if (fallbackTimeout) clearTimeout(fallbackTimeout);
@@ -241,6 +310,7 @@ export const runMathProcess = (
       options.onOutput?.('stderr', chunk);
       stderr = capture(stderr, chunk);
     });
+    trackMathProcessSession(child);
     child.once('spawn', () => { started = true; });
     child.once('error', (error: NodeJS.ErrnoException) => {
       processError = error;
