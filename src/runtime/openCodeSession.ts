@@ -4,7 +4,7 @@ import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createParser } from 'eventsource-parser';
-import { closeMathProcess, confirmMathProcessStopped } from '../math/mathProcess';
+import { closeMathProcess, confirmMathProcessStopped, trackMathProcessSession } from '../math/mathProcess';
 import { scheduleMathTimeout } from '../math/mathTimers';
 import { assertMathAgentSkillsCurrent } from './agentSkills';
 import type { MathAgentOptions, MathAgentSession } from './agentSession';
@@ -77,6 +77,7 @@ export async function createOpenCodeMathSession(options: MathAgentOptions): Prom
     environment: { ...options.environment, ...nativeEnvironment } }, options.executable, arguments_);
   const child = spawn(launch.command, launch.args, { cwd: workspace, env: launch.env, detached: true,
     stdio: ['ignore', 'pipe', 'pipe', ...('inheritedFds' in launch ? launch.inheritedFds ?? [] : [])] });
+  trackMathProcessSession(child);
   const lifetime = new AbortController();
   let closing: Promise<void> | undefined, running = false, settled = true, threadId = '';
   let lastError: string | undefined, lastInputTokens: number | undefined;

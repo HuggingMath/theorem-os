@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { closeMathProcess, confirmMathProcessStopped, type MathProcessStopReceipt } from '../math/mathProcess';
+import { closeMathProcess, confirmMathProcessStopped, trackMathProcessSession, type MathProcessStopReceipt } from '../math/mathProcess';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -158,6 +158,7 @@ class CodexRpc {
       stdio: extras.length ? ['pipe', 'pipe', 'pipe', ...extras] : 'pipe',
       detached: process.platform !== 'win32',
     }) as ChildProcessWithoutNullStreams; // All three protocol streams are pipes, including launches with extra inherited FDs.
+    trackMathProcessSession(this.child);
     const infoDescriptor = launch?.infoDescriptor;
     this.processIdentity = infoDescriptor === undefined ? Promise.resolve(undefined) : new Promise((resolve, reject) => {
       const pipe = this.child.stdio[infoDescriptor] as NodeJS.ReadableStream;

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
-import { closeMathProcess, confirmMathProcessStopped } from '../math/mathProcess';
+import { closeMathProcess, confirmMathProcessStopped, trackMathProcessSession } from '../math/mathProcess';
 import { readMathText } from '../math/mathRuntimeIo';
 import { scheduleMathTimeout } from '../math/mathTimers';
 import { assertMathAgentSkillsCurrent } from './agentSkills';
@@ -148,6 +148,7 @@ export async function createClaudeCodeMathSession(options: MathAgentOptions): Pr
         cwd: options.workspace, env: invocation.env, detached: process.platform !== 'win32',
         stdio: ['pipe', 'pipe', 'pipe', ...('inheritedFds' in invocation ? invocation.inheritedFds ?? [] : [])],
       });
+      trackMathProcessSession(owned);
       return await new Promise<string>(resolve => {
         let settled = false, started = false, terminal: Json | undefined, usageReported = false;
         let apiFailure: MathAgentFailureDiagnostic | undefined;
