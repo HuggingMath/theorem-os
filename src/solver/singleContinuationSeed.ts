@@ -15,7 +15,7 @@ import { readAgentTeamContinuationNote, type AgentTeamResearchArtifactReference,
 import { freezeContinuationInput, MAX_CONTINUATION_ATTACHMENT_BYTES, readContinuationContents, type ContinuationManifest } from './continuationInput';
 import { captureContinuationTaskDrafts, continuationOwnershipExtension, continuationSourcePolicyDigest,
   type ContinuationSeedReport, type ContinuationSeedOptions } from './continuationSeed';
-import { checkDeclarationArtifacts, readDeclarationArtifacts, writeDeclarationArtifacts } from './declarationArtifacts';
+import { createDeclarationArtifactChecker, readDeclarationArtifacts, writeDeclarationArtifacts } from './declarationArtifacts';
 import { readRunInspection } from './inspection';
 import { assertSolverSources, committedSource, commitSolverSources, git, pinSolverResearchSkill, readSolverProblem, withSolverWorktree } from './problem';
 import { isDefinitionTask, type TaskRecord } from './tasks';
@@ -317,12 +317,13 @@ export async function seedSingleSolverContinuation(options: ContinuationSeedOpti
         const env = proofEnvironment ? { ...staticEnv, [MATH_PROOF_ENVIRONMENT_ENV]: proofEnvironment.environmentValue } : staticEnv;
         report.stage = 'checking'; saveReport();
         const assertWriterStopped = () => { lease.assertHeld(); assertPrepared(state, stateFile, true); };
+        const checkDeclarations = createDeclarationArtifactChecker({ state, worktree: state.worktree,
+          commit: canonical, env, signal: lease.signal, timeoutMs, assertWriterStopped });
         for (const declaration of source.declarations) {
           lease.signal.throwIfAborted();
           const { id, ...submission } = declaration;
           try {
-            const artifacts = await checkDeclarationArtifacts({ state, worktree: state.worktree, commit: canonical,
-              declarations: [submission], env, signal: lease.signal, timeoutMs, assertWriterStopped });
+            const artifacts = await checkDeclarations([submission]);
             assertWriterStopped(); writeDeclarationArtifacts(directory, state, artifacts);
             report.checked.push(id); report.evidence = 'fresh-helper-receipts';
             emit('continuation_seed_declaration_checked', { id, name: declaration.name, passed: true });

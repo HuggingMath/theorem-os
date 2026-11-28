@@ -106,16 +106,29 @@ describe('single researcher continuation', () => {
     expect(fs.readFileSync(path.join(f.peer, 'RESEARCH.md'))).toEqual(oldNotes);
   });
 
-  it('keeps a rejected helper advisory with its exact diagnostic, without discarding the source', async () => {
+  it('keeps a rejected helper advisory and checks the next helper against the same frozen source', async () => {
     const f = fixture();
-    host.verify.mockImplementation((request: MathematicsVerifierBatchRequest) => failedBatch(receiptBatch(request,
+    const file = path.join(f.sourceWorktree, f.problem.projectRelative, 'Submission.lean');
+    const source = f.sources.replace('lemma saved_helper', 'lemma rejected_helper : True := by trivial\nlemma saved_helper');
+    fs.writeFileSync(file, source);
+    const canonical = commitSolverSources(f.problem, f.sourceWorktree);
+    const cooperation = f.archived.cooperation!;
+    cooperation.canonicalCommit = canonical;
+    const rejected = { ...f.helper, id: 'rejected', theoremName: 'Tutorial.rejected_helper' };
+    cooperation.tasks.unshift({ ...cooperation.tasks[0], task: rejected,
+      integratedCheck: { ...cooperation.tasks[0].integratedCheck!, commit: canonical, taskDigest: taskVersion(rejected) } });
+    writeSolverRunState(f.sourceStateFile, f.archived);
+    host.verify.mockImplementationOnce((request: MathematicsVerifierBatchRequest) => failedBatch(receiptBatch(request,
       { sessionId: 'failed-check', receiptId: () => 'failed-receipt' }), { stdoutPreview: () => 'not proved' }));
     const report = await f.seed();
-    expect(report).toMatchObject({ stage: 'complete', checked: [], failed: ['saved'],
-      evidence: 'advisory-sources-require-recheck', declarationFailures: [{ id: 'saved', name: 'Tutorial.saved_helper',
-        error: expect.stringContaining('math_declaration_artifact_check_failed') }] });
-    expect(readDeclarationArtifacts(f.directory, readSolverRunState(f.stateFile))).toEqual([]);
-    expect(fs.readFileSync(path.join(f.worktree, f.problem.projectRelative, 'Submission.lean'), 'utf8')).toBe(f.sources);
+    expect(report).toMatchObject({ stage: 'complete', checked: ['saved'], failed: ['rejected'],
+      evidence: 'fresh-helper-receipts', declarationFailures: [{ id: 'rejected', name: 'Tutorial.rejected_helper',
+        error: expect.stringContaining('not proved') }] });
+    const artifacts = readDeclarationArtifacts(f.directory, readSolverRunState(f.stateFile));
+    expect(artifacts.map(item => item.proof.verification.results[0].receiptId)).toEqual(['fresh-Tutorial.saved_helper']);
+    expect(host.verify.mock.calls.map(([request]) => request.items.map(item => item.theoremName)))
+      .toEqual([['Tutorial.rejected_helper'], ['Tutorial.saved_helper']]);
+    expect(fs.readFileSync(path.join(f.worktree, f.problem.projectRelative, 'Submission.lean'), 'utf8')).toBe(source);
   });
 
   it('does not reinterpret a historical conditional helper as an unconditional candidate', async () => {
