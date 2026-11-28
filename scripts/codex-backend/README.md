@@ -45,11 +45,12 @@ and `libssl3t64` version `3.0.13-0ubuntu3.16`.
 Large asynchronous core tests require `RUST_MIN_STACK=8388608`, matching the
 upstream Bazel test configuration. Set it only on the test subprocess.
 
-All Cargo targets, logs and binaries stay under `--output`. On success,
-`backend-build.json` records the source, patch, lockfile and executable digests;
-`out/codex-backend/codex` points to the built executable. Existing sessions are
-not restarted. Source edits beyond the checked-in patches are preserved and
-rejected, so freeze the adapter patch before running a final build.
+All Cargo targets, logs and binaries stay under `--output`. The build installs
+`codex` and `codex-code-mode-host` together in `bin/` and records both digests in
+`backend-build.json`. Keep the pair together when moving the backend. The local
+`out/codex-backend/codex` link points to the built CLI. Existing sessions are not
+restarted. Source edits beyond the checked-in patches are preserved and rejected,
+so freeze the adapter patch before running a final build.
 
 New team runs pin the executable's real path and digest and record
 `agentTeam.transport: native-agent-control`. Startup failures are reported
@@ -80,19 +81,19 @@ returns a tool error and Lead can retry with `fork_turns: "none"`. Pass
 profile, including metered requests before and after Lead cold resume.
 
 The built runtime link installs this backend for new local CLI team runs.
-The Web worker Dockerfile builds the same pinned source on Debian Bookworm
-and installs a separate binary at `/opt/theoremos-codex-backend/codex`.
-Ordinary runs keep the stock Codex binary. The worker build probes the native
-app-server's capabilities as the worker user before labeling the image
+The Web worker Dockerfile builds the same pinned source on Debian Bookworm and
+installs both executables in `/opt/theoremos-codex-backend/`. Ordinary runs keep
+the stock Codex binary. The worker build probes AgentControl and executes a Code
+Mode call as the worker user with fixed loopback responses before labeling the image
 `org.theoremos.native-agent-control=v1`. The Web service also checks
 `org.theoremos.native-team-workflow=v1`, which identifies support for native
 team scheduling and initial route approval. It launches the image by its
 verified ID. Rebuild both Web and worker images to roll out this workflow.
 
-Cargo resolves V8 host manifests even though the CLI does not link that runtime.
-The build-local Git helper fetches the exact locked submodule commits without
-downloading unrelated Chromium branch histories. Their official gitlink pins
-are recorded in `submodule-pins.json`.
+The Code Mode host uses the V8 archive and Rust bindings from the matching Codex
+release. The build verifies them against the pinned checkout's checksums. The
+build-local Git helper fetches the exact locked submodule commits and records
+their official gitlink pins in `submodule-pins.json`.
 
 If downloads fail with `Proxy CONNECT aborted`, check the configured proxy. A
 confirmed direct connection can be used for this build by invoking the script

@@ -5,7 +5,7 @@ FROM docker:29-cli AS docker-cli
 # require a newer glibc even when the Codex source and architecture match.
 FROM rust:1.99.1-bookworm AS codex-backend
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 cmake pkg-config libssl-dev libcap-dev libasound2-dev \
+    python3 curl cmake pkg-config libssl-dev libcap-dev libasound2-dev \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY scripts/build-codex-backend.sh scripts/build-codex-backend.sh
@@ -105,6 +105,7 @@ ARG THEOREMOS_SOURCE_COMMIT=unknown
 LABEL org.opencontainers.image.revision=$THEOREMOS_SOURCE_COMMIT
 ENV THEOREMOS_SOURCE_COMMIT=$THEOREMOS_SOURCE_COMMIT
 COPY --from=codex-backend /build/artifacts/bin/codex /opt/theoremos-codex-backend/codex
+COPY --from=codex-backend /build/artifacts/bin/codex-code-mode-host /opt/theoremos-codex-backend/codex-code-mode-host
 ENV THEOREMOS_CODEX_BACKEND_EXECUTABLE=/opt/theoremos-codex-backend/codex
 USER 10001:10001
 RUN timeout 30s python3 scripts/codex-backend/check-capabilities.py "$THEOREMOS_CODEX_BACKEND_EXECUTABLE"
