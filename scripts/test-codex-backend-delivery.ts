@@ -261,10 +261,12 @@ export async function verifyNativeProofDelivery(input: { repository: string; exe
     const profile = path.join(directory, 'profile');
     if (input.webProvider) prepareWebProviderProfile(profile, webRequest);
     else prepareSub2apiProfile(profile, state.model, state.effort);
-    const toolchain = path.join(os.homedir(), '.elan/toolchains/leanprover--lean4---v4.33.0');
+    const userHome = os.homedir();
+    const elanHome = process.env.ELAN_HOME || path.join(userHome, '.elan');
+    const toolchain = path.join(elanHome, 'toolchains/leanprover--lean4---v4.33.0');
     assert.ok(fs.existsSync(path.join(toolchain, 'bin/lean')), 'Native delivery acceptance requires Lean 4.33.0.');
-    const environment = { PATH: `${toolchain}/bin:${path.dirname(process.execPath)}:/usr/bin:/bin`,
-      ELAN_HOME: path.join(os.homedir(), '.elan'), LEAN_PATH: '', LEAN_SYSROOT: '', NO_PROXY: '127.0.0.1,localhost',
+    const environment = { HOME: userHome, PATH: `${toolchain}/bin:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+      ELAN_HOME: elanHome, LEAN_PATH: '', LEAN_SYSROOT: '', NO_PROXY: '127.0.0.1,localhost',
       ...(!input.webProvider && { SUB2API_WESTLAKE_API_KEY: apiKey }), DEEPSCIENTIST_MATH_SANDBOX_BACKEND: 'bwrap',
       DEEPSCIENTIST_MATH_ENV_FILE: path.join(directory, 'missing.env') };
     const modules = input.webProvider ? webSolverModules(webRequest, { sink: action => webActions.push(action),

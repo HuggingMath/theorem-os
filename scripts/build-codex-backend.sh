@@ -10,8 +10,8 @@ usage() {
 Usage: scripts/build-codex-backend.sh --source DIR --downloads DIR --output DIR [--jobs N] [--host-tools DIR] [--prepare-only]
 
 Fetch the pinned official Codex release, apply the checked-in build patches,
-and build codex-cli with its locked dependencies and an explicitly selected Rust.
-All target files, logs, the executable and its provenance stay under --output.
+and build Codex and its Code Mode host with locked dependencies and pinned Rust.
+All target files, logs, both executables and their provenance stay under --output.
 --prepare-only verifies the upstream identity without applying the patch.
 --host-tools uses an extracted Debian sysroot for build-only native dependencies.
 No global Codex profile or default Rust toolchain is changed.
@@ -61,6 +61,7 @@ lock_patch_digest=$(pin lockPatchSha256)
 patch_file=$script_dir/codex-backend/$(pin patch)
 package=$(pin package)
 binary=$(pin binary)
+code_mode_host=codex-code-mode-host
 profile=$(pin profile)
 
 mkdir -p -- "$downloads_dir" "$output_dir" "$(dirname -- "$source_dir")"
@@ -108,14 +109,15 @@ if ! git -C "$source_dir" apply --reverse --check "$patch_file" 2>/dev/null; the
 fi
 # Build precisely the reviewable patch. Extra edits are preserved and rejected,
 # so re-running this script never resets a developer's source worktree.
-git -C "$source_dir" diff --binary --no-ext-diff HEAD -- . ':(exclude)codex-rs/Cargo.lock' > "$output_dir/agent-control-source.patch"
-git -C "$source_dir" diff --binary --no-ext-diff HEAD -- codex-rs/Cargo.lock > "$output_dir/derived-lock-source.patch"
+# Match the checked-in index width even when a shallow clone uses shorter IDs.
+git -C "$source_dir" diff --binary --abbrev=8 --no-ext-diff HEAD -- . ':(exclude)codex-rs/Cargo.lock' > "$output_dir/agent-control-source.patch"
+git -C "$source_dir" diff --binary --abbrev=8 --no-ext-diff HEAD -- codex-rs/Cargo.lock > "$output_dir/derived-lock-source.patch"
 if ! cmp -s "$patch_file" "$output_dir/agent-control-source.patch" ||
    ! cmp -s "$lock_patch_file" "$output_dir/derived-lock-source.patch" ||
    [[ -n $(git -C "$source_dir" ls-files --others --exclude-standard) ]]; then
   echo 'Source worktree differs from the checked-in build patches.' >&2; exit 1
 fi
-git -C "$source_dir" diff --binary --no-ext-diff HEAD > "$output_dir/source.patch"
+git -C "$source_dir" diff --binary --abbrev=8 --no-ext-diff HEAD > "$output_dir/source.patch"
 
 export CARGO_TARGET_DIR=$output_dir/target
 export CARGO_PROFILE_DEV_DEBUG=$(pin devDebug)
@@ -169,24 +171,59 @@ export THEOREMOS_BUILD_SUBMODULE_PINS=$output_dir/submodule-pins.json
 ln -sfn -- "$script_dir/codex-backend/git-fetch-pinned.py" "$build_tools/git"
 export PATH="$build_tools:$PATH"
 export CARGO_NET_GIT_FETCH_WITH_CLI=true
+
+# Build the Code Mode host with the same V8 release pair as upstream Cargo CI.
+# The crate's default download site does not publish this pair.
+v8_version=$(python3 "$source_dir/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)
+rust_target=$(rustup run "$toolchain" rustc -vV | awk '$1 == "host:" {print $2}')
+v8_dir=$downloads_dir/codex-rusty-v8-$v8_version
+v8_checksums=$source_dir/third_party/v8/rusty_v8_${v8_version//./_}.sha256
+v8_archive=librusty_v8_ptrcomp_sandbox_release_$rust_target.a.gz
+v8_binding=src_binding_ptrcomp_sandbox_release_$rust_target.rs
+mkdir -p -- "$v8_dir"
+for artifact in "$v8_archive" "$v8_binding"; do
+  expected=$(awk -v name="$artifact" '$2 == name {print $1}' "$v8_checksums")
+  if [[ ! $expected =~ ^[0-9a-f]{64}$ ]]; then
+    echo "No pinned V8 asset: $artifact" >&2; exit 1
+  fi
+  if [[ ! -f $v8_dir/$artifact ]] || ! sha256sum --check --status <<< "$expected  $v8_dir/$artifact"; then
+    download_file=$(mktemp "$v8_dir/$artifact.XXXXXX")
+    if ! curl --fail --silent --show-error --location --retry 3 \
+        "https://github.com/openai/codex/releases/download/rusty-v8-v$v8_version/$artifact" --output "$download_file" ||
+        ! sha256sum --check --status <<< "$expected  $download_file"; then
+      rm -f -- "$download_file"
+      echo "Could not fetch the pinned V8 asset: $artifact" >&2; exit 1
+    fi
+    mv -f -- "$download_file" "$v8_dir/$artifact"
+  fi
+done
+export RUSTY_V8_ARCHIVE=$v8_dir/$v8_archive
+export RUSTY_V8_SRC_BINDING_PATH=$v8_dir/$v8_binding
+
 build_log=$output_dir/build.log
-echo "Building $package/$binary; log: $build_log"
+echo "Building $package/$binary and $code_mode_host; log: $build_log"
 if ! (cd -- "$source_dir/codex-rs" && rustup run "$toolchain" cargo build --locked \
-    --profile "$profile" -p "$package" --bin "$binary" --jobs "$jobs") > "$build_log" 2>&1; then
+    --profile "$profile" -p "$package" --bin "$binary" \
+    -p "$code_mode_host" --bin "$code_mode_host" --jobs "$jobs") > "$build_log" 2>&1; then
   tail -n 60 "$build_log" >&2
   exit 1
 fi
 mkdir -p -- "$output_dir/bin"
-install -m 755 "$CARGO_TARGET_DIR/debug/$binary" "$output_dir/bin/$binary.new"
-mv -f -- "$output_dir/bin/$binary.new" "$output_dir/bin/$binary"
+# Codex resolves its companion next to the real executable, including when
+# started through the runtime symlink.
+for artifact in "$code_mode_host" "$binary"; do
+  install -m 755 "$CARGO_TARGET_DIR/debug/$artifact" "$output_dir/bin/$artifact.new"
+  mv -f -- "$output_dir/bin/$artifact.new" "$output_dir/bin/$artifact"
+done
 runtime_link=$script_dir/../out/codex-backend/codex
 mkdir -p -- "$(dirname -- "$runtime_link")"
 ln -sfn -- "$output_dir/bin/$binary" "$runtime_link"
-python3 - "$pin_file" "$source_dir" "$output_dir" "$patch_file" "$jobs" "$runtime_link" "$host_tools" <<'PY'
+python3 - "$pin_file" "$source_dir" "$output_dir" "$patch_file" "$jobs" "$runtime_link" "$host_tools" "$code_mode_host" <<'PY'
 import datetime, hashlib, json, pathlib, subprocess, sys
-pin_file, source, output, patch_file, jobs, runtime_link, host_tools = sys.argv[1:]
+pin_file, source, output, patch_file, jobs, runtime_link, host_tools, code_mode_host = sys.argv[1:]
 pin = json.loads(pathlib.Path(pin_file).read_text())
 artifact = pathlib.Path(output, "bin", pin["binary"])
+companion = artifact.with_name(code_mode_host)
 digest = lambda file: hashlib.file_digest(pathlib.Path(file).open("rb"), "sha256").hexdigest()
 version = lambda command: subprocess.check_output(["rustup", "run", pin["toolchain"], *command], text=True).strip()
 record = {
@@ -198,6 +235,7 @@ record = {
     "lockPatchSha256": digest(pathlib.Path(pin_file).parent / pin["lockPatch"]),
     "sourcePatchSha256": digest(pathlib.Path(output, "source.patch")),
     "executable": str(artifact), "executableSha256": digest(artifact),
+    "codeModeHost": str(companion), "codeModeHostSha256": digest(companion),
     "rustc": version(["rustc", "--version", "--verbose"]), "cargo": version(["cargo", "--version"]),
     "jobs": int(jobs), "targetDirectory": str(pathlib.Path(output, "target")),
     "log": str(pathlib.Path(output, "build.log")),

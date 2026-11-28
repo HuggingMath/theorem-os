@@ -256,20 +256,26 @@ type TeamDeclarationCheckInput = DeclarationCheckInput & {
   /** Only for host-selected declarations whose signature comes from independently checked source. */
   inferredExpectedTypes?: ReadonlySet<string>;
 };
+type StoppedDeclarationCheckInput = DeclarationCheckInput & { assertWriterStopped: () => void };
+type DeclarationCheckSnapshot = { project?: ReturnType<typeof createTaskSourceProjector>; sourceDigest?: string };
 
-/** The caller must hold its writer-stop guarantee until this operation and persistence finish. */
-export async function checkDeclarationArtifacts(input: DeclarationCheckInput & {
-  assertWriterStopped: () => void;
-}): Promise<readonly DeclarationArtifact[]> {
+export async function checkDeclarationArtifacts(input: StoppedDeclarationCheckInput): Promise<readonly DeclarationArtifact[]> {
+  return createDeclarationArtifactChecker(input)(input.declarations);
+}
+
+/** Reuse source preparation for sequential checks of one stopped writer's fixed commit. */
+export function createDeclarationArtifactChecker(input: Omit<StoppedDeclarationCheckInput, 'declarations'>) {
   const { state, worktree, commit, signal } = input, { problem } = state;
   const identity = canonicalMathJson(identityOf(state));
+  const snapshot: DeclarationCheckSnapshot = {};
   const assertFrozenSource = () => {
     signal.throwIfAborted(); input.assertWriterStopped(); assertSolverSources(problem, worktree);
     if (canonicalMathJson(identityOf(state)) !== identity) return fail('run_identity_changed');
     if (git(worktree, ['rev-parse', 'HEAD']) !== commit || git(worktree, ['status', '--porcelain', '--',
       ...problem.ownedFiles.map(file => path.join(problem.projectRelative, file))])) return fail('source_changed');
   };
-  return checkArtifacts({ ...input, assertFrozenSource }, declarationSubmissionSchema, false);
+  return (declarations: DeclarationSubmission['declarations']) =>
+    checkArtifacts({ ...input, declarations, assertFrozenSource }, declarationSubmissionSchema, false, snapshot);
 }
 
 /** Host deliveries can include checked peer declarations in addition to a bounded member submission. */
@@ -277,7 +283,8 @@ export async function checkTeamDeclarationArtifacts(input: TeamDeclarationCheckI
   return checkArtifacts(input, teamDeclarationSubmissionSchema, true);
 }
 
-async function checkArtifacts(input: TeamDeclarationCheckInput, schema: typeof declarationSubmissionSchema, allowAuxiliaryDefinitions: boolean) {
+async function checkArtifacts(input: TeamDeclarationCheckInput, schema: typeof declarationSubmissionSchema,
+  allowAuxiliaryDefinitions: boolean, snapshot: DeclarationCheckSnapshot = {}) {
   const declarations = parseDeclarationSubmission({ declarations: input.declarations }, schema).declarations;
   const { state, worktree, commit, signal, assertFrozenSource } = input, { problem } = state;
   commitHash.parse(commit);
@@ -285,10 +292,6 @@ async function checkArtifacts(input: TeamDeclarationCheckInput, schema: typeof d
   if (new Set(declarations.map(item => `${item.file}\0${item.name}`)).size !== declarations.length) return submissionFail('duplicate_declaration');
   const environment = proofReuseEnvironment(path.join(worktree, problem.projectRelative), input.env);
   const records: DeclarationArtifact[] = [];
-  // Share the frozen snapshot across declarations. Each projection is still
-  // written to its own checkout and checked independently.
-  let project: ReturnType<typeof createTaskSourceProjector> | undefined;
-  let sourceDigest: string | undefined;
   for (const declaration of declarations) {
     assertFrozenSource();
     if (!problem.ownedFiles.includes(declaration.file)) return submissionFail('outside_ownership');
@@ -314,7 +317,7 @@ async function checkArtifacts(input: TeamDeclarationCheckInput, schema: typeof d
         theoremName: declaration.name, type, dependsOn: [], revision: 0 };
       let checkedCommit = commit;
       if (!checkHelperInDraft) {
-        const projector = project ??= createTaskSourceProjector(problem, worktree, commit, { compact: true });
+        const projector = snapshot.project ??= createTaskSourceProjector(problem, worktree, commit, { compact: true });
         const sources = submissionContent(() => projector(task, []), ['math_task_type_invalid', 'math_task_missing_declaration',
           'math_task_ambiguous_declaration', 'math_task_requires_theorem', 'math_task_requires_definition', 'math_task_helper_is_original_declaration']);
         for (const [file, text] of sources) fs.writeFileSync(path.join(checkout, problem.projectRelative, file), text);
@@ -335,7 +338,7 @@ async function checkArtifacts(input: TeamDeclarationCheckInput, schema: typeof d
       const references = result.verification.results[0]?.declarationReferences;
       const record: DeclarationArtifact = { schema: 'theorem-os.declaration-artifact.v1', id: '', ...identityOf(state),
         declaration, declarationHash, declarationDigest,
-        proof: { commit, sourceDigest: sourceDigest ??= ownedSourceDigest(problem, worktree, commit),
+        proof: { commit, sourceDigest: snapshot.sourceDigest ??= ownedSourceDigest(problem, worktree, commit),
           passed: true, verification: result.verification },
         ...(references ? { references: captureProofReferences(problem, checkout, commit,
           { file: declaration.file, name: declaration.name }, references, state.environmentDigest) } : {}) };

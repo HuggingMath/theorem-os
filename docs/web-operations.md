@@ -8,9 +8,9 @@
 
 ## 发布镜像
 
-`Verify TheoremOS` 在面向 `main` 的 pull request 和 `main` 推送上运行，也可手动运行。它以只读仓库权限执行 TypeScript 检查、运行时与网页构建、离线浏览器回归，以及 Lean 4.33.0 和 4.34.1 上的求解器回归。验证和镜像发布均使用 Ubuntu 24.04。
+`Verify TheoremOS` 在面向 `main` 的 pull request 和 `main` 推送上运行。日常验证包含 TypeScript 检查、运行时和网页构建、单测、Lean 4.33.0 和 4.34.1 上的求解器回归，以及登录、原生团队、计划审批、形式化和归档阅读的浏览器测试。手动运行 `gh workflow run verify.yml --ref <分支>` 会加跑完整的浏览器回归。验证和镜像发布均使用 Ubuntu 24.04。
 
-推送 `v*` 标签或运行 `gh workflow run images.yml --ref main` 会触发 `Publish workbench images`。发布流程在同一提交上调用上述验证，通过后分别构建和推送 web、worker、tex。三个镜像都使用完整源码 SHA 作为 GHCR 标签，并写入 OCI revision。Web 和 worker 还设置 `THEOREMOS_SOURCE_COMMIT`，Web 前端的 `build-info.json` 也记录这个 SHA。三张镜像均推送成功后，流程才上传 `image-release-<SHA>`，其中 `image-release.json` 记录提交及三个 registry digest。
+推送 `v*` 标签或运行 `gh workflow run images.yml --ref main` 会触发 `Publish workbench images`。发布流程在同一提交上运行完整验证，通过后分别构建和推送 web、worker、tex。三个镜像都使用完整源码 SHA 作为 GHCR 标签，并写入 OCI revision。Web 和 worker 还设置 `THEOREMOS_SOURCE_COMMIT`，Web 前端的 `build-info.json` 也记录这个 SHA。三张镜像均推送成功后，流程才上传 `image-release-<SHA>`，其中 `image-release.json` 记录提交及三个 registry digest。
 
 本地可执行同一组无模型求解器回归。Linux CI 与 Worker 构建使用 `scripts/install-elan.sh` 安装固定的 elan 4.2.4，校验官方发布包 SHA-256，并通过 Lean 的发布 JSON 获取工具链。先安装相应工具链，再显式选择版本。
 

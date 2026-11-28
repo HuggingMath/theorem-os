@@ -7,6 +7,11 @@ on:
     branches: [main]
   workflow_dispatch:
   workflow_call:
+    inputs:
+      full:
+        description: Run the extended browser suites
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -35,31 +40,45 @@ jobs:
         run: bunx vitest run --maxWorkers=4 tests/webRunSnapshot.test.ts tests/webResearchProjects.test.ts tests/webResearchApi.test.ts tests/webResearchAssets.test.ts tests/webResearchMathematics.test.ts tests/libraryPacks.test.ts tests/leanSource.test.ts
       - name: Verify direct formalization and independent background review without models
         run: bunx vitest run --maxWorkers=4 tests/directFormalizationEvidence.test.ts tests/directFormalizationWorkflow.test.ts tests/formalizationCoverage.test.ts tests/formalizationAudit.test.ts tests/formalizationContext.test.ts tests/formalizationPackagesWarmup.test.ts tests/mathProofEnvironmentSeed.test.ts tests/webFormalizationAuditWorker.test.ts tests/webFormalizationBackgroundReview.test.ts tests/webBackgroundReview.test.ts tests/webFormalizationProgress.test.ts tests/webThinkingProcess.test.ts tests/codexSessionInstructions.test.ts
+      - name: Verify session, draft, budget and archive recovery without models
+        run: bunx vitest run --maxWorkers=4 tests/webSessionCookies.test.ts tests/webResearchSession.test.ts tests/webDraft.test.ts tests/webLongRun.test.ts tests/researchPlanApproval.test.ts tests/archiveRecordNavigation.test.ts tests/globalTrajectory.test.ts tests/webChatDraft.test.ts tests/archiveSourceLocation.test.ts tests/taskPlanEditorAccess.test.ts
       - run: bun run build && bun run build:web
       - run: bunx playwright install --with-deps chromium
       - name: Verify proof progress in the default simple reading
         timeout-minutes: 5
         run: bun scripts/test-web-proof-thinking.ts --simple-reading
-      - name: Verify the browser's login and research flows with local fixtures
-        run: bun run test:web-login && bun run test:web-natural-first && bun run test:web-chat-session && bun run test:web-chat-cancel-recovery && bun run test:web-key-memory && bun run test:web-saved-key && bun run test:web-solve-process && bun run test:web-review-regressions && bun run test:web-explain && bun run test:web-explain-recovery
+      - name: Verify login and the first research flow with local fixtures
+        run: bun run test:web-login && bun run test:web-natural-first
       - name: Verify native team creation, approval and library continuation with local fixtures
         run: bun scripts/test-web-native-team.ts && bun run test:web-plan-approval && bunx vitest run tests/webLibraryResearch.test.ts
       - name: Verify paper drafting and download with local fixtures
         run: bun scripts/test-web-paper.ts
+      - name: Verify formalization progress and background review in the browser
+        run: bun scripts/test-web-formalization-progress.ts && bunx vitest run tests/webBackgroundReviewWorkflow.test.ts
+      - name: Verify chat, saved keys, proof runs and explanations in the browser
+        if: github.event_name == 'workflow_dispatch' || inputs.full
+        run: bun run test:web-chat-session && bun run test:web-chat-cancel-recovery && bun run test:web-key-memory && bun run test:web-saved-key && bun run test:web-solve-process && bun run test:web-review-regressions && bun run test:web-explain && bun run test:web-explain-recovery
       - name: Verify research account switching and interrupted frontend operations
+        if: github.event_name == 'workflow_dispatch' || inputs.full
         run: bun run test:frontend-round5
       - name: Verify session renewal, candidate review and route evidence readers
+        if: github.event_name == 'workflow_dispatch' || inputs.full
         run: bun run test:frontend-round6
       - name: Verify delayed session responses and draft recovery
-        run: bunx vitest run --maxWorkers=4 tests/webSessionCookies.test.ts tests/webResearchSession.test.ts && bun run test:frontend-round7
+        if: github.event_name == 'workflow_dispatch' || inputs.full
+        run: bun run test:frontend-round7
       - name: Verify archive budgets, saved keys, plan approvals and historical record navigation
-        run: bunx vitest run --maxWorkers=4 tests/webDraft.test.ts tests/webLongRun.test.ts tests/researchPlanApproval.test.ts tests/archiveRecordNavigation.test.ts tests/globalTrajectory.test.ts && bun run test:frontend-round8
+        if: github.event_name == 'workflow_dispatch' || inputs.full
+        run: bun run test:frontend-round8
       - name: Verify historical guidance, mobile controls and native route search input
+        if: github.event_name == 'workflow_dispatch' || inputs.full
         run: bun run test:frontend-round9
       - name: Verify recovered guidance, message receipts, math readers and source links
-        run: bunx vitest run --maxWorkers=4 tests/webChatDraft.test.ts tests/webConversations.test.ts tests/archiveSourceLocation.test.ts tests/taskPlanEditorAccess.test.ts && bun run test:frontend-round10
-      - name: Verify formalization progress and proof thinking in the browser
-        run: bun scripts/test-web-formalization-progress.ts && bun scripts/test-web-proof-thinking.ts && bunx vitest run tests/webBackgroundReviewWorkflow.test.ts
+        if: github.event_name == 'workflow_dispatch' || inputs.full
+        run: bun run test:frontend-round10
+      - name: Verify the complete proof thinking workflow in the browser
+        if: github.event_name == 'workflow_dispatch' || inputs.full
+        run: bun scripts/test-web-proof-thinking.ts
 
   verify-research-workflows:
     runs-on: ubuntu-24.04
@@ -82,8 +101,10 @@ jobs:
       - name: Verify single-step proof reading in the website and workbench archives
         run: bun run test:proof-reading-navigation
       - name: Verify the problem workspace, collaboration, library trials and public reading with disposable fixtures
+        if: github.event_name == 'workflow_dispatch' || inputs.full
         run: bun run test:frontend-product-continuity
       - name: Verify installed libraries, archived problems, mathematical reading and login returns with disposable fixtures
+        if: github.event_name == 'workflow_dispatch' || inputs.full
         run: bun run test:frontend-research-redesign && bun run test:site-research-entry
 
   verify-solver:
