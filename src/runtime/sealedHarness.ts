@@ -54,7 +54,12 @@ export function sealedRuntimeIdentity(executable: string, environment: NodeJS.Pr
 function valueFromEnvironment(value: unknown, env: NodeJS.ProcessEnv): string | undefined {
   if (typeof value !== 'string') return;
   const reference = value.match(/^\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/u);
-  if (reference) return env[reference[1]];
+  // An unset reference must not fall back to a default upstream or an ambient credential.
+  if (reference) {
+    const resolved = env[reference[1]];
+    if (!resolved) throw new Error('math_sealed_provider_reference_unset');
+    return resolved;
+  }
   if (value.includes('{env:') || value.includes('{file:')) throw new Error('math_sealed_provider_reference_invalid');
   return value;
 }

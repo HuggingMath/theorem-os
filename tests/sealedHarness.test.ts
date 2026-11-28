@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createClaudeCodeMathSession } from '../src/runtime/claudeCodeSession';
 import { createOpenCodeMathSession } from '../src/runtime/openCodeSession';
 import { createCliMathSession } from '../src/runtime/cliSession';
-import { prepareSealedHarness } from '../src/runtime/sealedHarness';
+import { prepareSealedHarness, sealedOpenCodeProvider } from '../src/runtime/sealedHarness';
 import { sealedRoleProtocol } from '../src/runtime/sealedRoleProtocol';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
@@ -253,5 +253,21 @@ print(json.dumps({'blocked': blocked, 'lean': version}))`);
     expect(projected.profile.key).not.toBe(apiKey);
     fs.writeFileSync(resource, 'mutated native resource');
     expect(() => assertResearchHarnessCurrent(identity, environment)).toThrow('math_harness_identity_changed');
+  });
+});
+
+describe('sealed OpenCode provider references', () => {
+  it('rejects unset {env:} references instead of using a default upstream or an ambient key', () => {
+    const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'sealed-reference-')); roots.push(profile);
+    fs.writeFileSync(path.join(profile, 'opencode.json'), JSON.stringify({ provider: { corp: { npm: '@ai-sdk/openai',
+      options: { baseURL: '{env:CORP_BASE_URL}', apiKey: '{env:CORP_API_KEY}' }, models: { m: {} } } } }));
+    const provider = (environment: NodeJS.ProcessEnv) =>
+      sealedOpenCodeProvider({ model: 'corp/m', effort: 'high', profile, environment } as unknown as MathAgentOptions);
+    const ambient = { OPENAI_API_KEY: apiKey, OPENAI_BASE_URL: 'https://ambient.example/v1' };
+    expect(() => provider({ ...ambient, CORP_API_KEY: 'corp-key' })).toThrow('math_sealed_provider_reference_unset');
+    expect(() => provider({ ...ambient, CORP_BASE_URL: 'https://corp.example/v1' })).toThrow('math_sealed_provider_reference_unset');
+    const selected = provider({ ...ambient, CORP_BASE_URL: 'https://corp.example/v1', CORP_API_KEY: 'corp-key' });
+    expect(selected.relayProvider.baseUrl).toBe('https://corp.example/v1');
+    expect(selected.environment.THEOREMOS_SEALED_HOST_KEY).toBe('corp-key');
   });
 });
