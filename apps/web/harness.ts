@@ -86,6 +86,8 @@ export function bindWebWorkerProfile(options: MathAgentOptions, provider: WebWor
   const profile = path.join(directory, name), bindingFile = path.join(directory, name + '.binding.json');
   assertMathCanonicalPath(profile); assertMathCanonicalPath(bindingFile);
   if (!fs.existsSync(bindingFile)) {
+    // No binding means no session ever used this profile; discard a copy left by an interrupted initialization.
+    fs.rmSync(profile, { recursive: true, force: true });
     fs.mkdirSync(profile, { mode: 0o700 });
     const names = id === 'claude-code' ? ['settings.json'] : id === 'opencode' ? ['opencode.json'] :
       ['cli.json', ...readCliConfiguration(parent).configurationFiles];

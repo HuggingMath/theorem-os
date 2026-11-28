@@ -15,9 +15,19 @@ const object = (value: unknown): Record<string, unknown> => value && typeof valu
   ? value as Record<string, unknown> : {};
 type Runtime = NonNullable<ReturnType<typeof readCliConfiguration>['sealedRole']>['runtime'];
 
-function resolveExecutable(value: string, env: NodeJS.ProcessEnv): string {
-  const candidate = path.isAbsolute(value) ? value : (env.PATH ?? process.env.PATH ?? '').split(path.delimiter)
-    .filter(directory => path.isAbsolute(directory)).map(directory => path.join(directory, value)).find(file => fs.existsSync(file));
+/** Research and sealed launches resolve a command identically: absolute, cwd-relative with a separator,
+ * else the first regular file on the absolute PATH entries. A script passed to an interpreter need not be executable. */
+export function locateHarnessExecutable(command: string, searchPath: string, requireExecute = true): string | undefined {
+  const candidates = path.isAbsolute(command) ? [command] : command.includes(path.sep) ? [path.resolve(command)] :
+    searchPath.split(path.delimiter).filter(directory => path.isAbsolute(directory)).map(directory => path.join(directory, command));
+  return candidates.find(file => {
+    try { return fs.statSync(file).isFile() && (!requireExecute || (fs.accessSync(file, fs.constants.X_OK), true)); }
+    catch { return false; }
+  });
+}
+
+function resolveExecutable(value: string, env: NodeJS.ProcessEnv, requireExecute = true): string {
+  const candidate = locateHarnessExecutable(value, env.PATH ?? process.env.PATH ?? '', requireExecute);
   if (!candidate) throw new Error('math_sealed_executable_unavailable');
   const canonical = fs.realpathSync(candidate); assertMathCanonicalPath(canonical);
   if (!fs.statSync(canonical).isFile()) throw new Error('math_sealed_executable_invalid');
@@ -28,7 +38,7 @@ function resolveExecutable(value: string, env: NodeJS.ProcessEnv): string {
  * No host directory, profile, source tree or global credential store is mounted. */
 function runtimeProjection(executable: string, env: NodeJS.ProcessEnv, runtime?: Runtime): Pick<SealedRuntimeProjection,
   'executable' | 'command' | 'prefixArgs' | 'mounts'> {
-  const original = resolveExecutable(executable, env), command = '/opt/harness/bin/agent';
+  const original = resolveExecutable(executable, env, !runtime?.interpreter), command = '/opt/harness/bin/agent';
   const mounts = (runtime?.resources ?? []).map(resource => {
     assertMathCanonicalPath(resource.source);
     const source = fs.realpathSync(resource.source), target = path.posix.normalize(resource.target);
@@ -157,7 +167,12 @@ export async function prepareSealedHarness(harness: 'claude-code' | 'opencode' |
 
 /** Paths embedded in host prompts refer only to their role projection. */
 export function sealedRoleText(text: string, options: Pick<MathAgentOptions, 'workspace' | 'profile'>): string {
-  return text.replaceAll(path.resolve(options.workspace), '/workspace').replaceAll(path.resolve(options.profile), '/profile');
+  const projections = [[path.resolve(options.workspace), '/workspace'], [path.resolve(options.profile), '/profile']]
+    .sort((left, right) => right[0].length - left[0].length);
+  const escaped = projections.map(([host]) => host.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'));
+  // Whole path components only, in one pass: /runs/w never rewrites /runs/w-profile, /runs/w2 or /mnt/runs/w.
+  const pattern = new RegExp(`(?<![\\w.-])(?:${escaped.join('|')})(?![\\w-])(?!\\.[\\w-])`, 'gu');
+  return text.replace(pattern, host => projections.find(([candidate]) => candidate === host)![1]);
 }
 export function sealedRolePath(file: string, workspace: string): string {
   if (!isMathPathWithin(workspace, file)) throw new Error('math_sealed_output_outside_role');
