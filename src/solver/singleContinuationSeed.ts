@@ -15,7 +15,7 @@ import { readAgentTeamContinuationNote, type AgentTeamResearchArtifactReference,
 import { freezeContinuationInput, MAX_CONTINUATION_ATTACHMENT_BYTES, readContinuationContents, type ContinuationManifest } from './continuationInput';
 import { captureContinuationTaskDrafts, continuationOwnershipExtension, continuationSourcePolicyDigest,
   type ContinuationSeedReport, type ContinuationSeedOptions } from './continuationSeed';
-import { createDeclarationArtifactChecker, readDeclarationArtifacts, writeDeclarationArtifacts } from './declarationArtifacts';
+import { createDeclarationArtifactChecker, readDeclarationArtifacts, writeDeclarationArtifacts, type DeclarationArtifact } from './declarationArtifacts';
 import { readRunInspection } from './inspection';
 import { assertSolverSources, committedSource, commitSolverSources, git, pinSolverResearchSkill, readSolverProblem, withSolverWorktree } from './problem';
 import { isDefinitionTask, type TaskRecord } from './tasks';
@@ -319,14 +319,19 @@ export async function seedSingleSolverContinuation(options: ContinuationSeedOpti
         const assertWriterStopped = () => { lease.assertHeld(); assertPrepared(state, stateFile, true); };
         const checkDeclarations = createDeclarationArtifactChecker({ state, worktree: state.worktree,
           commit: canonical, env, signal: lease.signal, timeoutMs, assertWriterStopped });
-        for (const declaration of source.declarations) {
+        const publish = (declarations: SingleSource['declarations'], artifacts: readonly DeclarationArtifact[]) => {
+          assertWriterStopped(); writeDeclarationArtifacts(directory, state, artifacts);
+          report.evidence = 'fresh-helper-receipts';
+          for (const { id, name } of declarations) {
+            report.checked.push(id);
+            emit('continuation_seed_declaration_checked', { id, name, passed: true });
+          }
+        };
+        const checkOne = async (declaration: SingleSource['declarations'][number]) => {
           lease.signal.throwIfAborted();
           const { id, ...submission } = declaration;
           try {
-            const artifacts = await checkDeclarations([submission]);
-            assertWriterStopped(); writeDeclarationArtifacts(directory, state, artifacts);
-            report.checked.push(id); report.evidence = 'fresh-helper-receipts';
-            emit('continuation_seed_declaration_checked', { id, name: declaration.name, passed: true });
+            publish([declaration], await checkDeclarations([submission]));
           } catch (error) {
             const message = error instanceof Error ? error.message : '';
             if (!message.startsWith('math_declaration_artifact_check_failed:') &&
@@ -337,6 +342,20 @@ export async function seedSingleSolverContinuation(options: ContinuationSeedOpti
             emit('continuation_seed_declaration_checked', { id, name: declaration.name, passed: false, error: message });
           }
           saveReport();
+        };
+        for (let offset = 0; offset < source.declarations.length;) {
+          const file = source.declarations[offset]!.file;
+          let end = offset + 1;
+          while (end < offset + 32 && source.declarations[end]?.file === file) end++;
+          const batch = source.declarations.slice(offset, end);
+          const artifacts = batch.length > 1 ? await checkDeclarations.tryBatch(batch.map(({ id: _id, ...submission }) => submission)) : [];
+          if (artifacts.length) {
+            publish(batch, artifacts);
+            saveReport();
+          } else {
+            for (const declaration of batch) await checkOne(declaration);
+          }
+          offset = end;
         }
       }
       assertPrepared(state, stateFile, true); writeSolverRunState(stateFile, state);

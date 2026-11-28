@@ -42,8 +42,14 @@ export function compactTaskSources(problem: SolverProblem, sources: ReadonlyMap<
   const retain = (id: string) => { if (!keep.has(id)) { keep.add(id); pending.push(id); } };
   const references = (text: string) => {
     // Strings are intentionally scanned too: tactics can look up quoted declaration names.
-    for (const token of identifiers(text)) for (const name of new Set([token, leaf(token)]))
-      for (const id of names.get(name) ?? []) retain(id);
+    for (const token of identifiers(text)) {
+      // A dotted name can use a declaration prefix as its receiver, as in lemma.mpr.
+      for (let end = token.length; end > 0; end = token.lastIndexOf('.', end - 1)) {
+        const prefix = token.slice(0, end);
+        for (const name of new Set([prefix, leaf(prefix)]))
+          for (const id of names.get(name) ?? []) retain(id);
+      }
+    }
   };
   for (const file of files) {
     let cursor = 0;

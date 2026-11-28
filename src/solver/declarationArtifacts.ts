@@ -11,7 +11,7 @@ import { createTaskSourceProjector, ownedSourceDigest } from './cooperativeProof
 import { checkProjectedDeclarations, type ProofCheck } from './modules/evidence';
 import { assertSolverSources, commitSolverProjection, git, withSolverWorktree } from './problem';
 import { captureProofReferences, type ProofReferences } from './proofReferences';
-import { proofReuseEnvironment } from './proofReuse';
+import { hasDeterministicLeanFailure, hasLeanResourceLimitFailure, proofReuseEnvironment } from './proofReuse';
 import { allowedKnowledgeFile, locateKnowledgeDeclaration } from './theoremKnowledge';
 import type { CooperativeTask } from './tasks';
 
@@ -263,7 +263,7 @@ export async function checkDeclarationArtifacts(input: StoppedDeclarationCheckIn
   return createDeclarationArtifactChecker(input)(input.declarations);
 }
 
-/** Reuse source preparation for sequential checks of one stopped writer's fixed commit. */
+/** Reuse source preparation across checks of one stopped writer's fixed commit. */
 export function createDeclarationArtifactChecker(input: Omit<StoppedDeclarationCheckInput, 'declarations'>) {
   const { state, worktree, commit, signal } = input, { problem } = state;
   const identity = canonicalMathJson(identityOf(state));
@@ -274,8 +274,18 @@ export function createDeclarationArtifactChecker(input: Omit<StoppedDeclarationC
     if (git(worktree, ['rev-parse', 'HEAD']) !== commit || git(worktree, ['status', '--porcelain', '--',
       ...problem.ownedFiles.map(file => path.join(problem.projectRelative, file))])) return fail('source_changed');
   };
-  return (declarations: DeclarationSubmission['declarations']) =>
-    checkArtifacts({ ...input, declarations, assertFrozenSource }, declarationSubmissionSchema, false, snapshot);
+  const check = (declarations: DeclarationSubmission['declarations'], batchOnly = false) =>
+    checkArtifacts({ ...input, declarations, assertFrozenSource }, declarationSubmissionSchema, false, snapshot, batchOnly);
+  return Object.assign((declarations: DeclarationSubmission['declarations']) => check(declarations), {
+    /** The continuation importer handles each candidate separately when a batch cannot be checked. */
+    async tryBatch(declarations: DeclarationSubmission['declarations']) {
+      try { return await check(declarations, true); }
+      catch (error) {
+        if (error instanceof DeclarationSubmissionError) return [];
+        throw error;
+      }
+    },
+  });
 }
 
 /** Host deliveries can include checked peer declarations in addition to a bounded member submission. */
@@ -284,72 +294,111 @@ export async function checkTeamDeclarationArtifacts(input: TeamDeclarationCheckI
 }
 
 async function checkArtifacts(input: TeamDeclarationCheckInput, schema: typeof declarationSubmissionSchema,
-  allowAuxiliaryDefinitions: boolean, snapshot: DeclarationCheckSnapshot = {}) {
+  allowAuxiliaryDefinitions: boolean, snapshot: DeclarationCheckSnapshot = {}, batchOnly = false) {
   const declarations = parseDeclarationSubmission({ declarations: input.declarations }, schema).declarations;
   const { state, worktree, commit, signal, assertFrozenSource } = input, { problem } = state;
   commitHash.parse(commit);
   assertFrozenSource();
   if (new Set(declarations.map(item => `${item.file}\0${item.name}`)).size !== declarations.length) return submissionFail('duplicate_declaration');
   const environment = proofReuseEnvironment(path.join(worktree, problem.projectRelative), input.env);
-  const records: DeclarationArtifact[] = [];
-  for (const declaration of declarations) {
+  const check = async (group: DeclarationSubmission['declarations']) => {
+    const first = group[0]!, batched = group.length > 1;
     assertFrozenSource();
-    if (!problem.ownedFiles.includes(declaration.file)) return submissionFail('outside_ownership');
+    if (!problem.ownedFiles.includes(first.file)) return submissionFail('outside_ownership');
     const checked = await withSolverWorktree(worktree, commit, async checkout => {
-      const source = fs.readFileSync(path.join(checkout, problem.projectRelative, declaration.file), 'utf8');
-      const location = submissionContent(() => locateKnowledgeDeclaration(source, declaration.name),
-        ['math_knowledge_declaration_missing_or_ambiguous']);
-      const definition = declaration.kind === 'definition';
-      if (definition) {
-        if (!allowAuxiliaryDefinitions) return submissionFail('requires_theorem');
-        if (location.kind !== 'definition' || !/^(?:def|abbrev)\s/u.test(source.slice(location.startOffset, location.bodyOffset)))
-          return submissionFail('requires_definition');
-      } else if (location.kind !== 'theorem') return submissionFail('requires_theorem');
-      const declarationHash = mathDigest(location.declarationType);
-      const declarationDigest = declarationIdentity(declaration, declarationHash);
-      const original = problem.targets.some(target => target.proofPath === declaration.file && target.theoremName === declaration.name);
-      if (definition && original) return submissionFail('definition_must_be_auxiliary');
-      // A transient projection request reuses source isolation, not cooperation state or scheduling.
-      const checkHelperInDraft = input.inferredExpectedTypes?.has(declaration.file + '\0' + declaration.name) === true;
-      const type = checkHelperInDraft ? undefined : declaration.type;
-      const task: CooperativeTask = { id: `declaration-${declarationDigest}`, kind: original ? 'goal' : 'lemma',
-        ...(definition && { declaration: 'definition' }), objective: declaration.description || `Check ${declaration.name}`, proofPath: declaration.file,
-        theoremName: declaration.name, type, dependsOn: [], revision: 0 };
+      const projectRoot = path.join(checkout, problem.projectRelative);
+      const source = fs.readFileSync(path.join(projectRoot, first.file), 'utf8');
+      const prepared = group.map(declaration => {
+        const location = submissionContent(() => locateKnowledgeDeclaration(source, declaration.name),
+          ['math_knowledge_declaration_missing_or_ambiguous']);
+        const definition = declaration.kind === 'definition';
+        if (definition) {
+          if (!allowAuxiliaryDefinitions) return submissionFail('requires_theorem');
+          if (location.kind !== 'definition' || !/^(?:def|abbrev)\s/u.test(source.slice(location.startOffset, location.bodyOffset)))
+            return submissionFail('requires_definition');
+        } else if (location.kind !== 'theorem') return submissionFail('requires_theorem');
+        const declarationHash = mathDigest(location.declarationType);
+        const declarationDigest = declarationIdentity(declaration, declarationHash);
+        const original = problem.targets.some(target => target.proofPath === declaration.file && target.theoremName === declaration.name);
+        if (definition && original) return submissionFail('definition_must_be_auxiliary');
+        // A transient projection request reuses source isolation, not cooperation state or scheduling.
+        const checkHelperInDraft = input.inferredExpectedTypes?.has(declaration.file + '\0' + declaration.name) === true;
+        const type = checkHelperInDraft ? undefined : declaration.type;
+        const task: CooperativeTask = { id: `declaration-${declarationDigest}`, kind: original ? 'goal' : 'lemma',
+          ...(definition && { declaration: 'definition' }), objective: declaration.description || `Check ${declaration.name}`, proofPath: declaration.file,
+          theoremName: declaration.name, type, dependsOn: [], revision: 0 };
+        return { declaration, declarationHash, declarationDigest, task, checkHelperInDraft };
+      });
+      const { checkHelperInDraft, task } = prepared[0]!;
       let checkedCommit = commit;
       if (!checkHelperInDraft) {
-        const projector = snapshot.project ??= createTaskSourceProjector(problem, worktree, commit, { compact: true });
-        const sources = submissionContent(() => projector(task, []), ['math_task_type_invalid', 'math_task_missing_declaration',
+        const projector = batched ? createTaskSourceProjector(problem, worktree, commit)
+          : snapshot.project ??= createTaskSourceProjector(problem, worktree, commit, { compact: true });
+        const project = (target: CooperativeTask) => submissionContent(() => projector(target, []),
+          ['math_task_type_invalid', 'math_task_missing_declaration',
           'math_task_ambiguous_declaration', 'math_task_requires_theorem', 'math_task_requires_definition', 'math_task_helper_is_original_declaration']);
-        for (const [file, text] of sources) fs.writeFileSync(path.join(checkout, problem.projectRelative, file), text);
-        checkedCommit = commitSolverProjection(problem, checkout, `Check declaration ${declaration.name}`);
+        const sources = project(task);
+        // Full projections retain shared helpers. Only combine targets whose isolated inputs match.
+        for (const item of prepared.slice(1)) {
+          const other = project(item.task);
+          if (sources.size !== other.size || [...sources].some(([file, text]) => other.get(file) !== text)) return;
+        }
+        for (const [file, text] of sources) fs.writeFileSync(path.join(projectRoot, file), text);
+        checkedCommit = commitSolverProjection(problem, checkout, batched ? 'Check declarations' : `Check declaration ${first.name}`);
       }
       const result = await checkProjectedDeclarations(problem, checkout, worktree, checkedCommit,
-        [{ proofPath: declaration.file, theoremName: declaration.name, digest: declarationDigest,
-          missingError: 'math_declaration_artifact_declaration_missing' }],
+        prepared.map(({ declaration, declarationDigest }) => ({ proofPath: declaration.file, theoremName: declaration.name,
+          digest: declarationDigest, missingError: 'math_declaration_artifact_declaration_missing' })),
         { env: environment.env, signal, timeoutMs: input.timeoutMs ?? Infinity,
-          expectedDeclarationType: type, prepareLocalDependencies: checkHelperInDraft || problem.kind === 'lean-eval',
+          ...(batched ? { expectedDeclarationTypes: Object.fromEntries(prepared.map(({ task }) => [task.theoremName!, task.type!])) }
+            : { expectedDeclarationType: task.type }),
+          prepareLocalDependencies: checkHelperInDraft || problem.kind === 'lean-eval',
           ...(checkHelperInDraft ? { checkDeclarationsInDraft: true } : {}),
           collectDeclarationReferences: true }).catch(error => {
         if (error instanceof Error && error.message === 'math_declaration_artifact_declaration_missing')
           throw new DeclarationSubmissionError(error.message, { cause: error });
         throw error;
       });
-      if (!result.passed) throw new DeclarationArtifactCheckError(declaration, result.verification);
-      const references = result.verification.results[0]?.declarationReferences;
-      const record: DeclarationArtifact = { schema: 'theorem-os.declaration-artifact.v1', id: '', ...identityOf(state),
-        declaration, declarationHash, declarationDigest,
-        proof: { commit, sourceDigest: snapshot.sourceDigest ??= ownedSourceDigest(problem, worktree, commit),
-          passed: true, verification: result.verification },
-        ...(references ? { references: captureProofReferences(problem, checkout, commit,
-          { file: declaration.file, name: declaration.name }, references, state.environmentDigest) } : {}) };
-      return { ...record, id: artifactId(record) };
+      if (!result.passed) {
+        if (!batched) throw new DeclarationArtifactCheckError(first, result.verification);
+        const index = result.attributions.findIndex(item => !item.passed);
+        const failure = result.attributions[index]!;
+        // A shared file can fail because of an unrelated draft declaration. Retry in isolation
+        // and keep the per-declaration diagnostic. Operational failures still stop the check.
+        if (failure.verification.status === 'failed' && (hasDeterministicLeanFailure(result.verification) ||
+            hasLeanResourceLimitFailure(result.verification))) return;
+        throw new DeclarationArtifactCheckError(group[index]!, failure.verification);
+      }
+      const sourceDigest = snapshot.sourceDigest ??= ownedSourceDigest(problem, worktree, commit);
+      return prepared.map(({ declaration, declarationHash, declarationDigest }, index): DeclarationArtifact => {
+        const verification = batched ? result.attributions[index]!.verification : result.verification;
+        const references = verification.results[0]?.declarationReferences;
+        const record: DeclarationArtifact = { schema: 'theorem-os.declaration-artifact.v1', id: '', ...identityOf(state),
+          declaration, declarationHash, declarationDigest, proof: { commit, sourceDigest, passed: true, verification },
+          ...(references ? { references: captureProofReferences(problem, checkout, commit,
+            { file: declaration.file, name: declaration.name }, references, state.environmentDigest) } : {}) };
+        return { ...record, id: artifactId(record) };
+      });
     });
     assertFrozenSource();
     const after = proofReuseEnvironment(path.join(worktree, problem.projectRelative), input.env);
     if (canonicalMathJson({ reusable: after.reusable, digest: after.digest, env: after.env }) !==
         canonicalMathJson({ reusable: environment.reusable, digest: environment.digest, env: environment.env })) return fail('environment_changed');
-    validateDeclarationArtifact(checked);
-    fresh.set(checked, checked.id); records.push(checked);
+    for (const artifact of checked ?? []) {
+      validateDeclarationArtifact(artifact);
+      fresh.set(artifact, artifact.id);
+    }
+    return checked;
+  };
+  // The verifier accepts at most 64 targets. Keep single-declaration and inferred-type checks
+  // on their existing path, including when an older team delivery exceeds the batch bound.
+  if ((allowAuxiliaryDefinitions || batchOnly) && declarations.length > 1 && declarations.length <= 64 &&
+      declarations.every(({ file, name }) => file === declarations[0]!.file && !input.inferredExpectedTypes?.has(file + '\0' + name))) {
+    const checked = await check(declarations);
+    if (checked) return checked;
   }
+  if (batchOnly) return [];
+  const records: DeclarationArtifact[] = [];
+  for (const declaration of declarations) records.push(...(await check([declaration]))!);
   return records;
 }

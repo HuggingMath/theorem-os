@@ -84,6 +84,20 @@ beforeEach(() => {
 });
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 
+function addHistoricalHelper(f: ReturnType<typeof fixture>, name: string, type = 'True') {
+  const file = path.join(f.sourceWorktree, f.problem.projectRelative, 'Submission.lean');
+  const source = f.sources.replace('lemma saved_helper', `lemma ${name} : True := by trivial\nlemma saved_helper`);
+  fs.writeFileSync(file, source);
+  const commit = commitSolverSources(f.problem, f.sourceWorktree);
+  const cooperation = f.archived.cooperation!;
+  cooperation.canonicalCommit = commit;
+  const helper = { ...f.helper, id: name, theoremName: `Tutorial.${name}`, type };
+  cooperation.tasks.unshift({ ...cooperation.tasks[0]!, task: helper,
+    integratedCheck: { ...cooperation.tasks[0]!.integratedCheck!, commit, taskDigest: taskVersion(helper) } });
+  writeSolverRunState(f.sourceStateFile, f.archived);
+  return source;
+}
+
 describe('single researcher continuation', () => {
   it('imports canonical bytes, records drafts and costs, and independently checks helpers without restoring a task graph', async () => {
     const f = fixture(), oldState = fs.readFileSync(f.sourceStateFile), oldNotes = fs.readFileSync(path.join(f.peer, 'RESEARCH.md'));
@@ -106,28 +120,33 @@ describe('single researcher continuation', () => {
     expect(fs.readFileSync(path.join(f.peer, 'RESEARCH.md'))).toEqual(oldNotes);
   });
 
+  it('checks two historical helpers in one session and publishes independent receipts', async () => {
+    const f = fixture();
+    addHistoricalHelper(f, 'other_helper');
+    expect(await f.seed()).toMatchObject({ stage: 'complete', checked: ['other_helper', 'saved'], failed: [] });
+    expect(host.verify).toHaveBeenCalledOnce();
+    expect(host.verify.mock.calls[0]![1].expectedDeclarationTypes)
+      .toEqual({ 'Tutorial.other_helper': 'True', 'Tutorial.saved_helper': 'True' });
+    const artifacts = readDeclarationArtifacts(f.directory, readSolverRunState(f.stateFile));
+    expect(artifacts.map(item => item.proof.verification.results.map(receipt => receipt.receiptId)))
+      .toEqual([['fresh-Tutorial.other_helper'], ['fresh-Tutorial.saved_helper']]);
+  });
+
   it('keeps a rejected helper advisory and checks the next helper against the same frozen source', async () => {
     const f = fixture();
-    const file = path.join(f.sourceWorktree, f.problem.projectRelative, 'Submission.lean');
-    const source = f.sources.replace('lemma saved_helper', 'lemma rejected_helper : True := by trivial\nlemma saved_helper');
-    fs.writeFileSync(file, source);
-    const canonical = commitSolverSources(f.problem, f.sourceWorktree);
-    const cooperation = f.archived.cooperation!;
-    cooperation.canonicalCommit = canonical;
-    const rejected = { ...f.helper, id: 'rejected', theoremName: 'Tutorial.rejected_helper' };
-    cooperation.tasks.unshift({ ...cooperation.tasks[0], task: rejected,
-      integratedCheck: { ...cooperation.tasks[0].integratedCheck!, commit: canonical, taskDigest: taskVersion(rejected) } });
-    writeSolverRunState(f.sourceStateFile, f.archived);
-    host.verify.mockImplementationOnce((request: MathematicsVerifierBatchRequest) => failedBatch(receiptBatch(request,
-      { sessionId: 'failed-check', receiptId: () => 'failed-receipt' }), { stdoutPreview: () => 'not proved' }));
+    const source = addHistoricalHelper(f, 'rejected_helper', 'False');
+    const typeRejection = (request: MathematicsVerifierBatchRequest) => failedBatch(receiptBatch(request,
+      { sessionId: 'failed-check', receiptId: index => `failed-${index}` }),
+      { stdoutPreview: () => 'Query.lean:5:1: error: Helper declaration has a different type' });
+    host.verify.mockImplementationOnce(typeRejection).mockImplementationOnce(typeRejection);
     const report = await f.seed();
-    expect(report).toMatchObject({ stage: 'complete', checked: ['saved'], failed: ['rejected'],
-      evidence: 'fresh-helper-receipts', declarationFailures: [{ id: 'rejected', name: 'Tutorial.rejected_helper',
-        error: expect.stringContaining('not proved') }] });
+    expect(report).toMatchObject({ stage: 'complete', checked: ['saved'], failed: ['rejected_helper'],
+      evidence: 'fresh-helper-receipts', declarationFailures: [{ id: 'rejected_helper', name: 'Tutorial.rejected_helper',
+        error: expect.stringContaining('different type') }] });
     const artifacts = readDeclarationArtifacts(f.directory, readSolverRunState(f.stateFile));
     expect(artifacts.map(item => item.proof.verification.results[0].receiptId)).toEqual(['fresh-Tutorial.saved_helper']);
     expect(host.verify.mock.calls.map(([request]) => request.items.map(item => item.theoremName)))
-      .toEqual([['Tutorial.rejected_helper'], ['Tutorial.saved_helper']]);
+      .toEqual([['Tutorial.rejected_helper', 'Tutorial.saved_helper'], ['Tutorial.rejected_helper'], ['Tutorial.saved_helper']]);
     expect(fs.readFileSync(path.join(f.worktree, f.problem.projectRelative, 'Submission.lean'), 'utf8')).toBe(source);
   });
 
@@ -138,12 +157,14 @@ describe('single researcher continuation', () => {
   });
 
   it('retries an interrupted zero-turn import from the frozen capture even if the old run has changed', async () => {
-    const f = fixture(); host.verify.mockRejectedValueOnce(new Error('fixture_interrupted_check'));
+    const f = fixture(); addHistoricalHelper(f, 'other_helper');
+    host.verify.mockRejectedValueOnce(new Error('fixture_interrupted_check'));
     await expect(f.seed()).rejects.toThrow('fixture_interrupted_check');
+    expect(host.verify).toHaveBeenCalledOnce();
     const frozen = fs.readFileSync(path.join(f.directory, 'continuation-single-source.json'));
     fs.appendFileSync(path.join(f.sourceWorktree, 'RESEARCH.md'), 'New old-run activity after capture');
     f.archived.turns += 1; writeSolverRunState(f.sourceStateFile, f.archived);
-    expect(await f.seed()).toMatchObject({ stage: 'complete', checked: ['saved'] });
+    expect(await f.seed()).toMatchObject({ stage: 'complete', checked: ['other_helper', 'saved'] });
     expect(fs.readFileSync(path.join(f.directory, 'continuation-single-source.json'))).toEqual(frozen);
     expect(fs.readFileSync(path.join(f.worktree, 'RESEARCH.md'), 'utf8')).toBe(f.canonicalNotes);
   });
