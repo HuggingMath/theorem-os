@@ -72,6 +72,17 @@ describe('Web server-selected harnesses', () => {
     expect(fs.readFileSync(path.join(f.profile, settings), 'utf8')).not.toContain(input().apiKey);
   });
 
+  it('recovers a worker profile left behind by an interrupted first binding', () => {
+    const f = fixture('cli'), directory = path.join(path.dirname(fs.realpathSync(f.profile)), 'native-sessions');
+    const leftover = path.join(directory, mathDigest(f.workspace).slice(0, 32));
+    fs.mkdirSync(leftover, { recursive: true }); fs.writeFileSync(path.join(leftover, 'cli.json'), 'partial');
+    const binding = bindWebWorkerProfile(f.options, f.provider);
+    expect(binding.profile).toBe(leftover);
+    expect(fs.readFileSync(path.join(leftover, 'cli.json'), 'utf8')).toBe(fs.readFileSync(path.join(f.profile, 'cli.json'), 'utf8'));
+    expect(() => binding.assertCurrent()).not.toThrow();
+    expect(bindWebWorkerProfile(f.options, f.provider).identity).toEqual(binding.identity);
+  });
+
   it('rejects changed native settings at dispatch and after stopping a writer', async () => {
     const f = fixture('cli'), session = await webSolverModules({ id: 'fixture', input: input(), provider: f.provider }).M1.open(f.options);
     sessions.push(session);

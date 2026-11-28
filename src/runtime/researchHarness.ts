@@ -9,7 +9,7 @@ import { createClaudeCodeMathSession } from './claudeCodeSession';
 import { createOpenCodeMathSession } from './openCodeSession';
 import { createCliMathSession } from './cliSession';
 import { readCliConfiguration, CLI_CONFIGURATION_FILE } from './cliConfiguration';
-import { sealedRuntimeIdentity } from './sealedHarness';
+import { locateHarnessExecutable, sealedRuntimeIdentity } from './sealedHarness';
 export { planMathAgentSession } from './agentSessionPlan';
 
 export type ResearchHarnessIdentity = {
@@ -71,11 +71,7 @@ export function researchHarness(id: string) {
 /** Pin executable and explicit provider/settings files, excluding mutable sessions and authentication. */
 export function bindResearchHarness(id: ResearchHarnessIdentity['id'], command: string, profile: string,
   environment: NodeJS.ProcessEnv = process.env, model?: string): ResearchHarnessIdentity {
-  const candidates = path.isAbsolute(command) ? [command] : command.includes(path.sep) ? [path.resolve(command)] :
-    (environment.PATH ?? '').split(path.delimiter).map(directory => path.join(directory, command));
-  const executable = candidates.find(file => {
-    try { return fs.statSync(file).isFile() && (fs.accessSync(file, fs.constants.X_OK), true); } catch { return false; }
-  });
+  const executable = locateHarnessExecutable(command, environment.PATH ?? '');
   if (!executable) throw new Error(`math_harness_executable_unavailable:${id}`);
   const binary = fs.realpathSync(executable);
   assertMathCanonicalPath(profile);

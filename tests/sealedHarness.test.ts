@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createClaudeCodeMathSession } from '../src/runtime/claudeCodeSession';
 import { createOpenCodeMathSession } from '../src/runtime/openCodeSession';
 import { createCliMathSession } from '../src/runtime/cliSession';
-import { prepareSealedHarness, sealedOpenCodeProvider } from '../src/runtime/sealedHarness';
+import { locateHarnessExecutable, prepareSealedHarness, sealedOpenCodeProvider, sealedRoleText } from '../src/runtime/sealedHarness';
 import { sealedRoleProtocol } from '../src/runtime/sealedRoleProtocol';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
@@ -269,5 +269,36 @@ describe('sealed OpenCode provider references', () => {
     const selected = provider({ ...ambient, CORP_BASE_URL: 'https://corp.example/v1', CORP_API_KEY: 'corp-key' });
     expect(selected.relayProvider.baseUrl).toBe('https://corp.example/v1');
     expect(selected.environment.THEOREMOS_SEALED_HOST_KEY).toBe('corp-key');
+  });
+});
+
+describe('sealed role projections', () => {
+  it('rewrites only whole host path components', () => {
+    const options = { workspace: '/runs/w', profile: '/runs/w-profile' };
+    expect(sealedRoleText('ws=/runs/w, file /runs/w/a.lean. cfg=/runs/w-profile/settings.json', options))
+      .toBe('ws=/workspace, file /workspace/a.lean. cfg=/profile/settings.json');
+    expect(sealedRoleText('/runs/w2/x /mnt/runs/w /runs/w.bak "/runs/w"', options))
+      .toBe('/runs/w2/x /mnt/runs/w /runs/w.bak "/workspace"');
+    expect(sealedRoleText('/runs/p/w and /runs/p', { workspace: '/runs/p/w', profile: '/runs/p' }))
+      .toBe('/workspace and /profile');
+  });
+
+  it('locates executables with the same rules for research and sealed launches', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-lookup-')); roots.push(root);
+    const shadow = path.join(root, 'shadow'), plain = path.join(root, 'plain'), bin = path.join(root, 'bin');
+    for (const directory of [shadow, plain, bin]) fs.mkdirSync(directory);
+    fs.mkdirSync(path.join(shadow, 'agent'));
+    fs.writeFileSync(path.join(plain, 'agent'), '', { mode: 0o600 });
+    fs.writeFileSync(path.join(bin, 'agent'), '#!/bin/sh\n', { mode: 0o700 });
+    const searchPath = ['relative-entry', shadow, plain, bin].join(path.delimiter);
+    expect(locateHarnessExecutable('agent', searchPath)).toBe(path.join(bin, 'agent'));
+    expect(locateHarnessExecutable('missing', searchPath)).toBeUndefined();
+    const cwd = process.cwd();
+    try {
+      process.chdir(root);
+      expect(locateHarnessExecutable('./bin/agent', '')).toBe(path.join(root, 'bin/agent'));
+      expect(locateHarnessExecutable('./plain/agent', '')).toBeUndefined();
+      expect(locateHarnessExecutable('./plain/agent', '', false)).toBe(path.join(root, 'plain/agent'));
+    } finally { process.chdir(cwd); }
   });
 });
