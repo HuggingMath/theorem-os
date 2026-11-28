@@ -133,6 +133,14 @@ describe('agent-owned declaration deliveries with real Lean', () => {
       worktree: consumer.worktree, expectedCommit: consumer.commit });
     expect(adoption.artifacts.map(a => [a.declaration.kind, a.proof.commit, a.proof.verification.status]))
       .toEqual(declarations.map(() => ['definition', adoption.commit, 'kernel_verified']));
+    const delivered = delivery.artifacts.map(a => a.proof.verification);
+    const adopted = adoption.artifacts.map(a => a.proof.verification);
+    for (const batch of [delivered, adopted]) {
+      expect(new Set(batch.map(v => v.sessionId)).size).toBe(1);
+      expect(batch.map(v => v.results.map(r => r.theoremName))).toEqual(declarations.map(d => [d.name]));
+      expect(new Set(batch.map(v => v.results[0]!.receiptId)).size).toBe(2);
+    }
+    expect(delivered[0]!.sessionId).not.toBe(adopted[0]!.sessionId);
     const merged = fs.readFileSync(f.source(consumer.worktree), 'utf8');
     expect(merged).toContain(def); expect(merged.match(/by sorry/gu)).toHaveLength(2);
     expect(f.state.check).toBeUndefined();
@@ -140,6 +148,21 @@ describe('agent-owned declaration deliveries with real Lean', () => {
       seedCommit: f.problem.baseCommit, declarations: [...declarations,
         { file: 'Submission.lean', name: 'Team.base_eq_one', type: 'Team.base = 1' }] });
     expect(later.artifacts.at(-1)!.proof.verification.status).toBe('kernel_verified');
+  }, 90_000);
+
+  it('adopts two checked helpers even when an unrelated consumer draft fails to elaborate', async () => {
+    const f = fixture(peerHelper + 'theorem second : True := by trivial\n');
+    const declarations = [...f.check.declarations, { file: 'Submission.lean', name: 'Team.second', type: 'True' }];
+    const delivery = await checkAgentTeamProofDelivery({ ...f.check, declarations });
+    const draft = 'theorem unresolved : True := by exact missing_proof\n';
+    const consumer = consumerWithDraft(f, 'theorem established : True := by trivial\n' + draft);
+    const verify = vi.spyOn(evidence, 'checkProjectedDeclarations');
+    const adoption = await integrateAgentTeamProofDelivery({ ...f.common, delivery,
+      worktree: consumer.worktree, expectedCommit: consumer.commit });
+    expect(verify.mock.calls.map(([, , , , targets]) => targets.map(target => target.theoremName)))
+      .toEqual([['Team.reusable', 'Team.second'], ['Team.reusable'], ['Team.second']]);
+    expect(adoption.artifacts.map(a => a.proof.verification.status)).toEqual(['kernel_verified', 'kernel_verified']);
+    expect(fs.readFileSync(f.source(consumer.worktree), 'utf8')).toContain(draft);
   }, 90_000);
 
   it('refuses incorrect types, incomplete bodies and replacement of an existing definition', async () => {
@@ -437,10 +460,11 @@ describe('agent-owned declaration deliveries with real Lean', () => {
     const f = fixture('theorem reusable (n : Nat) : n = n := by exact False.elim (by trivial)\n');
     await expect(checkAgentTeamProofDelivery(f.check)).rejects.toThrow('math_declaration_artifact_check_failed');
     expect(fs.existsSync(f.common.evidenceDirectory)).toBe(false);
-    fs.writeFileSync(f.source(f.worktree), original.replace('end Team',
-      'theorem reusable (n : Nat) : n = n := by rfl\nend Team'));
+    fs.writeFileSync(f.source(f.worktree), original.replace('end Team', peerHelper +
+      'theorem second : True := by trivial\nend Team'));
     await expect(checkAgentTeamProofDelivery({ ...f.check,
-      declarations: [{ ...f.check.declarations[0]!, type: 'False' }] })).rejects.toThrow('math_declaration_artifact_check_failed');
+      declarations: [...f.check.declarations, { file: 'Submission.lean', name: 'Team.second', type: 'False' }] }))
+      .rejects.toThrow('math_declaration_artifact_check_failed:Team.second');
     expect(fs.existsSync(f.common.evidenceDirectory)).toBe(false);
     expect(fs.readFileSync(f.source(f.receipt.workspaceRoot), 'utf8')).toBe(original);
   }, 90_000);

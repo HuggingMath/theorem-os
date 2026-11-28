@@ -291,6 +291,25 @@ describe('immutable source dependency hint caching', () => {
 });
 
 describe('owned source projection through dot notation', () => {
+  it.skipIf(!newestLeanBinary())('checks a submitted helper with local and qualified dot notation after compaction', () => {
+    const source = 'namespace Fixture\ntheorem original : True := by sorry\nend Fixture\n';
+    const solved = source.replace('theorem original', [
+      'def anchor : Nat := 0',
+      'theorem iffWitness : True ↔ True := Iff.rfl',
+      'theorem Support.pairWitness : True ∧ (True ∧ True) := ⟨trivial, trivial, trivial⟩',
+      'theorem unrelated : True := by trivial',
+      'theorem reusable : True := iffWitness.mpr _root_.Fixture.Support.pairWitness.right.left',
+      'theorem original',
+    ].join('\n\n'));
+    const f = fixture(source, solved);
+    const task = { ...f.task('Fixture.reusable'), kind: 'lemma' as const, type: 'True' };
+    leanCheck(f, f.project(task, []).get('Submission.lean')!, 'Fixture.reusable');
+    const compact = createTaskSourceProjector(f.problem, f.receipt.workspaceRoot, f.commit, { compact: true });
+    const projected = compact(task, []).get('Submission.lean')!;
+    leanCheck(f, projected, 'Fixture.reusable');
+    expect(projected).not.toContain('theorem unrelated');
+  });
+
   it.skipIf(!newestLeanBinary()).each([
     ['function application', '(f i)', false],
     ['nested application', '((fun n : Nat => f n) i)', false],
