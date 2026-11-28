@@ -74,6 +74,7 @@ export type MathProcessStopReceipt = Readonly<{ status: 'stopped' } | { status: 
     'process-group-active' | 'process-group-unavailable' | 'process-session-active' }>;
 
 const sessionExitTicks = new WeakMap<ChildProcess, number>();
+const trackedSessions = new WeakSet<ChildProcess>();
 const childExited = (child: ChildProcess) => typeof child.exitCode === 'number' || typeof child.signalCode === 'string';
 const noteSessionExit = (child: ChildProcess): void => {
   if (sessionExitTicks.has(child)) return;
@@ -87,9 +88,11 @@ const noteSessionExit = (child: ChildProcess): void => {
 
 /** Record when an owned detached child exits so a later session sweep can prove its session id was not reused. */
 export function trackMathProcessSession(child: ChildProcess): void {
-  if (process.platform !== 'linux' || sessionExitTicks.has(child)) return;
-  if (childExited(child)) noteSessionExit(child);
-  else if (typeof child.once === 'function') child.once('exit', () => noteSessionExit(child));
+  if (process.platform !== 'linux' || trackedSessions.has(child)) return;
+  trackedSessions.add(child);
+  // A child that already exited has no observed exit time: reading the clock now would admit
+  // any process started since, including members of an unrelated session that reused the sid.
+  if (!childExited(child) && typeof child.once === 'function') child.once('exit', () => noteSessionExit(child));
 }
 
 type SessionMember = { pid: number; start: string };
@@ -111,7 +114,7 @@ function leakedSessionMembers(child: ChildProcess): SessionMember[] {
   // A live /proc entry is a recycled pid, except our own leader before the runtime reaps it.
   const leader = readSessionMember(String(sid), sid);
   if (leader ? leader.state !== 'Z' || leader.ppid !== process.pid : fs.existsSync(`/proc/${sid}`)) return [];
-  noteSessionExit(child);
+  // Only an exit observed while tracked bounds the session; untracked children are not swept.
   const exitTicks = sessionExitTicks.get(child);
   if (exitTicks === undefined) return [];
   let entries: string[];

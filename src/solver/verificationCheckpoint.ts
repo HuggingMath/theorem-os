@@ -16,6 +16,13 @@ export class VerificationCheckpointError extends Error {
   constructor(readonly checkpoint: VerificationCheckpoint) { super('math_verification_checkpoint'); }
 }
 
+/** Only the verification deadline expired; unconfirmed process cleanup keeps the infrastructure failure path. */
+export function verificationDeadlineExpired(result: MathematicsVerifierBatchResult): boolean {
+  return result.results.some(receipt => receipt.status === 'blocked' &&
+    /^(?:Lean verification timed out\.|Formal verification batch deadline exceeded\.?)$/u.test(receipt.error ?? '')) &&
+    !result.results.some(receipt => receipt.cleanupError || receipt.status === 'unavailable');
+}
+
 export const withVerificationCheckpoints = <T>(input: Context, run: () => Promise<T>): Promise<T> => context.run(input, run);
 
 /** Bound the complete verification separately from solving; only the identical input gets more time on resume. */
@@ -38,14 +45,11 @@ export async function checkpointVerification(request: MathematicsVerifierBatchRe
   let result: MathematicsVerifierBatchResult;
   try { result = await verify({ ...request, timeoutMs, batchTimeoutMs: Math.min(request.batchTimeoutMs ?? Infinity, timeoutMs) }); }
   finally { clearInterval(heartbeat); }
-  const expired = result.results.some(receipt => receipt.status === 'blocked' &&
-    /^(?:Lean verification timed out\.|Formal verification batch deadline exceeded\.?)$/u.test(receipt.error ?? ''));
   const diagnostics = result.results.filter(receipt => receipt.status !== 'kernel_verified').slice(0, 8).map(receipt => ({
     receiptId: receipt.receiptId, status: receipt.status, error: receipt.error?.slice(0, 1024),
     stderrPreview: receipt.stderrPreview?.slice(0, 1024), cleanupError: receipt.cleanupError?.slice(0, 1024),
   }));
-  // Unconfirmed process cleanup must keep the existing infrastructure failure path.
-  if (!expired || result.results.some(receipt => receipt.cleanupError || receipt.status === 'unavailable')) {
+  if (!verificationDeadlineExpired(result)) {
     current.emit('verification_finished', { ...details, status: result.status, elapsedMs: Date.now() - startedAt, diagnostics });
     return result;
   }

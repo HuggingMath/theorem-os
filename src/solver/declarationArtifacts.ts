@@ -14,6 +14,7 @@ import { captureProofReferences, type ProofReferences } from './proofReferences'
 import { hasDeterministicLeanFailure, hasLeanResourceLimitFailure, proofReuseEnvironment } from './proofReuse';
 import { allowedKnowledgeFile, locateKnowledgeDeclaration } from './theoremKnowledge';
 import type { CooperativeTask } from './tasks';
+import { verificationDeadlineExpired, VerificationCheckpointError } from './verificationCheckpoint';
 
 /** A research request is advisory. Only the host's stopped-writer check publishes evidence. */
 export const DECLARATION_SUBMISSION_FILE = 'declaration-submission.json';
@@ -281,7 +282,8 @@ export function createDeclarationArtifactChecker(input: Omit<StoppedDeclarationC
     async tryBatch(declarations: DeclarationSubmission['declarations']) {
       try { return await check(declarations, true); }
       catch (error) {
-        if (error instanceof DeclarationSubmissionError) return [];
+        // Each candidate then records its own check failure, as it did before batching.
+        if (error instanceof DeclarationSubmissionError || error instanceof DeclarationArtifactCheckError) return [];
         throw error;
       }
     },
@@ -357,16 +359,20 @@ async function checkArtifacts(input: TeamDeclarationCheckInput, schema: typeof d
           collectDeclarationReferences: true }).catch(error => {
         if (error instanceof Error && error.message === 'math_declaration_artifact_declaration_missing')
           throw new DeclarationSubmissionError(error.message, { cause: error });
+        // A batch shares one deadline. Each declaration gets its own deadline in isolation.
+        if (batched && error instanceof VerificationCheckpointError) return undefined;
         throw error;
       });
+      if (!result) return;
       if (!result.passed) {
         if (!batched) throw new DeclarationArtifactCheckError(first, result.verification);
         const index = result.attributions.findIndex(item => !item.passed);
         const failure = result.attributions[index]!;
-        // A shared file can fail because of an unrelated draft declaration. Retry in isolation
-        // and keep the per-declaration diagnostic. Operational failures still stop the check.
+        // A shared file can fail because of an unrelated draft declaration, and a batch shares
+        // one deadline. Retry in isolation and keep the per-declaration diagnostic.
+        // Other operational failures still stop the check.
         if (failure.verification.status === 'failed' && (hasDeterministicLeanFailure(result.verification) ||
-            hasLeanResourceLimitFailure(result.verification))) return;
+            hasLeanResourceLimitFailure(result.verification)) || verificationDeadlineExpired(result.verification)) return;
         throw new DeclarationArtifactCheckError(group[index]!, failure.verification);
       }
       const sourceDigest = snapshot.sourceDigest ??= ownedSourceDigest(problem, worktree, commit);
